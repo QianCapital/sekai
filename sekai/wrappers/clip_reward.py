@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from sekai.core.env import Env
 from sekai.utils.typing import ObsType, ActType
 from .base import RewardWrapper
 
@@ -21,11 +22,11 @@ class ClipReward(RewardWrapper[ObsType, ActType]):
 
     def __init__(
         self,
-        env: ObsType,  # type: ignore[assignment]
+        env: Env[ObsType, ActType],
         min_reward: float = -1.0,
         max_reward: float = 1.0,
     ) -> None:
-        super().__init__(env)  # type: ignore[arg-type]
+        super().__init__(env)
         if min_reward > max_reward:
             raise ValueError(
                 f"min_reward ({min_reward}) must be <= max_reward ({max_reward})"

@@ -164,6 +164,7 @@ class TestTimeLimit:
         for i in range(3):
             _, _, terminated, truncated, info = env.step(np.intp(0))
             assert info["elapsed_steps"] == i + 1
+        assert not terminated
         assert truncated
 
     def test_natural_termination_before_limit(self):
