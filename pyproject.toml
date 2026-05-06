@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sekai"
-version = "0.1.0"
+version = "0.1.2"
 description = "A modern, flexible RL environment framework for complex and financial market environments"
 readme = "README.md"
 license = "Apache-2.0"
