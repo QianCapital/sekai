@@ -4,11 +4,12 @@ import abc
 from typing import Any, Generic
 
 from sekai._types import ActType, AgentID, ObsType, SeedType
+from sekai.core._rng import SeededRNG
 from sekai.core.result import MAResetResult, MAStepResult
 from sekai.spaces.space import Space
 
 
-class MultiAgentEnv(abc.ABC, Generic[ObsType, ActType, AgentID]):
+class MultiAgentEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType, AgentID]):
     """Abstract base class for multi-agent environments.
 
     Each agent gets its own typed observation and action space,
@@ -17,6 +18,9 @@ class MultiAgentEnv(abc.ABC, Generic[ObsType, ActType, AgentID]):
 
     agents: currently active agents (may shrink as agents terminate)
     possible_agents: universe of all possible agent IDs
+
+    Seeding works as for Env: call self._set_rng(seed) at the start of reset()
+    and draw randomness from self.rng.
     """
 
     agents: list[Any]
@@ -30,12 +34,10 @@ class MultiAgentEnv(abc.ABC, Generic[ObsType, ActType, AgentID]):
         *,
         seed: SeedType = None,
         options: dict[str, Any] | None = None,
-    ) -> MAResetResult[ObsType, AgentID]:
-        ...
+    ) -> MAResetResult[ObsType, AgentID]: ...
 
     @abc.abstractmethod
-    def step(self, actions: dict[Any, ActType]) -> MAStepResult[ObsType, AgentID]:
-        ...
+    def step(self, actions: dict[Any, ActType]) -> MAStepResult[ObsType, AgentID]: ...
 
     async def async_reset(
         self,
@@ -45,9 +47,7 @@ class MultiAgentEnv(abc.ABC, Generic[ObsType, ActType, AgentID]):
     ) -> MAResetResult[ObsType, AgentID]:
         return self.reset(seed=seed, options=options)
 
-    async def async_step(
-        self, actions: dict[Any, ActType]
-    ) -> MAStepResult[ObsType, AgentID]:
+    async def async_step(self, actions: dict[Any, ActType]) -> MAStepResult[ObsType, AgentID]:
         return self.step(actions)
 
     def close(self) -> None:

@@ -3,18 +3,18 @@ from __future__ import annotations
 import abc
 from typing import Any, ClassVar, Generic
 
-import numpy as np
-
-from sekai._types import ActType, InfoDict, ObsType, SeedType
+from sekai._types import ActType, ObsType, SeedType
+from sekai.core._async_fallback import install_async_fallbacks
+from sekai.core._rng import SeededRNG
 from sekai.core.result import ResetResult, StepResult
 from sekai.spaces.space import Space
 
 
-class Env(abc.ABC, Generic[ObsType, ActType]):
+class Env(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
     """Abstract base class for all sekai environments.
 
     Subclasses must:
-      1. Set self.observation_space and self.action_space in __init__
+      1. Set self.observation_space and self.action_space in `__init__`
       2. Implement reset() and step()
 
     Unlike gym/gymnasium:
@@ -22,16 +22,24 @@ class Env(abc.ABC, Generic[ObsType, ActType]):
       - reset() returns a ResetResult dataclass, not a 2-tuple
       - async_step() and async_reset() are available on all envs by default
       - render() is NOT part of this interface; use a Renderer object
+
+    If a subclass overrides step() (or reset()) without also overriding
+    async_step() (or async_reset()), the async method is routed through the
+    sync one. This keeps `await env.async_step(a)` from silently skipping
+    logic that only lives in step(), e.g. in a custom wrapper. (A wrapper that
+    only overrides step() therefore makes async calls through it synchronous;
+    override async_step() too to keep an async-native env async end to end.)
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        install_async_fallbacks(cls)
 
     observation_space: Space[ObsType]
     action_space: Space[ActType]
 
     metadata: ClassVar[dict[str, Any]] = {}
     spec: Any = None  # EnvSpec | None, typed loosely to avoid circular import
-
-    _rng: np.random.Generator | None = None
-    _rng_seed: int | None = None
 
     # ------------------------------------------------------------------
     # Core API — must be implemented by subclasses
@@ -46,8 +54,8 @@ class Env(abc.ABC, Generic[ObsType, ActType]):
     ) -> ResetResult[ObsType]:
         """Reset the environment and return the initial observation.
 
-        Always call super()._reset_seed(seed) or self._set_rng(seed) to
-        handle seeding consistently.
+        Call self._set_rng(seed) first thing so seeding behaves consistently:
+        an int seed re-seeds the env's RNG, None continues the current stream.
         """
         ...
 
@@ -85,25 +93,6 @@ class Env(abc.ABC, Generic[ObsType, ActType]):
         self.close()
 
     # ------------------------------------------------------------------
-    # RNG management
-    # ------------------------------------------------------------------
-
-    @property
-    def rng(self) -> np.random.Generator:
-        """The environment's RNG, lazily initialised from OS entropy."""
-        if self._rng is None:
-            from sekai.utils.seeding import np_random
-            self._rng, _ = np_random()
-        return self._rng
-
-    def _set_rng(self, seed: SeedType) -> int:
-        """Seed the environment's RNG. Returns the actual seed used."""
-        from sekai.utils.seeding import np_random
-        self._rng, actual_seed = np_random(seed)
-        self._rng_seed = actual_seed
-        return actual_seed
-
-    # ------------------------------------------------------------------
     # Wrapper introspection
     # ------------------------------------------------------------------
 
@@ -113,10 +102,16 @@ class Env(abc.ABC, Generic[ObsType, ActType]):
         return self
 
     def has_attr(self, name: str) -> bool:
+        """Whether this env (or, for a wrapper, any layer of the stack) has `name`."""
         return hasattr(self, name)
 
     def get_attr(self, name: str) -> Any:
+        """Read `name` from the outermost layer of the wrapper stack that has it."""
         return getattr(self, name)
+
+    def set_attr(self, name: str, value: Any) -> None:
+        """Set `name` on the outermost layer of the wrapper stack that has it."""
+        setattr(self, name, value)
 
     # ------------------------------------------------------------------
     # Dunder

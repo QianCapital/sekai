@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from sekai._types import ActType
 from sekai.core.env import Env
@@ -12,7 +13,9 @@ class TransformObservation(ObservationWrapper[Any, ActType, Any]):
     """Applies an arbitrary callable transformation to every observation.
 
     Example:
+        ```python
         env = TransformObservation(env, lambda obs: obs / 255.0)
+        ```
     """
 
     def __init__(
@@ -24,7 +27,7 @@ class TransformObservation(ObservationWrapper[Any, ActType, Any]):
         super().__init__(env)
         self._fn = fn
         if new_observation_space is not None:
-            self.observation_space = new_observation_space  # type: ignore[assignment]
+            self.observation_space = new_observation_space
 
     def observation(self, obs: Any) -> Any:
         return self._fn(obs)

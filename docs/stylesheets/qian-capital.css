@@ -1,0 +1,540 @@
+/*
+ * Qian Capital theme for Material for MkDocs.
+ *
+ * Palette: light tone #f8f6f2, mid tone #eae3d7, gold #c0aa81, green #344e41,
+ * dark tone #1f271b. Type: BDO Grotesk (text), Hedvig Letters Serif (headings),
+ * JetBrains Mono (code). Use with `primary: custom` and `accent: custom`.
+ */
+
+@font-face {
+  font-family: "BDO Grotesk";
+  src: url("../assets/fonts/BDOGrotesk-VF.woff2") format("woff2");
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hedvig Letters Serif";
+  src: url("../assets/fonts/HedvigLettersSerif.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --qc-light: #f8f6f2;
+  --qc-mid: #eae3d7;
+  --qc-gold: #c0aa81;
+  --qc-green: #344e41;
+  --qc-dark: #1f271b;
+  --qc-ink: #161c13;
+  --qc-gold-bright: #ece3d0;
+  --qc-gold-metal: linear-gradient(90deg, #9a8460 0%, #c0aa81 18%, #ece3d0 42%, #d8c8a8 58%, #ae966f 78%, #9a8460 100%);
+  --qc-gold-metal-diag: linear-gradient(135deg, #9a8460 0%, #d8c8a8 38%, #c0aa81 62%, #ece3d0 100%);
+  --qc-hero-wash: radial-gradient(120% 120% at 18% 0%, #2c3a2b 0%, #1f271b 48%, #161c13 100%);
+  --qc-serif: "Hedvig Letters Serif", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+
+  --md-text-font: "BDO Grotesk";
+  --md-code-font: "JetBrains Mono";
+}
+
+/* ---------------------------------------------------------------- Light */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--qc-dark);
+  --md-primary-fg-color--light: var(--qc-green);
+  --md-primary-fg-color--dark: var(--qc-ink);
+  --md-primary-bg-color: var(--qc-light);
+  --md-primary-bg-color--light: rgba(248, 246, 242, 0.72);
+  --md-accent-fg-color: #7d6a48; /* gold, darkened to 4.8:1 on light tone */
+  --md-accent-fg-color--transparent: rgba(192, 170, 129, 0.16);
+  --md-accent-bg-color: var(--qc-light);
+  --md-accent-bg-color--light: rgba(248, 246, 242, 0.72);
+
+  --md-default-bg-color: var(--qc-light);
+  --md-default-bg-color--light: rgba(248, 246, 242, 0.72);
+  --md-default-bg-color--lighter: rgba(248, 246, 242, 0.32);
+  --md-default-bg-color--lightest: rgba(248, 246, 242, 0.12);
+  --md-default-fg-color: rgba(31, 39, 27, 0.9);
+  --md-default-fg-color--light: rgba(31, 39, 27, 0.68);
+  --md-default-fg-color--lighter: rgba(31, 39, 27, 0.34);
+  --md-default-fg-color--lightest: rgba(31, 39, 27, 0.09);
+
+  --md-typeset-color: var(--qc-dark);
+  --md-typeset-a-color: var(--qc-green);
+  --md-typeset-mark-color: rgba(192, 170, 129, 0.38);
+  --md-typeset-table-color: rgba(31, 39, 27, 0.12);
+  --md-typeset-table-color--light: rgba(234, 227, 215, 0.4);
+  --md-typeset-kbd-color: #fbfaf7;
+  --md-typeset-kbd-accent-color: #fff;
+  --md-typeset-kbd-border-color: #d2c7b2;
+
+  --md-code-bg-color: #f0ebe1;
+  --md-code-bg-color--light: rgba(240, 235, 225, 0.72);
+  --md-code-bg-color--lighter: rgba(240, 235, 225, 0.32);
+  --md-code-fg-color: var(--qc-dark);
+  --md-code-hl-color: #c0aa81;
+  --md-code-hl-color--light: rgba(192, 170, 129, 0.22);
+  --md-code-hl-keyword-color: #344e41;
+  --md-code-hl-operator-color: #75633f;
+  --md-code-hl-punctuation-color: #7a7366;
+  --md-code-hl-string-color: #4e6a59;
+  --md-code-hl-number-color: #75633f;
+  --md-code-hl-special-color: #75633f;
+  --md-code-hl-constant-color: #4a6354;
+  --md-code-hl-function-color: var(--qc-dark);
+  --md-code-hl-name-color: var(--qc-dark);
+  --md-code-hl-variable-color: #3a3328;
+  --md-code-hl-comment-color: #6b6458;
+  --md-code-hl-generic-color: #5b6157;
+
+  --md-footer-fg-color: var(--qc-light);
+  --md-footer-fg-color--light: rgba(248, 246, 242, 0.72);
+  --md-footer-fg-color--lighter: rgba(248, 246, 242, 0.5);
+  --md-footer-bg-color: var(--qc-dark);
+  --md-footer-bg-color--dark: var(--qc-ink);
+
+  --md-shadow-z1: 0 0.2rem 0.5rem rgba(22, 29, 20, 0.05), 0 0 0.05rem rgba(22, 29, 20, 0.1);
+  --md-shadow-z2: 0 0.2rem 0.5rem rgba(22, 29, 20, 0.1), 0 0 0.05rem rgba(22, 29, 20, 0.25);
+  --md-shadow-z3: 0 0.2rem 0.5rem rgba(22, 29, 20, 0.2), 0 0 0.05rem rgba(22, 29, 20, 0.35);
+
+  --doc-symbol-parameter-fg-color: #7d6a48;
+  --doc-symbol-attribute-fg-color: #7d6a48;
+  --doc-symbol-function-fg-color: #4e6a59;
+  --doc-symbol-method-fg-color: #4e6a59;
+  --doc-symbol-class-fg-color: var(--qc-green);
+  --doc-symbol-module-fg-color: var(--qc-dark);
+  --doc-symbol-parameter-bg-color: rgba(192, 170, 129, 0.18);
+  --doc-symbol-attribute-bg-color: rgba(192, 170, 129, 0.18);
+  --doc-symbol-function-bg-color: rgba(78, 106, 89, 0.12);
+  --doc-symbol-method-bg-color: rgba(78, 106, 89, 0.12);
+  --doc-symbol-class-bg-color: rgba(52, 78, 65, 0.12);
+  --doc-symbol-module-bg-color: rgba(31, 39, 27, 0.08);
+
+  --qc-surface: #fdfcfa;
+  --qc-line: #e3dccd;
+  --qc-icon: var(--qc-green);
+  --qc-button: var(--qc-green);
+  --qc-label: #7d6a48;
+  --qc-table-head: rgba(234, 227, 215, 0.6);
+
+  --qc-adm-note: #344e41;
+  --qc-adm-info: #4b7aa0;
+  --qc-adm-tip: #9a8460;
+  --qc-adm-success: #2b8553;
+  --qc-adm-warning: #b5611d;
+  --qc-adm-danger: #b4553f;
+}
+
+/* ----------------------------------------------------------------- Dark */
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 100;
+
+  --md-primary-fg-color: var(--qc-ink);
+  --md-primary-fg-color--light: var(--qc-green);
+  --md-primary-fg-color--dark: #11160f;
+  --md-primary-bg-color: var(--qc-mid);
+  --md-primary-bg-color--light: rgba(234, 227, 215, 0.72);
+  --md-accent-fg-color: #d8c8a8;
+  --md-accent-fg-color--transparent: rgba(192, 170, 129, 0.14);
+  --md-accent-bg-color: var(--qc-dark);
+  --md-accent-bg-color--light: rgba(31, 39, 27, 0.72);
+
+  --md-default-bg-color: var(--qc-dark);
+  --md-default-bg-color--light: rgba(31, 39, 27, 0.54);
+  --md-default-bg-color--lighter: rgba(31, 39, 27, 0.26);
+  --md-default-bg-color--lightest: rgba(31, 39, 27, 0.07);
+  --md-default-fg-color: rgba(234, 227, 215, 0.9);
+  --md-default-fg-color--light: rgba(234, 227, 215, 0.66);
+  --md-default-fg-color--lighter: rgba(234, 227, 215, 0.36);
+  --md-default-fg-color--lightest: rgba(234, 227, 215, 0.1);
+
+  --md-typeset-color: var(--qc-mid);
+  --md-typeset-a-color: var(--qc-gold);
+  --md-typeset-mark-color: rgba(192, 170, 129, 0.3);
+  --md-typeset-table-color: rgba(234, 227, 215, 0.12);
+  --md-typeset-table-color--light: rgba(234, 227, 215, 0.035);
+  --md-typeset-kbd-color: #2f3a29;
+  --md-typeset-kbd-accent-color: #3d4a35;
+  --md-typeset-kbd-border-color: #161c13;
+
+  --md-code-bg-color: #252e20;
+  --md-code-bg-color--light: rgba(37, 46, 32, 0.9);
+  --md-code-bg-color--lighter: rgba(37, 46, 32, 0.54);
+  --md-code-fg-color: var(--qc-mid);
+  --md-code-hl-color: #c0aa81;
+  --md-code-hl-color--light: rgba(192, 170, 129, 0.15);
+  --md-code-hl-keyword-color: #c0aa81;
+  --md-code-hl-operator-color: #a8956c;
+  --md-code-hl-punctuation-color: #8c9682;
+  --md-code-hl-string-color: #b8c4a8;
+  --md-code-hl-number-color: #d4c49a;
+  --md-code-hl-special-color: #d4c49a;
+  --md-code-hl-constant-color: #9aaf9a;
+  --md-code-hl-function-color: var(--qc-light);
+  --md-code-hl-name-color: var(--qc-mid);
+  --md-code-hl-variable-color: #d8cfc0;
+  --md-code-hl-comment-color: #8c9682;
+  --md-code-hl-generic-color: #a39d90;
+
+  --md-footer-fg-color: var(--qc-mid);
+  --md-footer-fg-color--light: rgba(234, 227, 215, 0.72);
+  --md-footer-fg-color--lighter: rgba(234, 227, 215, 0.5);
+  --md-footer-bg-color: var(--qc-ink);
+  --md-footer-bg-color--dark: #11160f;
+
+  --md-shadow-z1: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.2), 0 0 0.05rem rgba(0, 0, 0, 0.3);
+  --md-shadow-z2: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.35), 0 0 0.05rem rgba(0, 0, 0, 0.45);
+  --md-shadow-z3: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.45), 0 0 0.05rem rgba(0, 0, 0, 0.55);
+
+  --doc-symbol-parameter-fg-color: #c0aa81;
+  --doc-symbol-attribute-fg-color: #c0aa81;
+  --doc-symbol-function-fg-color: #b8c4a8;
+  --doc-symbol-method-fg-color: #b8c4a8;
+  --doc-symbol-class-fg-color: #9aaf9a;
+  --doc-symbol-module-fg-color: var(--qc-mid);
+  --doc-symbol-parameter-bg-color: rgba(192, 170, 129, 0.14);
+  --doc-symbol-attribute-bg-color: rgba(192, 170, 129, 0.14);
+  --doc-symbol-function-bg-color: rgba(184, 196, 168, 0.12);
+  --doc-symbol-method-bg-color: rgba(184, 196, 168, 0.12);
+  --doc-symbol-class-bg-color: rgba(154, 175, 154, 0.14);
+  --doc-symbol-module-bg-color: rgba(234, 227, 215, 0.1);
+
+  --qc-surface: var(--qc-dark);
+  --qc-line: #2f3a29;
+  --qc-icon: var(--qc-gold);
+  --qc-button: var(--qc-gold);
+  --qc-label: #c0aa81;
+  --qc-table-head: #252e20;
+
+  --qc-adm-note: #8fa792;
+  --qc-adm-info: #93b9d9;
+  --qc-adm-tip: #c0aa81;
+  --qc-adm-success: #6cc592;
+  --qc-adm-warning: #e8955a;
+  --qc-adm-danger: #d0806f;
+}
+
+::selection {
+  background-color: rgba(192, 170, 129, 0.35);
+}
+
+/* --------------------------------------------------------------- Header */
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+}
+
+.md-header__title {
+  font-family: var(--qc-serif);
+  font-size: 1.05rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* A gold hairline under the header (or under the tabs, when they show). */
+@media screen and (max-width: 76.234375em) {
+  .md-header {
+    box-shadow: inset 0 -1px 0 rgba(192, 170, 129, 0.4);
+  }
+}
+
+.md-header--shadow {
+  box-shadow: inset 0 -1px 0 rgba(192, 170, 129, 0.4), 0 0.2rem 0.6rem rgba(0, 0, 0, 0.18);
+}
+
+.md-tabs {
+  background: var(--qc-gold-metal) bottom / 100% 1px no-repeat, var(--md-primary-fg-color);
+}
+
+.md-tabs__item--active .md-tabs__link {
+  color: var(--qc-gold);
+}
+
+.md-tabs__link:focus,
+.md-tabs__link:hover {
+  color: var(--qc-gold-bright);
+}
+
+/* ----------------------------------------------------------- Navigation */
+
+.md-nav__item--section > .md-nav__link {
+  color: var(--qc-label);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ----------------------------------------------------------- Typography */
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: var(--qc-serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--md-typeset-color);
+}
+
+.md-typeset h1 {
+  padding-bottom: 0.35em;
+  background: var(--qc-gold-metal) left bottom / 2.4rem 2px no-repeat;
+  font-size: 2.2em;
+  line-height: 1.2;
+}
+
+.md-typeset h2 {
+  font-size: 1.6em;
+}
+
+.md-typeset h3 {
+  font-size: 1.28em;
+}
+
+.md-typeset strong {
+  font-weight: 650;
+}
+
+.md-typeset .highlight :is(.c, .c1, .ch, .cm, .cs) {
+  font-style: italic;
+}
+
+.md-typeset pre > code {
+  border-radius: 0.4rem;
+  box-shadow: inset 0 0 0 1px var(--qc-line);
+}
+
+.md-typeset :not(pre) > code {
+  border-radius: 0.25rem;
+}
+
+/* -------------------------------------------------------------- Buttons */
+
+.md-typeset .md-button {
+  padding: 0.6em 1.5em;
+  border: 1px solid var(--qc-button);
+  border-radius: 999px;
+  color: var(--qc-button);
+  font-weight: 560;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.md-typeset .md-button--primary {
+  background-color: var(--qc-button);
+  color: var(--md-default-bg-color);
+}
+
+.md-typeset .md-button:focus,
+.md-typeset .md-button:hover {
+  background-color: var(--qc-gold);
+  border-color: var(--qc-gold);
+  color: var(--qc-dark);
+  transform: translateY(-1px);
+}
+
+/* ---------------------------------------------------------------- Cards */
+
+.md-typeset .grid.cards > :is(ul, ol) > li,
+.md-typeset .grid > .card {
+  border: 1px solid var(--qc-line);
+  border-radius: 0.8rem;
+  background-color: var(--qc-surface);
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li:hover,
+.md-typeset .grid > .card:hover {
+  border-color: rgba(192, 170, 129, 0.7);
+  box-shadow: 0 0.6rem 1.4rem rgba(22, 29, 20, 0.08);
+  transform: translateY(-2px);
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > hr {
+  border-bottom-color: var(--qc-line);
+}
+
+.md-typeset .grid.cards .lg {
+  color: var(--qc-icon);
+}
+
+/* --------------------------------------------------------------- Tables */
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--qc-line);
+  border-radius: 0.5rem;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--qc-table-head);
+  font-weight: 650;
+}
+
+/* ---------------------------------------------------------- Admonitions */
+
+/* Untyped admonitions (e.g. custom docstring sections) take the note colour. */
+.md-typeset :is(.admonition, details) {
+  --qc-adm: var(--qc-adm-note);
+  border-color: var(--qc-adm);
+  border-radius: 0.5rem;
+}
+
+.md-typeset :is(.admonition, details):focus-within {
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--qc-adm) 12%, transparent);
+}
+
+.md-typeset :is(.admonition-title, summary) {
+  background-color: color-mix(in srgb, var(--qc-adm) 12%, transparent);
+}
+
+.md-typeset :is(.admonition-title, summary)::before {
+  background-color: var(--qc-adm);
+}
+
+.md-typeset :is(.admonition, details).note { --qc-adm: var(--qc-adm-note); }
+.md-typeset :is(.admonition, details).info { --qc-adm: var(--qc-adm-info); }
+.md-typeset :is(.admonition, details).tip { --qc-adm: var(--qc-adm-tip); }
+.md-typeset :is(.admonition, details).success { --qc-adm: var(--qc-adm-success); }
+.md-typeset :is(.admonition, details).warning { --qc-adm: var(--qc-adm-warning); }
+.md-typeset :is(.admonition, details).danger { --qc-adm: var(--qc-adm-danger); }
+
+.md-typeset :is(.admonition, details):is(.note, .info, .tip, .success, .warning, .danger) {
+  border-color: var(--qc-adm);
+}
+
+.md-typeset :is(.admonition, details):is(.note, .info, .tip, .success, .warning, .danger):focus-within {
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--qc-adm) 12%, transparent);
+}
+
+.md-typeset :is(.note, .info, .tip, .success, .warning, .danger) > :is(.admonition-title, summary) {
+  background-color: color-mix(in srgb, var(--qc-adm) 12%, transparent);
+}
+
+.md-typeset :is(.note, .info, .tip, .success, .warning, .danger) > :is(.admonition-title, summary)::before {
+  background-color: var(--qc-adm);
+}
+
+.md-typeset :is(.note, .info, .tip, .success, .warning, .danger) > summary::after {
+  color: var(--qc-adm);
+}
+
+/* --------------------------------------------------------------- Footer */
+
+.md-footer__title {
+  font-family: var(--qc-serif);
+}
+
+.qc-footer-brand {
+  display: inline-block;
+  margin: 0.2rem 0 0.5rem;
+}
+
+.qc-footer-brand img {
+  display: block;
+  height: 2.6rem;
+  width: auto;
+}
+
+/* ----------------------------------------------------------------- Hero */
+
+.qc-hero {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  margin: 0 0 2rem;
+  padding: 2.4rem 2.4rem 2.2rem;
+  border: 1px solid rgba(192, 170, 129, 0.38);
+  border-radius: 1.2rem;
+  background: var(--qc-hero-wash);
+  box-shadow: 0 0.9rem 2.5rem rgba(22, 29, 20, 0.18);
+  color: var(--qc-light);
+}
+
+.qc-hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1.5rem -1rem -1.5rem auto;
+  width: 16rem;
+  background: url("../assets/brand/qian-mark.png") center / contain no-repeat;
+  opacity: 0.14;
+  pointer-events: none;
+}
+
+.md-typeset .qc-hero__eyebrow {
+  margin: 0 0 0.9rem;
+  color: var(--qc-gold);
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.md-typeset .qc-hero h1 {
+  margin: 0;
+  padding: 0;
+  background: var(--qc-gold-metal);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(2.4rem, 6vw, 3.6rem);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+/* background-clip: text paints through the permalink even at opacity 0. */
+.md-typeset .qc-hero .headerlink {
+  display: none;
+}
+
+.md-typeset .qc-hero__lede {
+  max-width: 34rem;
+  margin: 0.9rem 0 1.6rem;
+  color: rgba(248, 246, 242, 0.86);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.md-typeset .qc-hero .md-button {
+  margin: 0.2rem 0.4rem 0.2rem 0;
+  border-color: rgba(192, 170, 129, 0.45);
+  background: transparent;
+  color: var(--qc-gold-bright);
+}
+
+.md-typeset .qc-hero .md-button--primary {
+  border-color: transparent;
+  background: var(--qc-gold-metal-diag);
+  box-shadow: 0 0.4rem 1rem rgba(22, 29, 20, 0.25);
+  color: var(--qc-ink);
+}
+
+.md-typeset .qc-hero .md-button:focus,
+.md-typeset .qc-hero .md-button:hover {
+  border-color: var(--qc-gold);
+  background-color: rgba(192, 170, 129, 0.12);
+  color: var(--qc-gold-bright);
+}
+
+.md-typeset .qc-hero .md-button--primary:focus,
+.md-typeset .qc-hero .md-button--primary:hover {
+  border-color: transparent;
+  color: var(--qc-ink);
+  filter: brightness(1.06);
+}
+
+@media screen and (max-width: 44.984375em) {
+  .qc-hero {
+    padding: 1.8rem 1.3rem 1.6rem;
+  }
+
+  .qc-hero::before {
+    width: 10rem;
+    opacity: 0.1;
+  }
+
+  .md-typeset .qc-hero__lede {
+    font-size: 0.95rem;
+  }
+}

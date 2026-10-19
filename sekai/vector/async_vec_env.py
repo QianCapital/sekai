@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Sequence
-
-import numpy as np
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
+from typing import Any, TypeVar
 
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
-from sekai.utils.seeding import make_seed_sequence
+from sekai.core.result import StepResult
+from sekai.error import VecEnvClosed
 from sekai.vector.result import VecResetResult, VecStepResult
-from sekai.vector.vec_env import VecEnv
+from sekai.vector.vec_env import (
+    VecEnv,
+    close_envs,
+    env_call,
+    env_get_attr,
+    env_set_attr,
+    merge_autoreset,
+    needs_autoreset,
+)
+
+_R = TypeVar("_R")
 
 
 class AsyncVecEnv(VecEnv[ObsType, ActType]):
@@ -21,81 +31,143 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
 
     CPU-bound envs with blocking step() calls will NOT benefit from this;
     use ProcVecEnv instead.
+
+    From async code, use `await vec.async_step(...)` / `await vec.async_reset(...)`.
+    The sync step()/reset() run those coroutines on a private event loop owned
+    by this VecEnv, so they must not be called from inside a running loop.
     """
 
     def __init__(
         self,
         env_fns: Sequence[Callable[[], Env[ObsType, ActType]]],
+        *,
+        autoreset: bool = True,
     ) -> None:
+        if len(env_fns) == 0:
+            raise ValueError("AsyncVecEnv needs at least one env_fn.")
         self.envs: list[Env[ObsType, ActType]] = [fn() for fn in env_fns]
         self.num_envs = len(self.envs)
+        self.autoreset = autoreset
         self.observation_space = self.envs[0].observation_space
         self.action_space = self.envs[0].action_space
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------
     # Async API
     # ------------------------------------------------------------------
 
-    async def async_step(self, actions: Any) -> VecStepResult[ObsType]:
-        results = await asyncio.gather(
-            *(env.async_step(a) for env, a in zip(self.envs, actions))
+    async def _step_one(self, env: Env[ObsType, ActType], action: Any) -> StepResult[Any]:
+        result = await env.async_step(action)
+        if self.autoreset and needs_autoreset(result):
+            result = merge_autoreset(result, await env.async_reset())
+        return result
+
+    @staticmethod
+    async def _gather_all(coros: Iterable[Awaitable[_R]]) -> list[_R]:
+        """Await every coroutine to completion, then raise the first error, if any.
+
+        Unlike a bare asyncio.gather, no sub-env is left mid-call when another
+        one fails, so a retry after a transient error starts from a clean state.
+        """
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return results  # type: ignore[return-value]
+
+    async def async_step(self, actions: Any) -> VecStepResult[Any]:
+        self._check_open()
+        results = await self._gather_all(
+            self._step_one(env, a) for env, a in zip(self.envs, self._split_actions(actions))
         )
-        return VecStepResult(
-            observations=self._stack_obs([r.observation for r in results]),
-            rewards=np.array([r.reward for r in results], dtype=np.float64),
-            terminated=np.array([r.terminated for r in results], dtype=np.bool_),
-            truncated=np.array([r.truncated for r in results], dtype=np.bool_),
-            infos=[r.info for r in results],
-        )
+        return self._batch_step(results)
 
     async def async_reset(
         self,
         *,
         seed: list[SeedType] | SeedType = None,
-        options: list[dict[str, Any]] | dict[str, Any] | None = None,
-    ) -> VecResetResult[ObsType]:
+        options: list[dict[str, Any] | None] | dict[str, Any] | None = None,
+    ) -> VecResetResult[Any]:
+        self._check_open()
         seeds = self._expand_seeds(seed)
-        opts = options if isinstance(options, list) else [options] * self.num_envs
-        results = await asyncio.gather(
-            *(env.async_reset(seed=s, options=o) for env, s, o in zip(self.envs, seeds, opts))
+        opts = self._expand_options(options)
+        results = await self._gather_all(
+            env.async_reset(seed=s, options=o) for env, s, o in zip(self.envs, seeds, opts)
         )
-        return VecResetResult(
-            observations=self._stack_obs([r.observation for r in results]),
-            infos=[r.info for r in results],
-        )
+        return self._batch_reset(results)
 
     # ------------------------------------------------------------------
-    # Sync shims — run the event loop for callers that can't use await
+    # Sync shims — run on a private event loop for callers that can't await
     # ------------------------------------------------------------------
 
-    def step(self, actions: Any) -> VecStepResult[ObsType]:
-        return asyncio.get_event_loop().run_until_complete(self.async_step(actions))
+    def _run(self, coro: Coroutine[Any, Any, _R]) -> _R:
+        if self.closed:
+            coro.close()
+            raise VecEnvClosed()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            coro.close()
+            raise RuntimeError(
+                "AsyncVecEnv.step()/reset() were called from inside a running event loop. "
+                "Use `await vec.async_step(...)` / `await vec.async_reset(...)` instead."
+            )
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        try:
+            return self._loop.run_until_complete(coro)
+        except BaseException:
+            # E.g. KeyboardInterrupt: don't leave sub-env calls to resume on the next call.
+            self._cancel_pending()
+            raise
+
+    def _cancel_pending(self) -> None:
+        assert self._loop is not None
+        pending = asyncio.all_tasks(self._loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+    def step(self, actions: Any) -> VecStepResult[Any]:
+        return self._run(self.async_step(actions))
 
     def reset(
         self,
         *,
         seed: list[SeedType] | SeedType = None,
-        options: list[dict[str, Any]] | dict[str, Any] | None = None,
-    ) -> VecResetResult[ObsType]:
-        return asyncio.get_event_loop().run_until_complete(
-            self.async_reset(seed=seed, options=options)
-        )
+        options: list[dict[str, Any] | None] | dict[str, Any] | None = None,
+    ) -> VecResetResult[Any]:
+        return self._run(self.async_reset(seed=seed, options=options))
 
     def close(self) -> None:
-        for env in self.envs:
-            env.close()
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            close_envs(self.envs)
+        finally:
+            if self._loop is not None:
+                self._cancel_pending()
+                self._loop.close()
+            self._loop = None
 
-    def _stack_obs(self, obs_list: list[ObsType]) -> Any:
-        first = obs_list[0]
-        if isinstance(first, np.ndarray):
-            return np.stack(obs_list)
-        if isinstance(first, dict):
-            return {key: np.stack([o[key] for o in obs_list]) for key in first}  # type: ignore[index]
-        return obs_list
+    # ------------------------------------------------------------------
+    # Sub-env access
+    # ------------------------------------------------------------------
 
-    def _expand_seeds(self, seed: list[SeedType] | SeedType) -> list[SeedType]:
-        if isinstance(seed, list):
-            return seed
-        if seed is None:
-            return [None] * self.num_envs
-        return make_seed_sequence(int(seed), self.num_envs)  # type: ignore[return-value]
+    def call(self, method: str, *args: Any, **kwargs: Any) -> list[Any]:
+        return [env_call(env, method, args, kwargs) for env in self.envs]
+
+    def get_attr(self, name: str) -> list[Any]:
+        return [env_get_attr(env, name) for env in self.envs]
+
+    def set_attr(self, name: str, values: list[Any] | Any) -> None:
+        if not isinstance(values, list):
+            values = [values] * self.num_envs
+        if len(values) != self.num_envs:
+            raise ValueError(f"Expected {self.num_envs} values, got {len(values)}.")
+        for env, v in zip(self.envs, values):
+            env_set_attr(env, name, v)

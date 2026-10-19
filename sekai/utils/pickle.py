@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 class CloudpickleWrapper:
@@ -14,8 +15,11 @@ class CloudpickleWrapper:
 
     def __getstate__(self) -> bytes:
         import cloudpickle
-        return cloudpickle.dumps(self.fn)
+
+        data: bytes = cloudpickle.dumps(self.fn)
+        return data
 
     def __setstate__(self, state: bytes) -> None:
         import pickle
+
         self.fn = pickle.loads(state)

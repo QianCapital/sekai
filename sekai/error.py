@@ -1,16 +1,44 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
+
+def _rebuild(cls: type[SekaiError], args: tuple[Any, ...], kwargs: dict[str, Any]) -> SekaiError:
+    return cls(*args, **kwargs)
+
 
 class SekaiError(Exception):
-    """Base exception for all sekai errors."""
+    """Base exception for all sekai errors.
+
+    Subclasses build their message from structured arguments, so the default
+    exception pickling (which replays self.args, i.e. just the message) would
+    fail. The constructor arguments are recorded instead, which keeps sekai
+    errors picklable across processes (ProcVecEnv, ProcessPoolExecutor, ...).
+    """
+
+    _init_args: tuple[Any, ...]
+    _init_kwargs: dict[str, Any]
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> SekaiError:
+        self = super().__new__(cls, *args)
+        self._init_args = args
+        self._init_kwargs = kwargs
+        return self
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_rebuild, (type(self), self._init_args, self._init_kwargs))
 
 
 class EnvNotFound(SekaiError):
-    def __init__(self, id: str) -> None:
+    def __init__(self, id: str, suggestions: Sequence[str] = ()) -> None:
+        hint = f" Did you mean: {', '.join(repr(s) for s in suggestions)}?" if suggestions else ""
         super().__init__(
-            f"Environment '{id}' not found in registry. "
-            "Use sekai.registry.all_specs() to see registered environments."
+            f"Environment '{id}' not found in registry.{hint} "
+            "Use sekai.all_specs() or `sekai list` to see registered environments."
         )
+        self.id = id
+        self.suggestions = tuple(suggestions)
 
 
 class EnvAlreadyRegistered(SekaiError):
@@ -31,8 +59,7 @@ class InvalidObservation(SekaiError):
 class ResetRequired(SekaiError):
     def __init__(self) -> None:
         super().__init__(
-            "reset() must be called before the first call to step(). "
-            "See Env.reset() for usage."
+            "reset() must be called before the first call to step(). See Env.reset() for usage."
         )
 
 
@@ -57,3 +84,26 @@ class SpaceMismatch(SekaiError):
 class DeprecatedAPI(SekaiError):
     def __init__(self, old: str, new: str) -> None:
         super().__init__(f"'{old}' is deprecated. Use '{new}' instead.")
+
+
+class VecEnvWorkerError(SekaiError):
+    """An exception raised inside a ProcVecEnv worker process."""
+
+    def __init__(self, rank: int, exc_type: str, message: str, remote_traceback: str) -> None:
+        detail = f"\n\nWorker traceback:\n{remote_traceback}" if remote_traceback else ""
+        super().__init__(f"Sub-env {rank} raised {exc_type}: {message}{detail}")
+        self.rank = rank
+        self.exc_type = exc_type
+        self.remote_traceback = remote_traceback
+
+
+class VecEnvClosed(SekaiError):
+    def __init__(self) -> None:
+        super().__init__("This VecEnv has been closed.")
+
+
+class LookAheadError(SekaiError):
+    """A feature or data transform used information from the future (look-ahead bias)."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)

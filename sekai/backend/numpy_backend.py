@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -22,7 +23,8 @@ class NumpyBackend:
         return np.stack(arrays, axis=axis)
 
     def clip(self, x: NDArray[Any], lo: NDArray[Any], hi: NDArray[Any]) -> NDArray[Any]:
-        return np.clip(x, lo, hi)
+        out: NDArray[Any] = np.clip(x, lo, hi)
+        return out
 
     def astype(self, x: NDArray[Any], dtype: Any) -> NDArray[Any]:
         return x.astype(dtype)

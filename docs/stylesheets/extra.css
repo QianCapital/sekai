@@ -1,0 +1,43 @@
+/* sekai-specific tweaks on top of the Qian Capital theme (qian-capital.css). */
+
+/* Introduction under the landing-page hero. */
+.sk-intro {
+  font-size: 0.9rem;
+  max-width: 46rem;
+}
+
+/* Keep wide reference tables readable. */
+.md-typeset table:not([class]) {
+  font-size: 0.72rem;
+}
+.md-typeset table:not([class]) td code {
+  white-space: nowrap;
+}
+
+/* Environment previews rendered with sekai's own renderers. */
+.sk-env-preview {
+  display: block;
+  max-width: 300px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+.sk-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-end;
+}
+.sk-gallery figure {
+  margin: 0;
+}
+.sk-gallery img {
+  height: 120px;
+  width: auto;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+
+/* Signatures in the API reference: a little more breathing room. */
+.doc-signature {
+  margin-bottom: 0.6rem;
+}

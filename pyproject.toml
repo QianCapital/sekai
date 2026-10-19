@@ -1,41 +1,163 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sekai"
-version = "0.1.2"
+dynamic = ["version"]
 description = "A modern, flexible RL environment framework for complex and financial market environments"
 readme = "README.md"
 license = "Apache-2.0"
-authors = [{ name = "Samson Qian", email = "samson.qian@qiancapital.com" }]
+license-files = ["LICENSE"]
+authors = [{ name = "Qian Capital", email = "opensource@qiancapital.com" }]
 requires-python = ">=3.10"
+keywords = [
+    "reinforcement-learning",
+    "rl",
+    "environments",
+    "gymnasium",
+    "gym",
+    "multi-agent",
+    "finance",
+    "trading",
+    "market-making",
+    "optimal-execution",
+    "limit-order-book",
+    "portfolio",
+    "backtesting",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "numpy>=1.24",
     "cloudpickle>=3.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7",
-    "mypy>=1.0",
-    "ruff>=0.1",
+gymnasium = ["gymnasium>=1.0"]
+pettingzoo = ["pettingzoo>=1.24", "gymnasium>=1.0"]
+pandas = ["pandas>=1.5"]
+render = ["pillow>=9.0", "imageio>=2.30", "imageio-ffmpeg>=0.4.8"]
+test = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "gymnasium>=1.0",
+    "pettingzoo>=1.24",
+    "pandas>=1.5",
+    "pillow>=9.0",
 ]
-torch = ["torch>=2.0"]
-all = ["sekai[dev,torch]"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.6", "mkdocstrings>=1.0", "mkdocstrings-python>=2.0"]
+dev = [
+    "sekai[test,docs]",
+    "mypy>=1.10",
+    "ruff>=0.6",
+    "pre-commit>=3.5",
+    "build>=1.2",
+    "twine>=5.1",
+]
+all = ["sekai[gymnasium,pettingzoo,pandas,render]"]
 
 [project.urls]
-Homepage = "https://github.com/qiancapital/sekai"
+Homepage = "https://github.com/QianCapital/sekai"
+Documentation = "https://sekai.qiancapital.com/"
+Repository = "https://github.com/QianCapital/sekai"
+Issues = "https://github.com/QianCapital/sekai/issues"
+Changelog = "https://github.com/QianCapital/sekai/blob/master/CHANGELOG.md"
+
+[project.scripts]
+sekai = "sekai.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "sekai._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sekai*"]
 
+[tool.setuptools.package-data]
+sekai = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+
+[tool.coverage.run]
+source = ["sekai"]
+branch = true
+# ProcVecEnv workers run in subprocesses; measure them too.
+concurrency = ["multiprocessing"]
+parallel = true
+sigterm = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.$",
+]
+
+# ---------------------------------------------------------------------------
+# Linting and type checking
+# ---------------------------------------------------------------------------
+
 [tool.mypy]
 python_version = "3.10"
 strict = true
 ignore_missing_imports = true
+files = ["sekai"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "PIE",  # flake8-pie
+    "NPY",  # numpy-specific rules
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "B905",    # zip(strict=...) everywhere is noise; lengths are validated where it matters
+    "RUF022",  # __all__ is grouped by topic, not sorted
+    "SIM108",  # ternaries are not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The package root re-exports the public API in a deliberate, grouped order.
+"sekai/__init__.py" = ["E402", "F401", "I001"]
+"sekai/sekai.py" = ["F401", "F403"]
+"sekai/*/__init__.py" = ["I001"]
+"tests/*" = ["B018", "RUF012"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sekai", "tests"]

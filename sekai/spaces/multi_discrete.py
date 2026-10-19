@@ -32,23 +32,41 @@ class MultiDiscrete(Space[NDArray[np.intp]]):
             raise ValueError("start.shape must match nvec.shape.")
         super().__init__(shape=self.nvec.shape, dtype=np.dtype(dtype), seed=seed)
 
-    def sample(self, mask: NDArray[np.int8] | None = None) -> NDArray[np.intp]:
+    @property
+    def dtype(self) -> np.dtype[Any]:
+        assert self._dtype is not None
+        return self._dtype
+
+    def sample(self, mask: NDArray[np.int8] | tuple[Any, ...] | None = None) -> NDArray[np.intp]:
+        """Sample uniformly, optionally restricted by a mask.
+
+        mask: per entry, an int8 array of length nvec[i] with 1 marking allowed
+        values. Give either a tuple of such arrays (nested to match nvec's shape,
+        as in gymnasium) or one array whose last axis is padded to max(nvec).
+        """
         if mask is not None:
             result = np.zeros(self.nvec.shape, dtype=self.dtype)
             for idx in np.ndindex(self.nvec.shape):
-                m = mask[idx]
-                valid = np.where(m == 1)[0]
+                if isinstance(mask, np.ndarray):
+                    m = mask[idx]
+                else:
+                    m = mask
+                    for i in idx:
+                        m = m[i]
+                m = np.asarray(m)[: int(self.nvec[idx])]
+                valid = np.flatnonzero(m == 1)
                 if len(valid) == 0:
                     raise ValueError(f"All actions masked in dimension {idx}.")
                 result[idx] = self.rng.choice(valid) + self.start[idx]
-            return result.astype(np.intp)
+            return result
 
-        return (
-            self.rng.integers(self.start, self.start + self.nvec, size=self.nvec.shape)
-            .astype(np.intp)
+        return self.rng.integers(self.start, self.start + self.nvec, size=self.nvec.shape).astype(
+            self.dtype
         )
 
     def contains(self, x: Any) -> bool:
+        if isinstance(x, (list, tuple)):
+            x = np.asarray(x)
         if not isinstance(x, np.ndarray):
             return False
         return bool(
@@ -79,6 +97,8 @@ class MultiDiscrete(Space[NDArray[np.intp]]):
         )
 
     def __repr__(self) -> str:
+        if np.any(self.start != 0):
+            return f"MultiDiscrete({self.nvec.tolist()}, start={self.start.tolist()})"
         return f"MultiDiscrete({self.nvec.tolist()})"
 
     def __eq__(self, other: object) -> bool:

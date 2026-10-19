@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://sekai.qiancapital.com/
+    about: Guides and API reference
+  - name: Report a security vulnerability
+    url: https://github.com/QianCapital/sekai/security/advisories/new
+    about: Please report security issues privately, not as public issues

@@ -20,6 +20,10 @@ class OrderEnforcing(Wrapper[ObsType, ActType, ObsType, ActType]):
         super().__init__(env)
         self._has_reset: bool = False
 
+    @property
+    def has_reset(self) -> bool:
+        return self._has_reset
+
     def reset(
         self,
         *,
@@ -29,7 +33,21 @@ class OrderEnforcing(Wrapper[ObsType, ActType, ObsType, ActType]):
         self._has_reset = True
         return self.env.reset(seed=seed, options=options)
 
+    async def async_reset(
+        self,
+        *,
+        seed: SeedType = None,
+        options: dict[str, Any] | None = None,
+    ) -> ResetResult[ObsType]:
+        self._has_reset = True
+        return await self.env.async_reset(seed=seed, options=options)
+
     def step(self, action: ActType) -> StepResult[ObsType]:
         if not self._has_reset:
             raise ResetRequired()
         return self.env.step(action)
+
+    async def async_step(self, action: ActType) -> StepResult[ObsType]:
+        if not self._has_reset:
+            raise ResetRequired()
+        return await self.env.async_step(action)

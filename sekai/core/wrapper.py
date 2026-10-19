@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import abc
-from typing import Any, Generic, Iterator
+from collections.abc import Iterator
+from typing import Any, Generic
 
-from sekai._types import ActType, ObsType, WActType, WObsType
+import numpy as np
+
+from sekai._types import ActType, ObsType, SeedType, WActType, WObsType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.spaces.space import Space
-from sekai._types import SeedType
 
 
 class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActType]):
@@ -17,12 +19,22 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
     Override only the methods you need to change.
 
     Improvements over gymnasium:
-      - __iter__ / __len__ let you inspect the full wrapper stack
+      - `__iter__` / `__len__` let you inspect the full wrapper stack
       - Async methods are transparently delegated
       - _observation_space / _action_space overrides are lazy
+
+    If you override step() but not async_step(), async_step() calls your
+    step(), so your logic is never bypassed. Override both to keep the inner
+    env's async path end-to-end.
     """
 
     def __init__(self, env: Env[ObsType, ActType]) -> None:
+        if not isinstance(env, Env):
+            raise TypeError(
+                f"{type(self).__name__} expected a sekai.Env, got {type(env).__name__}. "
+                "To wrap a gymnasium env, convert it first with "
+                "sekai.compat.from_gymnasium(env)."
+            )
         self.env = env
         self._observation_space: Space[WObsType] | None = None
         self._action_space: Space[WActType] | None = None
@@ -31,7 +43,7 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
     # Space delegation with lazy override support
     # ------------------------------------------------------------------
 
-    @property  # type: ignore[override]
+    @property
     def observation_space(self) -> Space[WObsType]:
         if self._observation_space is not None:
             return self._observation_space
@@ -41,7 +53,7 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
     def observation_space(self, space: Space[WObsType]) -> None:
         self._observation_space = space
 
-    @property  # type: ignore[override]
+    @property
     def action_space(self) -> Space[WActType]:
         if self._action_space is not None:
             return self._action_space
@@ -89,11 +101,34 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
         self.env.close()
 
     # ------------------------------------------------------------------
+    # RNG — wrappers share the wrapped env's generator
+    # ------------------------------------------------------------------
+
+    @property
+    def rng(self) -> np.random.Generator:
+        return self.env.rng
+
+    @rng.setter
+    def rng(self, generator: np.random.Generator) -> None:
+        self.env.rng = generator
+
+    @property
+    def _rng_seed(self) -> int | None:
+        return self.env._rng_seed
+
+    @_rng_seed.setter
+    def _rng_seed(self, value: int | None) -> None:
+        self.env._rng_seed = value
+
+    def _set_rng(self, seed: SeedType) -> int:
+        return self.env._set_rng(seed)
+
+    # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
 
-    @property  # type: ignore[override]
-    def unwrapped(self) -> Env[ObsType, ActType]:
+    @property
+    def unwrapped(self) -> Env[Any, Any]:
         return self.env.unwrapped
 
     def has_attr(self, name: str) -> bool:
@@ -105,11 +140,24 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
         return self.env.get_attr(name)
 
     def set_attr(self, name: str, value: Any) -> None:
+        """Set `name` on the outermost layer that has it, or on this wrapper if none does.
+
+        So `env.set_attr("x_threshold", 3.0)` reaches the base env through any
+        number of wrappers instead of creating a new attribute on the wrapper.
+        """
+        for layer in self:
+            if hasattr(layer, name):
+                setattr(layer, name, value)
+                return
         setattr(self, name, value)
 
     @property
     def spec(self) -> Any:
         return self.env.spec
+
+    @spec.setter
+    def spec(self, value: Any) -> None:
+        self.unwrapped.spec = value
 
     @property
     def metadata(self) -> dict[str, Any]:  # type: ignore[override]
@@ -149,20 +197,12 @@ class ObservationWrapper(
     """Applies a transformation to every observation."""
 
     @abc.abstractmethod
-    def observation(self, obs: ObsType) -> WObsType:
-        ...
+    def observation(self, obs: ObsType) -> WObsType: ...
 
-    def reset(
-        self,
-        *,
-        seed: SeedType = None,
-        options: dict[str, Any] | None = None,
-    ) -> ResetResult[WObsType]:
-        result = self.env.reset(seed=seed, options=options)
+    def _wrap_reset(self, result: ResetResult[ObsType]) -> ResetResult[WObsType]:
         return ResetResult(observation=self.observation(result.observation), info=result.info)
 
-    def step(self, action: ActType) -> StepResult[WObsType]:  # type: ignore[override]
-        result = self.env.step(action)
+    def _wrap_step(self, result: StepResult[ObsType]) -> StepResult[WObsType]:
         return StepResult(
             observation=self.observation(result.observation),
             reward=result.reward,
@@ -170,6 +210,28 @@ class ObservationWrapper(
             truncated=result.truncated,
             info=result.info,
         )
+
+    def reset(
+        self,
+        *,
+        seed: SeedType = None,
+        options: dict[str, Any] | None = None,
+    ) -> ResetResult[WObsType]:
+        return self._wrap_reset(self.env.reset(seed=seed, options=options))
+
+    def step(self, action: ActType) -> StepResult[WObsType]:
+        return self._wrap_step(self.env.step(action))
+
+    async def async_reset(
+        self,
+        *,
+        seed: SeedType = None,
+        options: dict[str, Any] | None = None,
+    ) -> ResetResult[WObsType]:
+        return self._wrap_reset(await self.env.async_reset(seed=seed, options=options))
+
+    async def async_step(self, action: ActType) -> StepResult[WObsType]:
+        return self._wrap_step(await self.env.async_step(action))
 
 
 class RewardWrapper(
@@ -179,11 +241,9 @@ class RewardWrapper(
     """Applies a transformation to every reward."""
 
     @abc.abstractmethod
-    def reward(self, reward: float) -> float:
-        ...
+    def reward(self, reward: float) -> float: ...
 
-    def step(self, action: ActType) -> StepResult[ObsType]:
-        result = self.env.step(action)
+    def _wrap_step(self, result: StepResult[ObsType]) -> StepResult[ObsType]:
         return StepResult(
             observation=result.observation,
             reward=self.reward(result.reward),
@@ -191,6 +251,12 @@ class RewardWrapper(
             truncated=result.truncated,
             info=result.info,
         )
+
+    def step(self, action: ActType) -> StepResult[ObsType]:
+        return self._wrap_step(self.env.step(action))
+
+    async def async_step(self, action: ActType) -> StepResult[ObsType]:
+        return self._wrap_step(await self.env.async_step(action))
 
 
 class ActionWrapper(
@@ -200,8 +266,7 @@ class ActionWrapper(
     """Applies a transformation to every action before passing to the env."""
 
     @abc.abstractmethod
-    def action(self, action: WActType) -> ActType:
-        ...
+    def action(self, action: WActType) -> ActType: ...
 
     def reverse_action(self, action: ActType) -> WActType:
         raise NotImplementedError(
@@ -211,3 +276,6 @@ class ActionWrapper(
 
     def step(self, action: WActType) -> StepResult[ObsType]:
         return self.env.step(self.action(action))
+
+    async def async_step(self, action: WActType) -> StepResult[ObsType]:
+        return await self.env.async_step(self.action(action))

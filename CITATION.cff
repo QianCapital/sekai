@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use sekai in your research, please cite it as below."
+title: "sekai: a modern reinforcement learning environment framework for complex and financial market environments"
+type: software
+authors:
+  - name: "Qian Capital"
+    email: opensource@qiancapital.com
+version: 0.2.0
+license: Apache-2.0
+repository-code: "https://github.com/QianCapital/sekai"
+url: "https://sekai.qiancapital.com/"
+keywords:
+  - reinforcement learning
+  - environments
+  - finance
+  - gymnasium

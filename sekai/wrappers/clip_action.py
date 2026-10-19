@@ -16,7 +16,10 @@ class ClipAction(ActionWrapper[ObsType, NDArray[np.float32], NDArray[np.float32]
     """
 
     def __init__(self, env: Env[ObsType, NDArray[np.float32]]) -> None:
-        assert isinstance(env.action_space, Box), "ClipAction requires a Box action space."
+        if not isinstance(env.action_space, Box):
+            raise TypeError(
+                f"ClipAction requires a Box action space, got {type(env.action_space).__name__}."
+            )
         super().__init__(env)
 
     def action(self, action: NDArray[np.float32]) -> NDArray[np.float32]:

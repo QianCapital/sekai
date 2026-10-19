@@ -3,20 +3,20 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import Wrapper
+from sekai.utils.running_stats import RunningMeanStd
 
 
 class NormalizeReward(Wrapper[ObsType, ActType, ObsType, ActType]):
-    """Normalises rewards using a running variance estimate.
+    """Scales rewards by a running estimate of the discounted return's std.
 
-    Tracks a discounted return variance (as in OpenAI baselines) to scale
-    rewards to unit variance. The mean is NOT subtracted — only the scale
-    is adjusted.
+    As in OpenAI baselines' VecNormalize, the mean is NOT subtracted, only the
+    scale is adjusted. The discounted return is reset at the end of every
+    episode. Set update_running_mean = False to freeze the statistics.
     """
 
     def __init__(
@@ -28,18 +28,24 @@ class NormalizeReward(Wrapper[ObsType, ActType, ObsType, ActType]):
         super().__init__(env)
         self.gamma = gamma
         self.epsilon = epsilon
+        self.return_rms = RunningMeanStd(shape=())
+        self.update_running_mean: bool = True
         self._returns: float = 0.0
-        self._var: float = 1.0
-        self._count: float = 0.0
-        self._mean: float = 0.0
 
-    def _update(self, reward: float) -> None:
-        self._returns = self._returns * self.gamma + reward
-        self._count += 1
-        delta = self._returns - self._mean
-        self._mean += delta / self._count
-        delta2 = self._returns - self._mean
-        self._var += delta * delta2
+    def _on_step(self, result: StepResult[ObsType]) -> StepResult[ObsType]:
+        self._returns = self._returns * self.gamma + float(result.reward)
+        if self.update_running_mean:
+            self.return_rms.update(np.array([self._returns]))
+        if result.done:
+            self._returns = 0.0
+        scale = float(np.sqrt(self.return_rms.var + self.epsilon))
+        return StepResult(
+            observation=result.observation,
+            reward=result.reward / scale,
+            terminated=result.terminated,
+            truncated=result.truncated,
+            info=result.info,
+        )
 
     def reset(
         self,
@@ -50,14 +56,17 @@ class NormalizeReward(Wrapper[ObsType, ActType, ObsType, ActType]):
         self._returns = 0.0
         return self.env.reset(seed=seed, options=options)
 
+    async def async_reset(
+        self,
+        *,
+        seed: SeedType = None,
+        options: dict[str, Any] | None = None,
+    ) -> ResetResult[ObsType]:
+        self._returns = 0.0
+        return await self.env.async_reset(seed=seed, options=options)
+
     def step(self, action: ActType) -> StepResult[ObsType]:
-        result = self.env.step(action)
-        self._update(result.reward)
-        std = float(np.sqrt(self._var / max(self._count, 1) + self.epsilon))
-        return StepResult(
-            observation=result.observation,
-            reward=result.reward / std,
-            terminated=result.terminated,
-            truncated=result.truncated,
-            info=result.info,
-        )
+        return self._on_step(self.env.step(action))
+
+    async def async_step(self, action: ActType) -> StepResult[ObsType]:
+        return self._on_step(await self.env.async_step(action))

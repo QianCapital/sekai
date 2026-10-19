@@ -2,72 +2,72 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-from numpy.typing import NDArray
-
 from sekai._types import ActType
 from sekai.core.env import Env
-from sekai.core.result import ResetResult, StepResult
-from sekai.core.wrapper import Wrapper
-from sekai.spaces.box import Box
-from sekai._types import SeedType
+from sekai.core.wrapper import ObservationWrapper
+from sekai.spaces.utils import concatenate, iterate
+from sekai.utils.normalization import ObservationNormalizer, StatsKind
 
 
-class NormalizeObservation(Wrapper[NDArray[np.float64], ActType, NDArray[np.float64], ActType]):
+class NormalizeObservation(ObservationWrapper[Any, ActType, Any]):
     """Normalises observations to have approximately zero mean and unit variance.
 
-    Uses Welford's online algorithm to track running mean and variance.
+    Works on any observation space: every Box gets its own running statistics,
+    a MaskedBox gets per-feature statistics over its occupied slots only (so
+    padding does not bias them), and other parts of a Dict/Tuple observation
+    (Discrete, MultiBinary, ...) pass through unchanged. Normalised parts are
+    float64.
+
+    `stats="running"` (the default) weights every observation ever seen
+    equally. On non-stationary data, such as prices whose volatility changes
+    by regime, use `stats="ewm"` with a `halflife` (in steps), which tracks
+    the recent distribution instead.
+
+    Set `update_running_mean = False` to freeze the statistics, e.g. for
+    evaluation, and use `state_dict()` / `load_state_dict()` to save and restore
+    them. For a Box observation `obs_rms` is the statistics object itself; for
+    nested spaces it mirrors the nesting (a dict for a Dict, ...).
+
+    Args:
+        env: The environment to wrap.
+        epsilon: Added to the variance before dividing.
+        stats: "running" or "ewm".
+        halflife: Halflife in steps for stats="ewm".
+        clip: If given, normalised values are clipped to [-clip, clip].
     """
 
-    def __init__(self, env: Env[NDArray[np.float64], ActType], epsilon: float = 1e-8) -> None:
-        assert isinstance(env.observation_space, Box), (
-            "NormalizeObservation requires a Box observation space."
-        )
-        super().__init__(env)
-        self.epsilon = epsilon
-        obs_space: Box = env.observation_space  # type: ignore[assignment]
-        self._shape = obs_space.shape or ()
-        self._mean = np.zeros(self._shape, dtype=np.float64)
-        self._var = np.ones(self._shape, dtype=np.float64)
-        self._count: float = 0.0
-
-        self.observation_space = Box(  # type: ignore[assignment]
-            low=-np.inf,
-            high=np.inf,
-            shape=self._shape,
-            dtype=np.float64,
-        )
-
-    def _update_stats(self, obs: NDArray[np.float64]) -> None:
-        self._count += 1
-        delta = obs - self._mean
-        self._mean += delta / self._count
-        delta2 = obs - self._mean
-        self._var += delta * delta2
-
-    def _normalize(self, obs: NDArray[np.float64]) -> NDArray[np.float64]:
-        std = np.sqrt(self._var / max(self._count, 1) + self.epsilon)
-        return (obs - self._mean) / std
-
-    def reset(
+    def __init__(
         self,
+        env: Env[Any, ActType],
+        epsilon: float = 1e-8,
         *,
-        seed: SeedType = None,
-        options: dict[str, Any] | None = None,
-    ) -> ResetResult[NDArray[np.float64]]:
-        result = self.env.reset(seed=seed, options=options)
-        obs = result.observation.astype(np.float64)
-        self._update_stats(obs)
-        return ResetResult(observation=self._normalize(obs), info=result.info)
-
-    def step(self, action: ActType) -> StepResult[NDArray[np.float64]]:
-        result = self.env.step(action)
-        obs = result.observation.astype(np.float64)
-        self._update_stats(obs)
-        return StepResult(
-            observation=self._normalize(obs),
-            reward=result.reward,
-            terminated=result.terminated,
-            truncated=result.truncated,
-            info=result.info,
+        stats: StatsKind = "running",
+        halflife: float = 1000.0,
+        clip: float | None = None,
+    ) -> None:
+        super().__init__(env)
+        self.normalizer = ObservationNormalizer(
+            env.observation_space, stats=stats, halflife=halflife, epsilon=epsilon, clip=clip
         )
+        self.epsilon = epsilon
+        self.update_running_mean: bool = True
+        self._inner_space = env.observation_space
+        self.observation_space = self.normalizer.output_space
+
+    @property
+    def obs_rms(self) -> Any:
+        """The running statistics (nested like the observation space)."""
+        return self.normalizer.stats
+
+    def observation(self, obs: Any) -> Any:
+        batch = concatenate(self._inner_space, [obs])
+        out = self.normalizer(batch, update=self.update_running_mean)
+        return next(iter(iterate(self.observation_space, out)))
+
+    def state_dict(self) -> Any:
+        """The normalisation statistics as plain data."""
+        return self.normalizer.state_dict()
+
+    def load_state_dict(self, state: Any) -> None:
+        """Restore statistics saved by state_dict()."""
+        self.normalizer.load_state_dict(state)

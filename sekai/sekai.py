@@ -3,5 +3,5 @@
 # Both of the following import styles work:
 #   import sekai; sekai.Env
 #   from sekai.sekai import Env, Box, StepResult
-from sekai import *  # noqa: F401, F403
-from sekai import __version__  # noqa: F401
+from sekai import *
+from sekai import __version__

@@ -17,7 +17,7 @@ class FlattenObservation(ObservationWrapper[NDArray[np.float32], ActType, Any]):
 
     def __init__(self, env: Env[Any, ActType]) -> None:
         super().__init__(env)
-        self.observation_space = flatten_space(env.observation_space)  # type: ignore[assignment]
+        self.observation_space = flatten_space(env.observation_space)
         self._inner_space: Space[Any] = env.observation_space
 
     def observation(self, obs: Any) -> NDArray[np.float32]:

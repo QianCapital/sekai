@@ -1,7 +1,8 @@
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.env import Env
 from sekai.core.wrapper import ActionWrapper, ObservationWrapper, RewardWrapper, Wrapper
-from sekai.core.multi_agent import MAResetResult, MAStepResult, MultiAgentEnv
+from sekai.core.multi_agent import MultiAgentEnv
+from sekai.core.result import MAResetResult, MAStepResult
 
 __all__ = [
     "StepResult",

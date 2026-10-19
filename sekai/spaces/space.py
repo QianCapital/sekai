@@ -39,12 +39,14 @@ class Space(abc.ABC, Generic[T]):
     def rng(self) -> np.random.Generator:
         if self._rng is None:
             from sekai.utils.seeding import np_random
+
             self._rng, _ = np_random()
         return self._rng
 
     def seed(self, seed: SeedType = None) -> int:
         """Seed the space's RNG. Returns the actual seed used."""
         from sekai.utils.seeding import np_random
+
         self._rng, actual_seed = np_random(seed)
         return actual_seed
 
@@ -78,6 +80,4 @@ class Space(abc.ABC, Generic[T]):
         return f"{type(self).__name__}()"
 
     def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return False
-        return True
+        return type(self) is type(other)

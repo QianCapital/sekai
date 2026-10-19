@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Any, Iterator, Mapping
-
-import numpy as np
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 from sekai._types import SeedType
 from sekai.spaces.space import Space
@@ -36,27 +35,21 @@ class Dict(Space[dict[str, Any]]):
                 if key in self.spaces:
                     self.spaces[key].seed(s)
         elif seed is not None:
-            from sekai.utils.seeding import make_seed_sequence
-            seeds = make_seed_sequence(int(seed), len(self.spaces))
-            for space, s in zip(self.spaces.values(), seeds):
-                space.seed(s)
+            self.seed(seed)
 
     def seed(self, seed: SeedType = None) -> int:
-        from sekai.utils.seeding import np_random, make_seed_sequence
+        """Seed this space and, deterministically, every sub-space."""
+        from sekai.utils.seeding import child_seeds, np_random
+
         self._rng, actual_seed = np_random(seed)
-        if actual_seed != -1:
-            seeds = make_seed_sequence(actual_seed, len(self.spaces))
-            for space, s in zip(self.spaces.values(), seeds):
-                space.seed(s)
+        for space, s in zip(self.spaces.values(), child_seeds(self._rng, actual_seed, len(self))):
+            space.seed(s)
         return actual_seed
 
     def sample(self, mask: dict[str, Any] | None = None) -> dict[str, Any]:
         if mask is None:
             return {key: space.sample() for key, space in self.spaces.items()}
-        return {
-            key: space.sample(mask.get(key))
-            for key, space in self.spaces.items()
-        }
+        return {key: space.sample(mask.get(key)) for key, space in self.spaces.items()}
 
     def contains(self, x: Any) -> bool:
         if not isinstance(x, dict):
@@ -92,6 +85,12 @@ class Dict(Space[dict[str, Any]]):
             "type": "Dict",
             "spaces": {key: space.to_jsonable() for key, space in self.spaces.items()},
         }
+
+    @classmethod
+    def from_jsonable(cls, data: dict[str, Any]) -> Dict:
+        from sekai.spaces.utils import space_from_jsonable
+
+        return cls({key: space_from_jsonable(sub) for key, sub in data["spaces"].items()})
 
     def __repr__(self) -> str:
         spaces_repr = ", ".join(f"{k}: {v}" for k, v in self.spaces.items())

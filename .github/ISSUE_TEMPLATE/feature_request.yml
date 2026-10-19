@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a new environment, wrapper, space, or API improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: A code sketch of how you'd like to use it helps a lot.
+      render: python
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

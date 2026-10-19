@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in sekai doesn't work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest script that shows the problem.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback or output
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `python -c "import sekai, numpy, sys; print(sekai.__version__, numpy.__version__, sys.version)"`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system

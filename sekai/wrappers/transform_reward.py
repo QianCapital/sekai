@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from sekai._types import ActType, ObsType
 from sekai.core.env import Env
@@ -11,8 +11,10 @@ class TransformReward(RewardWrapper[ObsType, ActType]):
     """Applies an arbitrary callable transformation to every reward.
 
     Example:
+        ```python
         env = TransformReward(env, lambda r: np.sign(r))  # reward clipping
         env = TransformReward(env, lambda r: r * 0.01)    # reward scaling
+        ```
     """
 
     def __init__(

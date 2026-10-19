@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike
 
 from sekai._types import SeedType
 from sekai.spaces.space import Space
@@ -17,9 +17,9 @@ class Discrete(Space[np.intp]):
 
     def __init__(
         self,
-        n: int,
+        n: int | np.integer[Any],
         seed: SeedType = None,
-        start: int = 0,
+        start: int | np.integer[Any] = 0,
     ) -> None:
         if n <= 0:
             raise ValueError(f"n must be positive, got {n}.")
@@ -27,18 +27,25 @@ class Discrete(Space[np.intp]):
         self.start = int(start)
         super().__init__(shape=(), dtype=np.dtype(np.int64), seed=seed)
 
-    def sample(self, mask: NDArray[np.int8] | None = None) -> np.intp:
+    def sample(self, mask: ArrayLike | None = None) -> np.intp:
+        """Sample uniformly; mask (shape (n,), e.g. int8 or a list) marks allowed values with 1."""
         if mask is not None:
-            if mask.shape != (self.n,):
-                raise ValueError(f"mask.shape must be ({self.n},), got {mask.shape}.")
-            valid = np.where(mask == 1)[0]
+            m = np.asarray(mask)
+            if m.shape != (self.n,):
+                raise ValueError(f"mask.shape must be ({self.n},), got {m.shape}.")
+            valid = np.where(m == 1)[0]
             if len(valid) == 0:
                 raise ValueError("All actions masked — at least one must be valid.")
-            return np.intp(self.rng.choice(valid) + self.start)
-        return np.intp(self.rng.integers(self.start, self.start + self.n))
+            value = int(self.rng.choice(valid)) + self.start
+        else:
+            value = int(self.rng.integers(self.start, self.start + self.n))
+        out: np.intp = np.intp(value)
+        return out
 
     def contains(self, x: Any) -> bool:
-        if isinstance(x, (int, np.integer)):
+        if isinstance(x, np.ndarray) and x.shape == () and np.issubdtype(x.dtype, np.integer):
+            x = x.item()
+        if isinstance(x, (int, np.integer)) and not isinstance(x, (bool, np.bool_)):
             return bool(self.start <= x < self.start + self.n)
         return False
 

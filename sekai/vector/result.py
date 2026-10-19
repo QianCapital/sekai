@@ -30,10 +30,14 @@ class VecStepResult(Generic[ObsType]):
 
 @dataclass(frozen=True, slots=True)
 class VecResetResult(Generic[ObsType]):
-    """Structured result from VecEnv.reset()."""
+    """Structured result from VecEnv.reset(). dones is all False, mirroring VecStepResult."""
 
     observations: ObsType
     infos: list[InfoDict]
+
+    @property
+    def dones(self) -> NDArray[np.bool_]:
+        return np.zeros(len(self.infos), dtype=np.bool_)
 
 
 def stack_infos(infos: list[InfoDict]) -> dict[str, Any]:

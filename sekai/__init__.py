@@ -10,10 +10,19 @@ on financial markets. It mirrors gym/gymnasium's API surface while providing:
   - Typed EpisodeStats rather than untyped info dicts
   - Pluggable namespace loaders in the registry
   - Three VecEnv backends: Sync, Async (asyncio), Proc (multiprocessing)
+  - Built-in environments: classic control (gymnasium-identical dynamics)
+    and finance (trading, portfolio, market making, optimal execution)
+  - Two-way gymnasium interop via sekai.compat
 
 Quick start:
     import sekai
 
+    env = sekai.make("CartPole-v1")
+    result = env.reset(seed=0)
+    while not result.done:
+        result = env.step(env.action_space.sample())
+
+Writing an environment:
     class MyEnv(sekai.Env[np.ndarray, np.ndarray]):
         def __init__(self):
             self.observation_space = sekai.Box(-1, 1, shape=(4,))
@@ -46,10 +55,21 @@ from sekai.spaces.multi_discrete import MultiDiscrete
 from sekai.spaces.multi_binary import MultiBinary
 from sekai.spaces.dict import Dict
 from sekai.spaces.tuple import Tuple
+from sekai.spaces.sequence import Sequence
+from sekai.spaces.masked_box import MaskedBox
 from sekai.spaces import utils as space_utils
 
 # Registry
-from sekai.registry.registry import all_specs, make, register, register_namespace, spec
+from sekai.registry.registry import (
+    all_specs,
+    deregister,
+    make,
+    make_vec,
+    pprint_registry,
+    register,
+    register_namespace,
+    spec,
+)
 from sekai.registry.spec import EnvSpec, WrapperSpec
 
 # Vector environments
@@ -57,12 +77,20 @@ from sekai.vector.vec_env import VecEnv
 from sekai.vector.sync_vec_env import SyncVecEnv
 from sekai.vector.async_vec_env import AsyncVecEnv
 from sekai.vector.proc_vec_env import ProcVecEnv
+from sekai.vector.native import NativeVecEnv
 from sekai.vector.result import VecResetResult, VecStepResult, stack_infos
 from sekai.vector.vec_wrapper import (
     VecActionWrapper,
     VecObservationWrapper,
     VecRewardWrapper,
     VecWrapper,
+)
+from sekai.vector.wrappers import (
+    VecNormalizeObservation,
+    VecNormalizeReward,
+    VecRecordEpisodeStatistics,
+    VecTransformObservation,
+    VecTransformReward,
 )
 
 # Statistics
@@ -82,9 +110,23 @@ from sekai.wrappers.frame_stack import FrameStackObservation
 from sekai.wrappers.transform_obs import TransformObservation
 from sekai.wrappers.transform_reward import TransformReward
 from sekai.wrappers.order_enforcing import OrderEnforcing
+from sekai.wrappers.clip_reward import ClipReward
+from sekai.wrappers.rescale_obs import RescaleObservation
+from sekai.wrappers.dtype_obs import DtypeObservation
+from sekai.wrappers.filter_obs import FilterObservation
+from sekai.wrappers.time_aware_obs import TimeAwareObservation
+from sekai.wrappers.delay_obs import DelayObservation
+from sekai.wrappers.sticky_action import StickyAction
+from sekai.wrappers.action_repeat import ActionRepeat
+from sekai.wrappers.delay_action import DelayAction
+from sekai.wrappers.action_mask_obs import ActionMaskObservation
+from sekai.wrappers.pad_sequence_obs import PadSequenceObservation
+
+# Built-in environments (registers CartPole-v1, Portfolio-v0, ... on import)
+from sekai import envs
 
 # Sub-namespaces
-from sekai import wrappers, spaces, vector, rendering, stats, utils, error
+from sekai import wrappers, spaces, vector, rendering, stats, utils, error, compat, finance
 
 # Errors
 from sekai.error import (
@@ -94,14 +136,19 @@ from sekai.error import (
     EnvNotFound,
     InvalidAction,
     InvalidObservation,
+    LookAheadError,
     ResetRequired,
     SekaiError,
     SpaceMismatch,
+    VecEnvClosed,
+    VecEnvWorkerError,
 )
 
 # Utilities
 from sekai.utils.seeding import np_random, make_seed_sequence
 from sekai.utils.checker import check_env
+from sekai.utils.running_stats import ExponentialMovingStats, RunningMeanStd
+from sekai.utils.masking import get_action_mask
 
 
 __all__ = [
@@ -125,13 +172,18 @@ __all__ = [
     "MultiBinary",
     "Dict",
     "Tuple",
+    "Sequence",
+    "MaskedBox",
     "space_utils",
     # Registry
     "register",
+    "deregister",
     "make",
+    "make_vec",
     "spec",
     "all_specs",
     "register_namespace",
+    "pprint_registry",
     "EnvSpec",
     "WrapperSpec",
     # Vector
@@ -139,6 +191,7 @@ __all__ = [
     "SyncVecEnv",
     "AsyncVecEnv",
     "ProcVecEnv",
+    "NativeVecEnv",
     "VecStepResult",
     "VecResetResult",
     "stack_infos",
@@ -146,6 +199,11 @@ __all__ = [
     "VecObservationWrapper",
     "VecRewardWrapper",
     "VecActionWrapper",
+    "VecRecordEpisodeStatistics",
+    "VecNormalizeObservation",
+    "VecNormalizeReward",
+    "VecTransformObservation",
+    "VecTransformReward",
     # Stats
     "EpisodeStats",
     "StatsTracker",
@@ -164,7 +222,21 @@ __all__ = [
     "TransformObservation",
     "TransformReward",
     "OrderEnforcing",
+    "ClipReward",
+    "RescaleObservation",
+    "DtypeObservation",
+    "FilterObservation",
+    "TimeAwareObservation",
+    "DelayObservation",
+    "StickyAction",
+    "ActionRepeat",
+    "DelayAction",
+    "ActionMaskObservation",
+    "PadSequenceObservation",
     # Sub-namespaces
+    "envs",
+    "finance",
+    "compat",
     "wrappers",
     "spaces",
     "vector",
@@ -182,8 +254,14 @@ __all__ = [
     "AsyncCallPending",
     "BackendMismatch",
     "SpaceMismatch",
+    "VecEnvWorkerError",
+    "VecEnvClosed",
+    "LookAheadError",
     # Utils
     "np_random",
     "make_seed_sequence",
     "check_env",
+    "RunningMeanStd",
+    "ExponentialMovingStats",
+    "get_action_mask",
 ]

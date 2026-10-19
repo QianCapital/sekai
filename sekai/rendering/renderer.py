@@ -12,20 +12,22 @@ RenderFrame: TypeAlias = RGBArray | ANSIString
 
 @runtime_checkable
 class Renderer(Protocol):
-    """Protocol for rendering backends.
+    """Protocol for rendering backends: any object with `render(env)` and `close()`.
 
     Renderers are separate from Env — they are injected and managed
     independently, so you can swap, compose, or record without touching
-    the environment.
+    the environment. Subclass `BaseRenderer` to also get a no-op `close()`
+    and context-manager support.
 
-    Example usage:
-        env = MyEnv()
-        renderer = RGBArrayRenderer(width=800, height=600)
-        with renderer:
-            result = env.reset()
-            for _ in range(100):
-                frame = renderer.render(env)
-                result = env.step(policy(result.observation))
+    Example:
+        ```python
+        renderer = CartPoleRenderer()
+        result = env.reset(seed=0)
+        frames = [renderer.render(env)]
+        while not result.done:
+            result = env.step(env.action_space.sample())
+            frames.append(renderer.render(env))
+        ```
     """
 
     def render(self, env: Any) -> RenderFrame:
@@ -36,8 +38,22 @@ class Renderer(Protocol):
         """Release renderer resources."""
         ...
 
-    def __enter__(self) -> Renderer:
+
+class BaseRenderer:
+    """Convenience base class for renderers: no-op `close()` and `with` support.
+
+    Subclasses implement `render(env)`; override `close()` if they hold
+    resources such as windows or file handles.
+    """
+
+    def render(self, env: Any) -> RenderFrame:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Release renderer resources (nothing by default)."""
+
+    def __enter__(self) -> BaseRenderer:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()

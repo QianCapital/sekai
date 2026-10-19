@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 from sekai._types import SeedType
 from sekai.spaces.space import Space
@@ -14,32 +14,36 @@ class MultiBinary(Space[NDArray[np.int8]]):
 
     def __init__(
         self,
-        n: int | tuple[int, ...],
+        n: int | np.integer[Any] | tuple[int, ...],
         seed: SeedType = None,
     ) -> None:
-        if isinstance(n, int):
-            self.n: tuple[int, ...] = (n,)
+        if isinstance(n, (int, np.integer)):
+            self.n: tuple[int, ...] = (int(n),)
         else:
-            self.n = tuple(n)
+            self.n = tuple(int(d) for d in n)
         super().__init__(shape=self.n, dtype=np.dtype(np.int8), seed=seed)
 
-    def sample(self, mask: NDArray[np.int8] | None = None) -> NDArray[np.int8]:
+    def sample(self, mask: ArrayLike | None = None) -> NDArray[np.int8]:
+        """Sample uniformly; mask (shape n): 1 forces a 1, 0 forces a 0, -1 samples freely."""
         if mask is not None:
-            if mask.shape != self.n:
-                raise ValueError(f"mask.shape must be {self.n}, got {mask.shape}.")
+            m = np.asarray(mask)
+            if m.shape != self.n:
+                raise ValueError(f"mask.shape must be {self.n}, got {m.shape}.")
             sample = np.zeros(self.n, dtype=np.int8)
-            free = mask == -1
+            free = m == -1
             sample[free] = self.rng.integers(0, 2, size=free.sum(), dtype=np.int8)
-            sample[mask == 1] = 1
+            sample[m == 1] = 1
             return sample
         return self.rng.integers(0, 2, size=self.n, dtype=np.int8)
 
     def contains(self, x: Any) -> bool:
+        if isinstance(x, (list, tuple)):
+            x = np.asarray(x)
         if not isinstance(x, np.ndarray):
             return False
         return bool(
             x.shape == self.shape
-            and x.dtype == np.int8
+            and (np.issubdtype(x.dtype, np.integer) or x.dtype == np.bool_)
             and np.all((x == 0) | (x == 1))
         )
 

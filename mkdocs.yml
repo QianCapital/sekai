@@ -1,0 +1,167 @@
+site_name: sekai
+site_description: A modern, flexible reinforcement-learning environment framework, built for complex environments and financial markets.
+site_author: Qian Capital
+site_url: https://sekai.qiancapital.com/
+repo_url: https://github.com/QianCapital/sekai
+repo_name: QianCapital/sekai
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; Qian Capital &middot; Apache-2.0
+
+theme:
+  name: material
+  custom_dir: overrides
+  logo: assets/brand/qian-mark.png
+  favicon: assets/brand/favicon.png
+  font: false  # brand fonts are self-hosted in docs/assets/fonts (see qian-capital.css)
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+extra_css:
+  - https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap
+  - stylesheets/qian-capital.css
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/QianCapital/sekai
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/sekai/
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://numpy.org/doc/stable/objects.inv
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            filters: ["!^_"]
+            show_if_no_docstring: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            heading_level: 2
+
+watch:
+  - sekai
+  - overrides
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Migrating from gymnasium: guide/gymnasium.md
+  - User guide:
+      - Environments: guide/environments.md
+      - Spaces: guide/spaces.md
+      - Variable-size observations: guide/dynamic.md
+      - Wrappers: guide/wrappers.md
+      - Time and history: guide/time.md
+      - Vector environments: guide/vector.md
+      - Registry: guide/registry.md
+      - Async environments: guide/async.md
+      - Multi-agent: guide/multi-agent.md
+      - Rendering: guide/rendering.md
+      - Episode statistics: guide/statistics.md
+      - Checking environments: guide/checking.md
+      - Command line: guide/cli.md
+  - Finance:
+      - Overview: finance/index.md
+      - Market data and backtesting: finance/data.md
+      - Market simulators: finance/simulators.md
+      - Costs, accounts and rewards: finance/execution.md
+      - Performance metrics: finance/metrics.md
+      - Order books: finance/order-book.md
+  - Environments:
+      - Catalog: environments/index.md
+      - Classic control: environments/classic-control.md
+      - Finance: environments/finance.md
+  - API reference:
+      - Overview: api/index.md
+      - Core: api/core.md
+      - Spaces: api/spaces.md
+      - Wrappers: api/wrappers.md
+      - Vector: api/vector.md
+      - Registry: api/registry.md
+      - Environments: api/envs.md
+      - Finance: api/finance.md
+      - Rendering: api/rendering.md
+      - Statistics: api/stats.md
+      - Utilities: api/utils.md
+      - Compatibility: api/compat.md
+      - Errors: api/errors.md
+      - CLI: api/cli.md
+  - About:
+      - Changelog: changelog.md
+      - Contributing: contributing.md

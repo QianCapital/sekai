@@ -4,63 +4,54 @@
 
 **A modern, flexible reinforcement learning environment framework**
 
-*Built for high-dimensional, complex environments — especially financial markets*
+*Built for high-dimensional, complex environments, especially financial markets*
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-green)](sekai/_version.py)
+[![PyPI](https://img.shields.io/pypi/v/sekai)](https://pypi.org/project/sekai/)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://pypi.org/project/sekai/)
+[![CI](https://github.com/QianCapital/sekai/actions/workflows/ci.yml/badge.svg)](https://github.com/QianCapital/sekai/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-sekai.qiancapital.com-blue)](https://sekai.qiancapital.com/)
+[![Typed](https://img.shields.io/badge/typing-mypy%20strict-blue)](https://mypy.readthedocs.io/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/QianCapital/sekai/blob/master/LICENSE)
+
+[Documentation](https://sekai.qiancapital.com/) ·
+[Environments](https://sekai.qiancapital.com/environments/) ·
+[Migrating from gymnasium](https://sekai.qiancapital.com/guide/gymnasium/) ·
+[Changelog](https://github.com/QianCapital/sekai/blob/master/CHANGELOG.md)
 
 </div>
 
 ---
 
-sekai is a Python RL environment framework designed as a modern successor to [gym](https://github.com/openai/gym) / [gymnasium](https://github.com/Farama-Foundation/Gymnasium). It provides a clean, fully-typed API with structured return types, first-class async support, multi-agent environments, and a composable wrapper system — all built to scale to the complexity of real financial market simulation.
+sekai is a Python framework for reinforcement learning environments, designed as a modern
+successor to [gym](https://github.com/openai/gym) / [gymnasium](https://github.com/Farama-Foundation/Gymnasium).
+It keeps the API you know (`make`, `reset`, `step`, spaces, wrappers, vector envs) and fixes
+what gets painful at scale: structured return types instead of tuples, async-native
+environments, built-in multi-agent support, typed episode statistics, and rendering that
+lives outside the environment. It ships with gymnasium-identical classic control benchmarks
+and a suite of financial-market environments, and it plugs straight into the gymnasium
+ecosystem (Stable-Baselines3, CleanRL, RLlib).
 
 ```python
 import sekai
-import numpy as np
 
-class TradingEnv(sekai.Env):
-    def __init__(self):
-        self.observation_space = sekai.Box(-np.inf, np.inf, shape=(64,))
-        self.action_space = sekai.Box(-1.0, 1.0, shape=(8,))
-
-    def reset(self, *, seed=None, options=None):
-        self._set_rng(seed)
-        obs = self.rng.standard_normal(64).astype(np.float32)
-        return sekai.ResetResult(observation=obs, info={})
-
-    def step(self, action):
-        obs = self.rng.standard_normal(64).astype(np.float32)
-        reward = float(-np.sum(np.square(action)))
-        return sekai.StepResult(obs, reward, terminated=False, truncated=False, info={})
-
-with TradingEnv() as env:
-    result = env.reset(seed=42)
-    for _ in range(1000):
-        result = env.step(env.action_space.sample())
-        if result.done:
-            break
+env = sekai.make("CartPole-v1")
+result = env.reset(seed=42)
+while not result.done:
+    result = env.step(env.action_space.sample())
+    # result.observation, result.reward, result.terminated, result.truncated, result.info
 ```
 
----
+## Highlights
 
-## Why sekai?
-
-gym and gymnasium have a well-known set of friction points that compound at scale:
-
-| Pain point | gymnasium | sekai |
-|---|---|---|
-| Return types | `obs, rew, term, trunc, info = env.step(a)` — easy to unpack wrong | `StepResult(observation, reward, terminated, truncated, info)` frozen dataclass |
-| Async environments | Not supported | `async_step` / `async_reset` on every environment by default |
-| Multi-agent | Delegated to PettingZoo | `MultiAgentEnv` with per-agent typed spaces built in |
-| Rendering | `render()` on Env, mode set at construction | `Renderer` protocol — injected, composable, swappable |
-| Episode statistics | Untyped `info["r"]` dict | `EpisodeStats` typed dataclass with `.episode_return`, `.episode_length`, etc. |
-| Vectorised env naming | `AsyncVectorEnv` = multiprocessing (confusing) | `SyncVecEnv`, `AsyncVecEnv` (asyncio), `ProcVecEnv` (multiprocessing) |
-| Registry plugins | Not supported | `register_namespace("qc", loader)` for lazy plugin namespaces |
-| `check_env` overhead | Runs on every step in production | Testing utility — call it in your test suite, zero prod overhead |
-
----
+- **Structured results.** `step()` returns a frozen `StepResult` dataclass, not a 5-tuple you can unpack in the wrong order.
+- **Dynamic dimensionality.** `MaskedBox` padded sets and `Sequence` spaces for observations whose size changes (a universe that gains and loses assets, the trades since the last decision), plus a standard action-mask convention that `check_env`, wrappers and MaskablePPO understand.
+- **Time-aware.** Frame stacking and normalisation over any (nested) space, exponentially weighted statistics for non-stationary data, observation and order latency wrappers, and `timestamp` / `dt` in every finance env's info.
+- **Fast vectorisation.** Native vector environments that step thousands of sub-envs with array operations (over a million env-steps per second), plus sync, asyncio and multiprocessing backends with shared-memory observations and autoreset.
+- **A finance toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
+- **Built-in environments.** Classic control with dynamics bit-for-bit identical to gymnasium; trading, portfolio, dynamic-universe, market-making, optimal-execution and order-book environments (single- and multi-agent), with closed-form baselines.
+- **Async-native.** Every environment has `async_step()` / `async_reset()`; `AsyncVecEnv` runs I/O-bound envs (live feeds, remote simulators) concurrently.
+- **Ecosystem-compatible.** `sekai.compat` converts to and from gymnasium (Stable-Baselines3, CleanRL, RLlib) and PettingZoo.
+- **Production quality.** Fully typed (`mypy --strict`), tested on Linux, macOS and Windows for Python 3.10–3.14, with `check_env` and a `sekai` CLI for validating and benchmarking environments.
 
 ## Installation
 
@@ -68,879 +59,206 @@ gym and gymnasium have a well-known set of friction points that compound at scal
 pip install sekai
 ```
 
-**Development install:**
+| Extra | Adds |
+|---|---|
+| `pip install "sekai[gymnasium]"` | gymnasium interop (`sekai.compat`) |
+| `pip install "sekai[pettingzoo]"` | PettingZoo interop for multi-agent envs |
+| `pip install "sekai[pandas]"` | building `MarketData` from pandas DataFrames |
+| `pip install "sekai[render]"` | saving frames as GIF / MP4 |
+| `pip install "sekai[all]"` | all of the above |
 
-```bash
-git clone https://github.com/qiancapital/sekai
-cd sekai
-pip install -e ".[dev]"
-```
+sekai itself needs only NumPy and cloudpickle.
 
-**Requirements:** Python 3.10+, NumPy 1.24+
+## Quick start
 
----
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-  - [StepResult and ResetResult](#stepresult-and-resetresult)
-  - [Writing an Environment](#writing-an-environment)
-  - [Spaces](#spaces)
-  - [Wrappers](#wrappers)
-  - [Vectorised Environments](#vectorised-environments)
-  - [Multi-Agent Environments](#multi-agent-environments)
-  - [Environment Registry](#environment-registry)
-  - [Episode Statistics](#episode-statistics)
-  - [Rendering](#rendering)
-  - [Async Environments](#async-environments)
-- [Financial Market Example](#financial-market-example)
-- [Validating Your Environment](#validating-your-environment)
-- [API Reference](#api-reference)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## Quick Start
+### Use a built-in environment
 
 ```python
 import sekai
-import numpy as np
 
-# 1. Implement an environment
-class CartPoleEnv(sekai.Env):
+env = sekai.RecordEpisodeStatistics(sekai.make("CartPole-v1"))
+result = env.reset(seed=0)
+while not result.done:
+    result = env.step(env.action_space.sample())
+
+stats = result.info["episode"]  # a typed EpisodeStats, not an untyped dict
+print(stats.episode_return, stats.episode_length)
+```
+
+### Write your own
+
+```python
+import numpy as np
+import sekai
+
+
+class RandomWalkEnv(sekai.Env[np.ndarray, np.ndarray]):
     def __init__(self):
-        self.observation_space = sekai.Box(-4.0, 4.0, shape=(4,), dtype=np.float32)
-        self.action_space = sekai.Discrete(2)
-        self._state = np.zeros(4, dtype=np.float32)
+        self.observation_space = sekai.Box(-np.inf, np.inf, shape=(1,))
+        self.action_space = sekai.Box(-1.0, 1.0, shape=(1,))
 
     def reset(self, *, seed=None, options=None):
-        self._set_rng(seed)
-        self._state = self.rng.uniform(-0.05, 0.05, size=(4,)).astype(np.float32)
-        return sekai.ResetResult(observation=self._state.copy(), info={})
+        self._set_rng(seed)  # seeds self.rng; seed=None continues the current stream
+        self.position = np.zeros(1, dtype=np.float32)
+        return sekai.ResetResult(observation=self.position.copy(), info={})
 
     def step(self, action):
-        # ... physics update ...
-        obs = self._state.copy()
-        reward = 1.0
-        terminated = bool(np.any(np.abs(self._state) > 3.0))
-        return sekai.StepResult(obs, reward, terminated, truncated=False, info={})
+        self.position += action + self.rng.normal(0, 0.1, size=1).astype(np.float32)
+        reward = -float(abs(self.position[0]))
+        return sekai.StepResult(self.position.copy(), reward, False, False, info={})
 
-# 2. Run it
-env = CartPoleEnv()
-result = env.reset(seed=0)
-print(result.observation)  # array([-0.043, 0.044, ...], dtype=float32)
 
-for _ in range(200):
-    action = env.action_space.sample()
-    result = env.step(action)
-    if result.done:          # result.terminated or result.truncated
-        env.reset()
+assert sekai.check_env(RandomWalkEnv()) == []  # validates the API, spaces, seeding, async path
+sekai.register("RandomWalk-v0", RandomWalkEnv, max_episode_steps=100)
+env = sekai.make("RandomWalk-v0")
+```
 
-# 3. Add wrappers
-env = sekai.TimeLimit(CartPoleEnv(), max_episode_steps=500)
-env = sekai.RecordEpisodeStatistics(env)
-env = sekai.NormalizeObservation(env)
+### Wrap and vectorise
 
-# 4. Vectorise
-vec = sekai.SyncVecEnv([CartPoleEnv] * 8)
+```python
+import sekai
+
+vec = sekai.make_vec("Pendulum-v1", num_envs=8)  # also "async" and "proc" backends
+vec = sekai.VecNormalizeObservation(sekai.VecRecordEpisodeStatistics(vec))
+
 batch = vec.reset(seed=0)
-print(batch.observations.shape)  # (8, 4)
+for _ in range(500):
+    batch = vec.step(vec.batch_action_space.sample())
+    # finished sub-envs reset automatically; see batch.infos[i]["final_observation"]
+print(batch.observations.shape)  # (8, 3)
 ```
 
----
-
-## Core Concepts
-
-### StepResult and ResetResult
-
-The most visible departure from gymnasium. sekai returns frozen dataclasses instead of tuples.
+### Trade a changing universe
 
 ```python
-# gymnasium (error-prone unpacking)
-obs, reward, terminated, truncated, info = env.step(action)
-
-# sekai
-result = env.step(action)
-result.observation   # typed
-result.reward        # float
-result.terminated    # bool
-result.truncated     # bool
-result.info          # dict[str, Any]
-result.done          # computed: terminated or truncated
-```
-
-```python
-# gymnasium
-obs, info = env.reset()
-
-# sekai
-result = env.reset()
-result.observation
-result.info
-```
-
-Both `StepResult` and `ResetResult` are `frozen=True` value objects — safe to cache, compare, and pass across threads.
-
----
-
-### Writing an Environment
-
-Subclass `sekai.Env` and implement `reset()` and `step()`.
-
-```python
-import sekai
 import numpy as np
+import sekai
+from sekai.finance import MarketData, RecordPerformance, SpreadCost, SquareRootImpact
 
-class MyEnv(sekai.Env[np.ndarray, np.ndarray]):
-    """Type params: Env[ObsType, ActType]"""
+# closes: (T, N) prices with NaN while a stock is not listed; volumes: (T, N) shares traded
+data = MarketData(closes, timestamps=dates, assets=tickers, fields={"volume": volumes})
+train, test = data.split(0.8, embargo=5, history=20)  # chronological, no leakage
 
-    metadata = {"description": "A custom sekai environment"}
-
-    def __init__(self, n_assets: int = 10):
-        self.n_assets = n_assets
-        self.observation_space = sekai.Box(
-            low=-np.inf, high=np.inf, shape=(n_assets * 5,), dtype=np.float32
-        )
-        self.action_space = sekai.Box(
-            low=-1.0, high=1.0, shape=(n_assets,), dtype=np.float32
-        )
-
-    def reset(self, *, seed=None, options=None):
-        # Always call _set_rng to handle deterministic seeding
-        self._set_rng(seed)
-        obs = self.rng.standard_normal(self.n_assets * 5).astype(np.float32)
-        return sekai.ResetResult(observation=obs, info={"episode_start": True})
-
-    def step(self, action: np.ndarray) -> sekai.StepResult[np.ndarray]:
-        obs = self.rng.standard_normal(self.n_assets * 5).astype(np.float32)
-        pnl = float(np.dot(action, self.rng.standard_normal(self.n_assets)))
-        terminated = False
-        truncated = False
-        return sekai.StepResult(obs, pnl, terminated, truncated, info={"pnl": pnl})
-
-    def close(self) -> None:
-        pass  # release any data feeds, file handles, etc.
+env = RecordPerformance(sekai.make(
+    "Market-v0", data=train, max_assets=50, lookback=20,
+    transaction_cost=SpreadCost(half_spread=5e-4) + SquareRootImpact(0.3),
+))
+result = env.reset(seed=0)
+while not result.done:
+    mask = env.unwrapped.action_mask()               # only listed assets can be traded
+    result = env.step(env.action_space.sample(mask=mask))
+print(result.info["performance"].sharpe_ratio)
 ```
 
-**Use as a context manager** to ensure `close()` is always called:
+The observation is a padded set of at most 50 assets (`MaskedBox`) with a validity mask, so
+it batches, normalises and feeds a set encoder or transformer directly.
+
+### Vectorise natively
 
 ```python
-with MyEnv(n_assets=20) as env:
-    result = env.reset(seed=42)
-    for _ in range(1000):
-        result = env.step(env.action_space.sample())
-```
-
-**Seeding:** `_set_rng(seed)` stores `self.rng` (a `numpy.random.Generator`) and `self._rng_seed`. Call it in `reset()` for reproducible episodes.
-
----
-
-### Spaces
-
-sekai ships the same space types as gymnasium with improved generics and JSON serialisation.
-
-#### Box
-
-Continuous n-dimensional space. Supports bounded, semi-bounded, and unbounded dimensions.
-
-```python
-# Bounded
-price_space = sekai.Box(low=0.0, high=1000.0, shape=(8,), dtype=np.float32)
-
-# Partially unbounded (sampled from exponential/normal distributions)
-returns_space = sekai.Box(low=-np.inf, high=np.inf, shape=(50,), dtype=np.float64)
-
-# Integer box (market depth levels)
-depth_space = sekai.Box(low=0, high=10_000, shape=(10, 2), dtype=np.int32)
-
-sample = price_space.sample()       # np.ndarray shape (8,)
-print(sample in price_space)        # True
-print(price_space.is_bounded)       # (True, True)
-```
-
-#### Discrete
-
-Discrete values `{start, start+1, ..., start+n-1}`.
-
-```python
-action_space = sekai.Discrete(n=5)       # {0, 1, 2, 3, 4}
-shifted = sekai.Discrete(n=5, start=-2)  # {-2, -1, 0, 1, 2}
-
-# Masked sampling (useful for invalid action masking)
-mask = np.array([1, 0, 1, 0, 1], dtype=np.int8)  # only 0, 2, 4 are valid
-action = action_space.sample(mask=mask)
-```
-
-#### MultiDiscrete
-
-Multiple independent discrete dimensions. Common for multi-asset order type selection.
-
-```python
-# 3 assets, each can hold position -1/0/1
-order_space = sekai.MultiDiscrete(nvec=[3, 3, 3], start=[-1, -1, -1])
-```
-
-#### Dict
-
-Heterogeneous named sub-spaces. Ideal for rich financial observations.
-
-```python
-obs_space = sekai.Dict({
-    "prices":     sekai.Box(-np.inf, np.inf, shape=(100, 8)),   # OHLCV + 3 features
-    "portfolio":  sekai.Box(-1.0, 1.0, shape=(10,)),            # current positions
-    "order_book": sekai.Box(0, np.inf, shape=(20, 2)),          # bid/ask levels
-    "regime":     sekai.Discrete(4),                            # market regime label
-})
-
-sample = obs_space.sample()
-print(sample["prices"].shape)    # (100, 8)
-print(sample["regime"])          # np.intp in {0,1,2,3}
-```
-
-#### Tuple
-
-Ordered heterogeneous sub-spaces.
-
-```python
-obs_space = sekai.Tuple([
-    sekai.Box(-np.inf, np.inf, shape=(50,)),  # technical features
-    sekai.MultiBinary(10),                    # binary signals
-])
-```
-
-#### Space utilities
-
-```python
-from sekai.spaces import flatdim, flatten, unflatten, flatten_space
-
-# How many floats does this space flatten to?
-dim = flatdim(obs_space)
-
-# Flatten a sample to a 1D float32 array
-flat = flatten(obs_space, sample)       # shape (dim,)
-
-# Reconstruct the original structure
-restored = unflatten(obs_space, flat)
-
-# Get an equivalent Box space
-box = flatten_space(obs_space)          # Box(-inf, inf, (dim,))
-```
-
----
-
-### Wrappers
-
-Wrappers transparently modify an environment's behaviour. They compose by layering, and the full stack is introspectable.
-
-```python
-env = MyEnv()
-env = sekai.TimeLimit(env, max_episode_steps=252)      # truncate at 1 trading year
-env = sekai.RecordEpisodeStatistics(env)               # track episode return/length
-env = sekai.NormalizeObservation(env)                  # running mean/var normalisation
-env = sekai.NormalizeReward(env, gamma=0.99)           # reward scaling
-
-# Inspect the stack
-for layer in env:
-    print(layer)
-# <RecordEpisodeStatistics(<TimeLimit(<MyEnv>)>)>
-
-# Reach the base env
-base = env.unwrapped
-```
-
-#### Built-in wrappers
-
-| Wrapper | Description |
-|---|---|
-| `TimeLimit(env, max_episode_steps)` | Truncates episodes after N steps |
-| `AutoReset(env)` | Automatically resets on episode end; stores final obs in `info["final_observation"]` |
-| `RecordEpisodeStatistics(env)` | Adds `info["episode"]` as a typed `EpisodeStats` on termination |
-| `NormalizeObservation(env)` | Welford running mean/variance normalisation |
-| `NormalizeReward(env, gamma)` | Discounted return variance scaling |
-| `FlattenObservation(env)` | Flattens any space to a 1D `Box` |
-| `FrameStackObservation(env, n)` | Stacks last N observations along a new leading axis |
-| `ClipAction(env)` | Clips continuous actions to the action space bounds |
-| `RescaleAction(env, min, max)` | Maps `[min, max]` → env's action range |
-| `TransformObservation(env, fn)` | Applies an arbitrary callable to observations |
-| `TransformReward(env, fn)` | Applies an arbitrary callable to rewards |
-| `OrderEnforcing(env)` | Raises `ResetRequired` if `step()` is called before `reset()` |
-
-#### Writing a custom wrapper
-
-```python
-class LogReturnObservation(sekai.ObservationWrapper):
-    """Converts price observations to log returns."""
-
-    def __init__(self, env):
-        super().__init__(env)
-        # Update observation space to match transformed output
-        self.observation_space = sekai.Box(
-            -np.inf, np.inf,
-            shape=env.observation_space.shape,
-            dtype=np.float32,
-        )
-
-    def observation(self, obs: np.ndarray) -> np.ndarray:
-        return np.log1p(obs).astype(np.float32)
-
-
-class SharpeReward(sekai.RewardWrapper):
-    """Replaces raw PnL reward with a rolling Sharpe estimate."""
-
-    def __init__(self, env, window: int = 20):
-        super().__init__(env)
-        self._returns: list[float] = []
-        self._window = window
-
-    def reward(self, reward: float) -> float:
-        self._returns.append(reward)
-        window = self._returns[-self._window:]
-        if len(window) < 2:
-            return 0.0
-        mean = sum(window) / len(window)
-        std = float(np.std(window)) + 1e-8
-        return mean / std
-
-
-class ScaledAction(sekai.ActionWrapper):
-    """Scales [-1, 1] policy outputs to actual notional sizes."""
-
-    def action(self, action: np.ndarray) -> np.ndarray:
-        return (action * 1_000_000).astype(np.float32)
-
-    def reverse_action(self, action: np.ndarray) -> np.ndarray:
-        return (action / 1_000_000).astype(np.float32)
-```
-
----
-
-### Vectorised Environments
-
-Run N independent environments in parallel and receive batched results.
-
-sekai ships three backends — choose based on your workload:
-
-| Backend | When to use |
-|---|---|
-| `SyncVecEnv` | Fast envs where parallelism overhead would dominate |
-| `AsyncVecEnv` | I/O-bound envs (live feeds, REST APIs, async data sources) |
-| `ProcVecEnv` | CPU-bound simulators that release the GIL |
-
-```python
-# SyncVecEnv — simplest, single process
-vec = sekai.SyncVecEnv([MyEnv] * 16)
-
-# or use lambdas for parameterised envs
-vec = sekai.SyncVecEnv([lambda: MyEnv(n_assets=i) for i in range(4)])
-
-# Reset all environments
+vec = sekai.make_vec("Portfolio-v0", num_envs=1024)  # a PortfolioVecEnv: one array op per step
 batch = vec.reset(seed=0)
-print(batch.observations.shape)  # (16, obs_dim)
-print(batch.infos)               # list[dict] — one per sub-env
-
-# Step all environments
-actions = np.stack([vec.action_space.sample() for _ in range(16)])
-batch = vec.step(actions)
-print(batch.rewards.shape)       # (16,)
-print(batch.dones.shape)         # (16,)  — terminated | truncated
-
-vec.close()
+batch = vec.step(vec.batch_action_space.sample())
 ```
 
-**VecEnv results are structured dataclasses** — `VecStepResult` and `VecResetResult`:
-
-```python
-result = vec.step(actions)
-result.observations   # (N, *obs_shape)
-result.rewards        # (N,)  float64
-result.terminated     # (N,)  bool
-result.truncated      # (N,)  bool
-result.dones          # (N,)  terminated | truncated
-result.infos          # list[dict]  — one per sub-env
-
-# Stack info values into numpy arrays when needed
-from sekai.vector import stack_infos
-stacked = stack_infos(result.infos)  # {key: np.array([v0, v1, ...])}
-```
-
-**VecEnv wrappers:**
-
-```python
-from sekai.vector import VecObservationWrapper
-
-class NormaliseVec(VecObservationWrapper):
-    def observation(self, obs: np.ndarray) -> np.ndarray:
-        return (obs - obs.mean(axis=0)) / (obs.std(axis=0) + 1e-8)
-```
-
-**Accessing sub-env attributes:**
-
-```python
-vec.get_attr("n_assets")            # [10, 10, 10, ...]
-vec.set_attr("n_assets", 20)        # set all to 20
-vec.call("some_method", arg=True)   # call a method on each sub-env
-```
-
----
-
-### Multi-Agent Environments
-
-sekai provides `MultiAgentEnv` for heterogeneous multi-agent setups without relying on PettingZoo. Each agent gets its own typed observation and action space.
+### Train with Stable-Baselines3
 
 ```python
 import sekai
-from sekai.core.multi_agent import MultiAgentEnv
-from sekai.core.result import MAStepResult, MAResetResult
+from sekai.compat import to_gymnasium
+from stable_baselines3 import PPO
+
+model = PPO("MultiInputPolicy", to_gymnasium(sekai.make("Portfolio-v0")))
+model.learn(total_timesteps=10_000)
+```
+
+## Environments
+
+| ID | Observation | Action | Description |
+|---|---|---|---|
+| `CartPole-v1` | Box(4) | Discrete(2) | Balance a pole on a cart |
+| `MountainCar-v0` | Box(2) | Discrete(3) | Build momentum to climb a hill |
+| `MountainCarContinuous-v0` | Box(2) | Box(1) | Mountain car with continuous force |
+| `Pendulum-v1` | Box(3) | Box(1) | Swing up and balance a pendulum |
+| `Acrobot-v1` | Box(6) | Discrete(3) | Swing a two-link arm above a line |
+| `Trading-v0` | Box(lookback + 1) | Discrete(3) | Go short / flat / long on one asset |
+| `Portfolio-v0` | Dict | Box(n + 1) | Allocate across correlated assets and cash |
+| `Market-v0` | Dict (MaskedBox) | Box(max_assets + 1) | Trade a universe that lists and delists, with features, costs and financing |
+| `MarketMaking-v0` | Box(2) | Box(2) | Quote bid/ask, manage inventory (Avellaneda–Stoikov) |
+| `OptimalExecution-v0` | Box(3) | Box(1) | Liquidate a large order (Almgren–Chriss) |
+| `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete(3) | Make markets in an event-driven limit order book |
+
+The classic control environments match gymnasium's dynamics exactly, verified step by step
+in the test suite. The finance environments simulate markets by default, and `Trading-v0`
+and `Portfolio-v0` also accept your own price history:
+
+```python
 import numpy as np
-
-class MarketMicrostructureEnv(MultiAgentEnv):
-    """Two agents: a market maker and a directional trader."""
-
-    def __init__(self):
-        self.possible_agents = ["market_maker", "trader"]
-        self.agents = list(self.possible_agents)
-
-        self.observation_spaces = {
-            "market_maker": sekai.Dict({
-                "order_book": sekai.Box(0, np.inf, shape=(40,)),
-                "inventory":  sekai.Box(-100, 100, shape=(1,)),
-            }),
-            "trader": sekai.Box(-np.inf, np.inf, shape=(20,)),
-        }
-        self.action_spaces = {
-            "market_maker": sekai.Box(-1.0, 1.0, shape=(4,)),  # bid/ask spread + size
-            "trader":       sekai.Discrete(3),                  # buy / hold / sell
-        }
-
-    def reset(self, *, seed=None, options=None):
-        self.agents = list(self.possible_agents)
-        obs = {agent: self.observation_spaces[agent].sample() for agent in self.agents}
-        return MAResetResult(observations=obs, info={a: {} for a in self.agents})
-
-    def step(self, actions):
-        obs = {agent: self.observation_spaces[agent].sample() for agent in self.agents}
-        rewards = {"market_maker": 0.01, "trader": -0.005}
-        terminated = {agent: False for agent in self.agents}
-        truncated = {agent: False for agent in self.agents}
-        return MAStepResult(obs, rewards, terminated, truncated, info={a: {} for a in self.agents})
-
-
-env = MarketMicrostructureEnv()
-reset_result = env.reset(seed=0)
-
-actions = {
-    "market_maker": env.action_spaces["market_maker"].sample(),
-    "trader": env.action_spaces["trader"].sample(),
-}
-result = env.step(actions)
-print(result.rewards)     # {"market_maker": 0.01, "trader": -0.005}
-print(result.all_done)    # False
-print(result.any_done)    # False
-```
-
----
-
-### Environment Registry
-
-Register environments by ID and instantiate them by name — the same pattern as `gym.make()`, with lazy namespace loading for plugins.
-
-```python
-# Register
-sekai.register(
-    id="qc/PortfolioEnv-v1",
-    entry_point="mypackage.envs:PortfolioEnv",
-    max_episode_steps=252,
-    kwargs={"n_assets": 50},
-    reward_threshold=0.25,
-)
-
-# Instantiate
-env = sekai.make("qc/PortfolioEnv-v1")                     # uses registered kwargs
-env = sekai.make("qc/PortfolioEnv-v1", n_assets=100)       # override kwargs
-
-# Inspect the spec
-s = sekai.spec("qc/PortfolioEnv-v1")
-print(s.id, s.max_episode_steps, s.reward_threshold)
-```
-
-**Namespace plugins** — register an entire namespace lazily. The loader is called once, the first time any env in that namespace is requested:
-
-```python
-# In your plugin package's __init__.py
 import sekai
 
-sekai.register_namespace(
-    "qc",
-    lambda: __import__("qiancapital.envs"),  # deferred import
-)
-
-# Elsewhere — no startup cost until first make() call
-env = sekai.make("qc/CryptoOrderBook-v2")
+prices = np.cumprod(1 + np.random.default_rng(0).normal(0, 0.01, (1000, 4)), axis=0)
+env = sekai.make("Portfolio-v0", prices=prices, episode_length=126)  # random 6-month windows
 ```
 
-**List all registered environments:**
-
-```python
-for s in sekai.all_specs():
-    print(s.id, s.max_episode_steps)
-```
-
----
-
-### Episode Statistics
-
-`RecordEpisodeStatistics` records per-episode metrics via a pluggable `StatsTracker`. On episode end, `info["episode"]` is a typed `EpisodeStats` dataclass — not an untyped dict.
-
-```python
-env = sekai.RecordEpisodeStatistics(MyEnv())
-result = env.reset(seed=0)
-
-for _ in range(10_000):
-    result = env.step(env.action_space.sample())
-    if result.done:
-        ep = result.info["episode"]      # EpisodeStats — fully typed
-        print(ep.episode_return)         # float
-        print(ep.episode_length)         # int
-        print(ep.elapsed_time)           # float (seconds)
-        print(ep.terminated)             # bool
-```
-
-**Custom tracker** — plug in your own monitoring backend:
-
-```python
-from sekai.stats.tracker import StatsTracker, EpisodeStats
-
-class WandbTracker:
-    def on_reset(self, env_id, seed): ...
-    def on_step(self, reward, terminated, truncated, info): ...
-    def on_episode_end(self, stats: EpisodeStats):
-        import wandb
-        wandb.log({
-            "episode_return": stats.episode_return,
-            "episode_length": stats.episode_length,
-        })
-    def summary(self): return {}
-
-env = sekai.RecordEpisodeStatistics(MyEnv(), tracker=WandbTracker())
-```
-
-The `InMemoryTracker` (default) stores a rolling window of episodes and exposes `.mean_return()` and `.mean_length()`. `LoggingTracker` emits structured Python log records.
-
----
-
-### Rendering
-
-In sekai, rendering is **not** part of `Env`. There is no `render()` method and no `render_mode` string. Instead, `Renderer` objects are injected independently — you can swap, compose, or record without touching the environment.
-
-```python
-from sekai.rendering import Renderer
-
-class MatplotlibRenderer:
-    def render(self, env) -> np.ndarray:
-        # Access env state directly and draw it
-        state = env.unwrapped._state
-        # ... draw to figure, return RGB array ...
-        return frame  # np.ndarray uint8 (H, W, 3)
-
-    def close(self):
-        import matplotlib.pyplot as plt
-        plt.close("all")
-
-env = MyEnv()
-renderer = MatplotlibRenderer()
-result = env.reset(seed=0)
-
-frames = []
-with renderer:
-    for _ in range(500):
-        result = env.step(policy(result.observation))
-        frames.append(renderer.render(env))
-
-# frames is a list of RGB arrays — save as video, GIF, etc.
-```
-
-This separation means you can attach multiple renderers simultaneously, record video for the first 100 steps then switch to a live display, or completely skip rendering in headless training without any conditional logic in your env.
-
----
-
-### Async Environments
-
-Every sekai environment has `async_step` and `async_reset` built in. Sync envs get them for free (the defaults just call the sync methods). Environments backed by live data feeds can override them for true async operation.
-
-```python
-import asyncio
-
-class LiveFeedEnv(sekai.Env):
-    async def async_reset(self, *, seed=None, options=None):
-        data = await self._feed.connect()
-        obs = self._process(data)
-        return sekai.ResetResult(observation=obs, info={})
-
-    async def async_step(self, action):
-        await self._feed.send_order(action)
-        data = await self._feed.next_tick()
-        obs = self._process(data)
-        return sekai.StepResult(obs, reward=0.0, terminated=False, truncated=False, info={})
-
-# Run multiple live feeds concurrently with AsyncVecEnv
-async def main():
-    vec = sekai.AsyncVecEnv([LiveFeedEnv] * 4)
-    batch = await vec.async_reset(seed=0)
-    actions = np.stack([vec.action_space.sample() for _ in range(4)])
-    batch = await vec.async_step(actions)
-
-asyncio.run(main())
-```
-
----
-
-## Financial Market Example
-
-A realistic portfolio management environment showing sekai's capabilities for financial RL:
-
-```python
-import sekai
-import numpy as np
-from sekai.core.result import StepResult, ResetResult
-
-class PortfolioEnv(sekai.Env):
-    """
-    Multi-asset portfolio management environment.
-
-    Observation: (lookback, n_assets, n_features) price/volume history
-    Action:      (n_assets,) target portfolio weights in [-1, 1]
-    Reward:      portfolio return minus transaction costs
-    """
-
-    metadata = {"description": "Qian Capital portfolio environment"}
-
-    def __init__(
-        self,
-        n_assets: int = 20,
-        lookback: int = 60,
-        n_features: int = 5,         # OHLCV
-        transaction_cost: float = 1e-4,
-        episode_length: int = 252,
-    ):
-        self.n_assets = n_assets
-        self.lookback = lookback
-        self.n_features = n_features
-        self.transaction_cost = transaction_cost
-        self.episode_length = episode_length
-
-        self.observation_space = sekai.Dict({
-            "prices": sekai.Box(
-                low=-np.inf, high=np.inf,
-                shape=(lookback, n_assets, n_features),
-                dtype=np.float32,
-            ),
-            "holdings": sekai.Box(
-                low=-1.0, high=1.0,
-                shape=(n_assets,),
-                dtype=np.float32,
-            ),
-        })
-        self.action_space = sekai.Box(
-            low=-1.0, high=1.0,
-            shape=(n_assets,),
-            dtype=np.float32,
-        )
-
-        self._holdings = np.zeros(n_assets, dtype=np.float32)
-        self._step_count = 0
-
-    def reset(self, *, seed=None, options=None):
-        self._set_rng(seed)
-        self._holdings = np.zeros(self.n_assets, dtype=np.float32)
-        self._step_count = 0
-        obs = self._get_obs()
-        return ResetResult(observation=obs, info={"holdings": self._holdings.copy()})
-
-    def step(self, action: np.ndarray) -> StepResult:
-        # Normalise weights to sum to 1
-        weights = np.clip(action, -1, 1)
-        weights = weights / (np.abs(weights).sum() + 1e-8)
-
-        # Simulated returns
-        returns = self.rng.standard_normal(self.n_assets) * 0.01
-
-        # Portfolio PnL
-        pnl = float(np.dot(weights, returns))
-
-        # Transaction costs
-        turnover = float(np.sum(np.abs(weights - self._holdings)))
-        cost = turnover * self.transaction_cost
-
-        self._holdings = weights.copy()
-        self._step_count += 1
-
-        obs = self._get_obs()
-        reward = pnl - cost
-        terminated = False
-        truncated = self._step_count >= self.episode_length
-
-        return StepResult(
-            observation=obs,
-            reward=reward,
-            terminated=terminated,
-            truncated=truncated,
-            info={"pnl": pnl, "cost": cost, "turnover": turnover},
-        )
-
-    def _get_obs(self) -> dict:
-        prices = self.rng.standard_normal(
-            (self.lookback, self.n_assets, self.n_features)
-        ).astype(np.float32)
-        return {"prices": prices, "holdings": self._holdings.copy()}
-
-
-# Build a training pipeline with wrappers and vectorisation
-def make_env(seed_offset: int = 0):
-    env = PortfolioEnv(n_assets=20, lookback=60, episode_length=252)
-    env = sekai.RecordEpisodeStatistics(env)
-    return env
-
-vec = sekai.SyncVecEnv([lambda i=i: make_env(i) for i in range(8)])
-sekai.register("qc/Portfolio-v1", PortfolioEnv, max_episode_steps=252)
-
-# Validate the environment
-issues = sekai.check_env(PortfolioEnv(), n_steps=300)
-assert not issues, issues
-```
-
----
-
-## Validating Your Environment
-
-`check_env` is a testing utility — run it in your test suite, not in production:
-
-```python
-from sekai.utils.checker import check_env
-
-issues = check_env(
-    MyEnv(),
-    n_steps=500,
-    warn_on_anomaly=True,
-    check_obs_space=True,
-    check_action_space=True,
-    check_reset_seed=True,
-)
-
-# In pytest
-def test_my_env():
-    issues = check_env(MyEnv(), n_steps=200)
-    assert not issues, "\n".join(issues)
-```
-
-Checks performed:
-- `observation_space` and `action_space` are defined
-- `action_space.sample()` is contained in `action_space`
-- `reset()` returns a valid `ResetResult` with a valid observation
-- `step()` returns a valid `StepResult` at each of N steps
-- Reward, terminated, truncated, and info are correct types
-- Observations are within `observation_space` (with warnings)
-- `reset(seed=X)` is deterministic (same obs on two calls)
-- No NaN or infinite rewards
-
----
-
-## API Reference
-
-### `sekai.Env[ObsType, ActType]`
-
-| Member | Description |
-|---|---|
-| `observation_space: Space[ObsType]` | Must be set in `__init__` |
-| `action_space: Space[ActType]` | Must be set in `__init__` |
-| `reset(*, seed, options) -> ResetResult` | **Abstract.** Call `_set_rng(seed)` inside. |
-| `step(action) -> StepResult` | **Abstract.** |
-| `async_reset(...) -> ResetResult` | Default wraps `reset()`. Override for true async. |
-| `async_step(action) -> StepResult` | Default wraps `step()`. Override for true async. |
-| `close()` | Release resources. |
-| `rng: np.random.Generator` | Lazily-initialised RNG. |
-| `_set_rng(seed) -> int` | Seed the RNG. Returns actual seed used. |
-| `unwrapped: Env` | Base env underneath any wrappers. |
-| `metadata: ClassVar[dict]` | Optional environment metadata. |
-| `spec: EnvSpec \| None` | Set automatically by `sekai.make()`. |
-
-### `sekai.StepResult`
-
-```python
-@dataclass(frozen=True, slots=True)
-class StepResult(Generic[ObsType]):
-    observation: ObsType
-    reward: float
-    terminated: bool
-    truncated: bool
-    info: dict[str, Any]
-
-    @property
-    def done(self) -> bool: ...   # terminated or truncated
-```
-
-### `sekai.ResetResult`
-
-```python
-@dataclass(frozen=True, slots=True)
-class ResetResult(Generic[ObsType]):
-    observation: ObsType
-    info: dict[str, Any]
-```
-
-### Spaces
-
-| Space | Sample type | Key params |
+`Market-v0`, the general-purpose finance environment, takes a `MarketData` history with
+listings and delistings (or simulates a regime-switching market whose assets come and go),
+per-asset features, market-wide series, any cost model and reward function, leverage and
+financing. `sekai.envs.finance.LimitOrderBookMarket` is a multi-agent order-book market in
+which traders act on their own clocks. The four classic finance environments also have native
+vector implementations, which `make_vec()` uses automatically.
+
+The microstructure environments come with their textbook solutions as baselines, e.g.
+`env.almgren_chriss_actions()` and `env.avellaneda_stoikov_action()`. On
+`OptimalExecution-v0` the Almgren–Chriss schedule scores about -320 bps against -420 bps for
+TWAP, so a learned policy has a clear bar to beat.
+
+Run `sekai list` to see every registered environment, or browse the
+[environment catalogue](https://sekai.qiancapital.com/environments/).
+
+## Why sekai?
+
+| | gymnasium | sekai |
 |---|---|---|
-| `Box(low, high, shape, dtype)` | `np.ndarray` | `is_bounded`, `low`, `high` |
-| `Discrete(n, start)` | `np.intp` | `n`, `start` |
-| `MultiDiscrete(nvec, start)` | `np.ndarray[intp]` | `nvec`, `start` |
-| `MultiBinary(n)` | `np.ndarray[int8]` | `n` (int or shape tuple) |
-| `Dict(spaces)` | `dict[str, Any]` | `spaces: OrderedDict` |
-| `Tuple(spaces)` | `tuple[Any, ...]` | `spaces: tuple` |
+| Return types | `obs, rew, term, trunc, info = env.step(a)` | `StepResult` frozen dataclass with `.done` |
+| Async environments | Not supported | `async_step` / `async_reset` on every env, `AsyncVecEnv` |
+| Multi-agent | Delegated to PettingZoo | `MultiAgentEnv` with per-agent typed spaces, event-driven turns, PettingZoo bridge |
+| Variable-size observations | `Sequence` / `Graph` spaces (not batchable) | `MaskedBox` padded sets that batch and flatten, `Sequence` with padding |
+| Vectorised simulators | `vector_entry_point` | `NativeVecEnv` base class, native finance envs, shared-memory `ProcVecEnv` |
+| Rendering | `render()` on Env, mode fixed at construction | Separate `Renderer` objects: swap, record, or skip freely |
+| Episode statistics | Untyped `info["episode"]["r"]` | Typed `EpisodeStats` with pluggable trackers |
+| Vector env naming | `AsyncVectorEnv` means multiprocessing | `SyncVecEnv`, `AsyncVecEnv` (asyncio), `ProcVecEnv` (processes) |
+| Registry plugins | Entry-point plugins | `register_namespace("qc", loader)` for lazy plugin namespaces |
+| Env checking | Passive checker wraps every env | `check_env()` in your tests; zero overhead in training |
+| Finance | Not in scope | `sekai.finance` toolkit and six finance environments |
 
-All spaces implement:
-- `sample(mask=None) -> T`
-- `contains(x) -> bool` / `x in space`
-- `seed(seed) -> int`
-- `is_flattenable: bool`
-- `to_jsonable() / from_jsonable()`
+Coming from gymnasium? The [migration guide](https://sekai.qiancapital.com/guide/gymnasium/)
+maps every API, and `sekai.compat` lets you mix both while you move over.
 
----
+## Command line
+
+```bash
+sekai list                               # registered environments
+sekai info Portfolio-v0                  # spec, spaces, wrapper stack
+sekai check MyEnv-v0 --determinism       # run check_env (non-zero exit on errors)
+sekai bench Portfolio-v0 --num-envs 1024    # native vector env when available
+sekai -m my_package.envs list            # import a plugin package first
+```
 
 ## Contributing
 
-sekai is developed by [Qian Capital](https://github.com/qiancapital) and intended for open source release. Contributions are welcome.
+Contributions are welcome. See [CONTRIBUTING.md](https://github.com/QianCapital/sekai/blob/master/CONTRIBUTING.md)
+for the development setup, and the [examples](https://github.com/QianCapital/sekai/tree/master/examples)
+for runnable scripts, from a pure-NumPy agent that solves CartPole in under a second to
+finance baselines.
 
-```bash
-git clone https://github.com/qiancapital/sekai
-cd sekai
-pip install -e ".[dev]"
+## Citing
 
-# Run tests
-pytest tests/
-
-# Type check
-mypy sekai/
-
-# Lint
-ruff check sekai/
-```
-
-**Adding a new environment:** implement `sekai.Env`, call `check_env` in your tests, and optionally register it with `sekai.register()`.
-
-**Adding a new space:** subclass `sekai.spaces.Space` and register flatten/unflatten implementations using the `singledispatch` hooks in `sekai.spaces.utils`.
-
-**Adding a new backend:** implement the `BackendOps` protocol in `sekai/backend/` and pass it to spaces/vec-envs.
-
----
+If you use sekai in research, please cite it using the metadata in
+[CITATION.cff](https://github.com/QianCapital/sekai/blob/master/CITATION.cff).
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
-
----
+Apache 2.0. See [LICENSE](https://github.com/QianCapital/sekai/blob/master/LICENSE).
 
 <div align="center">
 <sub>sekai · 世界 — Qian Capital</sub>
