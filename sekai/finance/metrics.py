@@ -214,7 +214,7 @@ def _conditional_value_at_risk(x: NDArray[np.float64], level: float) -> float:
     q = np.quantile(x, 1.0 - level)
     tail = x[x <= q]
     if tail.size == 0:  # only possible through rounding in the interpolation
-        tail = x[x == x.min()]
+        tail = x[x == np.min(x)]
     return 0.0 - float(np.mean(tail))
 
 

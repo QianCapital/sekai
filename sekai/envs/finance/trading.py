@@ -130,8 +130,8 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
 
         # The drifted position stays in [0, 1] for targets in [0, 1]; a short drifts
         # without bound below 0, and a levered long without bound above 1.
-        pos_low = 0.0 if self.positions.min() >= 0 else -np.inf
-        pos_high = 1.0 if self.positions.max() <= 1 else np.inf
+        pos_low = 0.0 if np.min(self.positions) >= 0 else -np.inf
+        pos_high = 1.0 if np.max(self.positions) <= 1 else np.inf
         low = np.concatenate([np.full(lookback, -np.inf), [pos_low]])
         high = np.concatenate([np.full(lookback, np.inf), [pos_high]])
         self.observation_space = Box(

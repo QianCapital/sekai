@@ -111,7 +111,7 @@ class MaskedBox(Dict):
             raise ValueError(f"Got {k} values but {idx.shape[0]} slots.")
         if k > self.max_size:
             raise ValueError(f"Got {k} values but the space has only {self.max_size} slots.")
-        if k and (idx.min() < 0 or idx.max() >= self.max_size or np.unique(idx).size != k):
+        if k and (np.min(idx) < 0 or np.max(idx) >= self.max_size or np.unique(idx).size != k):
             raise ValueError(f"slots must be distinct indices in [0, {self.max_size}).")
         out = self.empty()
         out["values"][idx] = rows

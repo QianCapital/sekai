@@ -61,7 +61,9 @@ class Canvas:
         pts = np.asarray(points, dtype=np.float64)
         if pts.ndim != 2 or pts.shape[0] < 3:
             return
-        region = self._region(pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
+        region = self._region(
+            np.min(pts[:, 0]), np.min(pts[:, 1]), np.max(pts[:, 0]), np.max(pts[:, 1])
+        )
         if region is None:
             return
         X, Y = self._grid(region)
