@@ -10,7 +10,15 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.envs._utils import flat_action
-from sekai.envs.finance._common import History, check_cost_inputs, field_or_none
+from sekai.envs.finance._common import (
+    History,
+    check_cost_inputs,
+    check_number,
+    check_numbers,
+    check_sources,
+    episode_over,
+    field_or_none,
+)
 from sekai.envs.finance._common import step_length as _step_length
 from sekai.envs.finance.market import random_correlation, simulate_gbm
 from sekai.error import InvalidAction, ResetRequired
@@ -18,7 +26,7 @@ from sekai.finance.costs import CostModel, as_cost_model
 from sekai.finance.data import MarketData
 from sekai.finance.rewards import LogReturn, RewardFunction, StepOutcome
 from sekai.finance.sampling import EpisodeSampler
-from sekai.finance.simulators import MarketModel
+from sekai.finance.simulators import GBM, MarketModel
 from sekai.spaces.box import Box
 from sekai.spaces.dict import Dict
 
@@ -28,9 +36,11 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
 
     Prices are simulated (correlated geometric Brownian motions by default, or
     any `model` from `sekai.finance.simulators`, e.g. regime switching or
-    stochastic volatility), or drawn as windows from historical `prices` of
-    shape `(T, n_assets)` or a `MarketData` with a complete panel. For
-    universes whose members change over time, use `Market-v0` instead.
+    stochastic volatility), or drawn as windows from a history: raw `prices` of
+    shape `(T, n_assets)` (an array or a pandas DataFrame; one indexed by dates keeps
+    them, as a MarketData would) or a `MarketData` with a complete panel as `data`.
+    Pass one of `prices`, `data` and `model`. For universes whose members change over
+    time, use `Market-v0` instead.
 
     - **Observation**: `Dict` with `"returns"`, a `Box` of shape
       `(lookback, n_assets)` holding recent log returns per asset, and
@@ -52,17 +62,22 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
       MarketData, else the `model`'s dt, else 1/252, unless `dt=` is given).
 
     With a history, `reset(options={"start": t})` places the first decision at
-    timestamp (or row) `t`, and `sampler` chooses windows otherwise (see
-    TradingEnv).
+    row `t` (an int) or timestamp `t` (a date, or `sekai.finance.Time(t)` for a
+    numeric timestamp), and `sampler` chooses windows otherwise (see TradingEnv).
+    `n_assets` (default 5 for the built-in simulation) follows the history or the
+    model; given as well, it must agree with them. `reward` is copied, as is a
+    `reward_fn` set later, so a stateful reward is never shared between envs.
+    `step()` after the episode has ended raises `ResetRequired`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
 
     def __init__(
         self,
-        prices: ArrayLike | MarketData | None = None,
+        prices: ArrayLike | None = None,
         *,
-        n_assets: int = 5,
+        data: MarketData | None = None,
+        n_assets: int | None = None,
         episode_length: int = 252,
         lookback: int = 30,
         transaction_cost: float | CostModel = 1e-3,
@@ -76,14 +91,18 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         sampler: str | int | EpisodeSampler = "random",
         capital: float = 1_000_000.0,
     ) -> None:
+        check_sources("PortfolioEnv", prices=prices, data=data, model=model)
         if episode_length < 1 or lookback < 1:
             raise ValueError("episode_length and lookback must be >= 1.")
+        if dt is not None:
+            dt = check_number("dt", dt, ">0")
         self.cost_model = as_cost_model(transaction_cost)
         self._window = lookback + episode_length + 1
+        source = prices if data is None else data
         self._history = (
             None
-            if prices is None
-            else History(prices, ndim=2, window=self._window, lookback=lookback, sampler=sampler)
+            if source is None
+            else History(source, ndim=2, window=self._window, lookback=lookback, sampler=sampler)
         )
         self.prices: NDArray[np.float64] | None = (
             None if self._history is None else self._history.prices
@@ -97,18 +116,27 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         check_cost_inputs(
             self.cost_model, self.data, simulated=self._history is None, lookback=lookback
         )
+        # The history or the model fixes the number of assets; n_assets may only agree.
+        implied: tuple[str, int] | None = None
         if self.prices is not None:
-            n_assets = self.prices.shape[1]
+            implied = ("the price history", self.prices.shape[1])
         elif model is not None:
-            n_assets = model.n_assets
+            implied = ("the model", model.n_assets)
+        if implied is not None:
+            if n_assets is not None and n_assets != implied[1]:
+                raise ValueError(
+                    f"n_assets={n_assets} but {implied[0]} has {implied[1]} assets; leave "
+                    "n_assets out to follow it."
+                )
+            n_assets = implied[1]
+        elif n_assets is None:
+            n_assets = 5
         if n_assets < 1:
             raise ValueError("n_assets must be >= 1.")
         self.model = model
-        # A copy: stateful rewards must not be shared between envs built from one kwargs dict.
-        self.reward_fn: RewardFunction = (
-            copy.deepcopy(reward) if reward is not None else LogReturn()
-        )
-        self.capital = float(capital)
+        # A copy (the setter copies): stateful rewards must not be shared between envs.
+        self.reward_fn = reward if reward is not None else LogReturn()
+        self.capital = check_number("capital", capital, ">0")
 
         self.n_assets = n_assets
         self._episode_length = episode_length
@@ -117,17 +145,20 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         self.allow_short = allow_short
         # Simulation parameters. A fixed default correlation keeps the market the
         # same across resets; only the path is random.
-        self.mu = np.full(n_assets, 0.06) if mu is None else np.asarray(mu, dtype=np.float64)
+        self.mu = np.full(n_assets, 0.06) if mu is None else check_numbers("mu", mu)
         self.sigma = (
             np.linspace(0.15, 0.35, n_assets)
             if sigma is None
-            else np.asarray(sigma, dtype=np.float64)
+            else check_numbers("sigma", sigma, ">=0")
         )
         self.corr = (
             random_correlation(np.random.default_rng(0), n_assets)
             if corr is None
             else np.asarray(corr, dtype=np.float64)
         )
+        # Their shapes and the correlation matrix, checked as the GBM the native vector env
+        # builds from them checks them.
+        GBM(mu=self.mu, sigma=self.sigma, corr=self.corr, dt=self.dt, n_assets=n_assets)
 
         # Long-only weights stay in [0, 1]. With shorts, price moves can drift the
         # weights arbitrarily far from the [-1, 1] targets, so they are unbounded.
@@ -147,8 +178,19 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         self._log_returns: NDArray[np.float64] = np.zeros((0, n_assets))
         self._start = 0
         self._t = 0
+        self._over = False
         self.weights = self._cash_only()
         self.portfolio_value = 1.0
+
+    @property
+    def reward_fn(self) -> RewardFunction:
+        """The reward function. Setting it stores a copy, as `reward=` does, so a stateful
+        reward set on several envs at once (e.g. with a vector env's `set_attr`) is not shared."""
+        return self._reward_fn
+
+    @reward_fn.setter
+    def reward_fn(self, value: RewardFunction) -> None:
+        self._reward_fn = copy.deepcopy(value)
 
     def _cash_only(self) -> NDArray[np.float64]:
         w = np.zeros(self.n_assets + 1)
@@ -193,6 +235,24 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         """Steps taken in the current episode."""
         return self._t
 
+    @property
+    def timestamp(self) -> Any:
+        """The time of the current decision, as in `info["timestamp"]` (the step when simulated)."""
+        if self._path is None:
+            raise ResetRequired()
+        if self._history is None:
+            return self._t
+        return self._history.timestamp(self._start + self.lookback + self._t)
+
+    @property
+    def price_history(self) -> NDArray[np.float64]:
+        """The prices observed so far, lookback window included, ending at the current prices:
+        shape (lookback + elapsed_steps + 1, n_assets)."""
+        if self._path is None:
+            raise ResetRequired()
+        out: NDArray[np.float64] = self._path[: self.lookback + self._t + 1].copy()
+        return out
+
     def reset(
         self,
         *,
@@ -203,7 +263,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         self.reward_fn.reset()
         if self._history is None:
             if options and options.get("start") is not None:
-                raise ValueError("options['start'] needs a price history (prices=...).")
+                raise ValueError("options['start'] needs a price history (prices= or data=).")
             self._start = 0
             self._path = self._simulate()
         else:
@@ -212,6 +272,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             self._path = rows.astype(np.float64)
         self._log_returns = np.diff(np.log(self._path), axis=0)
         self._t = 0
+        self._over = False
         self.weights = self._cash_only()
         self.portfolio_value = 1.0
         info = self._info(np.zeros(self.n_assets), 0.0, 0.0)
@@ -253,6 +314,8 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
     def step(self, action: NDArray[np.float32]) -> StepResult[dict[str, NDArray[np.float32]]]:
         if self._path is None:
             raise ResetRequired()
+        if self._over:
+            raise episode_over()
         target = self.action_to_weights(action)
         trades = target[:-1] - self.weights[:-1]
         turnover = float(np.abs(trades).sum())
@@ -276,6 +339,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
 
         terminated = growth <= 0.0
         truncated = not terminated and self._t >= self.episode_length
+        self._over = terminated or truncated
         outcome = StepOutcome.from_growth(
             growth,
             equity=self.portfolio_value,
@@ -301,8 +365,6 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
     def _info(
         self, asset_returns: NDArray[np.float64], turnover: float, cost: float
     ) -> dict[str, Any]:
-        row = self.lookback + self._t
-        timestamp = self._t if self._history is None else self._history.timestamp(self._start + row)
         return {
             "portfolio_value": self.portfolio_value,
             "equity": self.portfolio_value,
@@ -310,6 +372,6 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             "turnover": turnover,
             "cost": cost,
             "asset_returns": np.asarray(asset_returns).copy(),
-            "timestamp": timestamp,
+            "timestamp": self.timestamp,
             "dt": self.dt,
         }

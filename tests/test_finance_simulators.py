@@ -606,6 +606,22 @@ class TestListingProcess:
         assert mask is not None
         assert mask.mean() == pytest.approx(2.0 / (2.0 + 1.0), abs=0.02)
 
+    def test_long_run_listed_fraction_with_long_steps(self) -> None:
+        # The per-step probabilities give p_l / (p_l + p_d), which is lambda / (lambda + delta)
+        # only for small dt: 0.741 here, not 0.8 (as the simulators page states).
+        model = ListingProcess(
+            GBM(n_assets=50, dt=1.0),
+            initial_listed=0.74,
+            listing_rate=1.0,
+            delisting_rate=0.25,
+            min_listed=0,
+        )
+        mask = model.simulate(rng(6), 2000, n_paths=5).mask
+        assert mask is not None
+        p_list, p_delist = 1 - np.exp(-1.0), 1 - np.exp(-0.25)
+        assert p_list / (p_list + p_delist) == pytest.approx(0.741, abs=5e-4)
+        assert mask.mean() == pytest.approx(p_list / (p_list + p_delist), abs=0.005)
+
     def test_always_listed(self) -> None:
         model = ListingProcess(GBM(n_assets=3), initial_listed=1.0, delisting_rate=0.0)
         sim = model.simulate(rng(), 100)

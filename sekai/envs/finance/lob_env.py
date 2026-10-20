@@ -7,6 +7,12 @@ the book evolves through however many events occur, the agent's resting
 orders keep their queue position until they fill or are moved, and the
 observation reports what happened in between (recent trades as a padded,
 variable-size set).
+
+A decision is carried out in a fixed order: a market order first cancels the
+trader's own resting quote on the opposite side (self-trade prevention, as the
+cancel-resting mode of most exchanges: a trader never trades with itself), then
+executes; then the bid and the ask are kept, moved, placed or cancelled as the
+action asks.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.multi_agent import MultiAgentEnv
 from sekai.core.result import MAResetResult, MAStepResult, ResetResult, StepResult
+from sekai.envs.finance._common import check_number, check_numbers, episode_over
 from sekai.error import InvalidAction, ResetRequired
 from sekai.finance.lob import Fill, OrderBook, Side, ZeroIntelligenceFlow
 from sekai.spaces.box import Box
@@ -77,22 +84,22 @@ class _LOBCore:
         max_trades: int,
         warmup: float,
     ) -> None:
-        if mid_price < 2 * (max_quote_offset + levels) or session_length <= 0:
-            raise ValueError("mid_price must leave room for the quotes; session_length > 0.")
+        if mid_price < 2 * (max_quote_offset + levels):
+            raise ValueError("mid_price must leave room for the quotes.")
         if levels < 1 or max_quote_offset < 1 or order_size < 1 or max_inventory < 1:
             raise ValueError("levels, max_quote_offset, order_size and max_inventory must be >= 1.")
-        if max_trades < 1 or warmup < 0 or inventory_penalty < 0:
-            raise ValueError("max_trades >= 1, warmup >= 0 and inventory_penalty >= 0 required.")
+        if max_trades < 1:
+            raise ValueError("max_trades must be >= 1.")
         self.flow = flow if flow is not None else ZeroIntelligenceFlow()
         self.mid_price = mid_price
-        self.session_length = float(session_length)
+        self.session_length = check_number("session_length", session_length, ">0")
         self.levels = levels
         self.max_quote_offset = max_quote_offset
         self.order_size = order_size
         self.max_inventory = max_inventory
-        self.inventory_penalty = inventory_penalty
+        self.inventory_penalty = check_number("inventory_penalty", inventory_penalty, ">=0")
         self.max_trades = max_trades
-        self.warmup = warmup
+        self.warmup = check_number("warmup", warmup, ">=0")
         self.book = OrderBook()
         self.trades: deque[tuple[float, int, int]] = deque(maxlen=max_trades)
         self.t0 = 0.0
@@ -142,16 +149,30 @@ class _LOBCore:
         market = np.array([int(can_sell), 1, int(can_buy)], dtype=np.int8)
         return bid, ask, market
 
-    def apply(self, trader: _Trader, action: Any, space: MultiDiscrete) -> list[Fill]:
-        """Execute a trader's decision and book its side of the fills; returns the fills."""
+    @staticmethod
+    def parse(action: Any, space: MultiDiscrete) -> tuple[int, int, int]:
+        """A decision as (bid level, ask level, market order); InvalidAction if out of `space`."""
         a = np.asarray(action)
         if not space.contains(a):
             raise InvalidAction(action, space)
         bid_level, ask_level, market = (int(x) for x in a)
+        return bid_level, ask_level, market
+
+    def apply(self, trader: _Trader, decision: tuple[int, int, int]) -> list[Fill]:
+        """Execute a parsed decision and book the trader's side of the fills; returns the fills.
+
+        A market order first cancels the trader's resting quote on the opposite side, so
+        that it cannot fill against it (self-trade prevention), then executes; the quotes
+        are then updated as the decision asks (a cancelled quote whose level is not 0 is
+        placed again, at the back of its queue).
+        """
+        bid_level, ask_level, market = decision
         fills: list[Fill] = []
         if market == BUY and trader.inventory + self.order_size <= self.max_inventory:
+            trader.ask_id = self._cancel(trader.ask_id)  # self-trade prevention
             _, fills = self.book.market(Side.BID, self.order_size, trader.owner)
         elif market == SELL and trader.inventory - self.order_size >= -self.max_inventory:
+            trader.bid_id = self._cancel(trader.bid_id)  # self-trade prevention
             _, fills = self.book.market(Side.ASK, self.order_size, trader.owner)
         for fill in fills:
             trader.record(fill)
@@ -163,6 +184,12 @@ class _LOBCore:
         trader.bid_id, bid_fills = self._quote(trader, Side.BID, bid_level, trader.bid_id)
         trader.ask_id, ask_fills = self._quote(trader, Side.ASK, ask_level, trader.ask_id)
         return fills + bid_fills + ask_fills
+
+    def _cancel(self, order_id: int | None) -> int | None:
+        """Cancel a quote if it is still resting; returns the trader's new quote id (None)."""
+        if order_id is not None:
+            self.book.cancel(order_id)
+        return None
 
     def _quote(
         self, trader: _Trader, side: Side, level: int, current: int | None
@@ -280,6 +307,13 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     which may fill the agent's resting quotes. A quote left at the same price
     keeps its place in the queue; moving it sends it to the back.
 
+    A decision runs in this order: the market order, if any, after cancelling the
+    agent's own quote on the opposite side (self-trade prevention: a market buy
+    cancels the agent's resting ask first, a market sell its bid, so the agent never
+    trades with itself); then the bid and the ask are updated per the action (a
+    quote cancelled for the market order is placed again, at the back of its queue,
+    unless its level is 0).
+
     - **Action**: `MultiDiscrete([K + 1, K + 1, 3])` with `K = max_quote_offset`:
       the bid level (0 = no bid, 1 = join the best bid, k = k - 1 ticks behind
       it), the ask level (likewise), and a market order (0 sell, 1 none, 2 buy)
@@ -300,7 +334,8 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     - **Reward**: change in mark-to-market wealth (cash + inventory * mid, in
       ticks) minus the running penalty `inventory_penalty * inventory^2 * dt` for the
       time `dt` the step covers.
-    - **Termination**: at the end of the session (the clock is observed).
+    - **Termination**: at the end of the session (the clock is observed); `step()`
+      after it raises `ResetRequired`.
     - **info**: `timestamp` (session time), `dt` (the time the step covered:
       `decision_interval`, or less on a final, shorter step), `mid_price`, `spread`,
       `inventory`, `cash`, `wealth`, `fills` (agent fills this step).
@@ -337,8 +372,7 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         max_trades: int = 16,
         warmup: float = 20.0,
     ) -> None:
-        if decision_interval <= 0:
-            raise ValueError("decision_interval must be positive.")
+        decision_interval = check_number("decision_interval", decision_interval, ">0")
         self.core = _LOBCore(
             flow=flow,
             mid_price=mid_price,
@@ -391,9 +425,12 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     def step(self, action: NDArray[np.int64]) -> StepResult[dict[str, Any]]:
         if not self._started:
             raise ResetRequired()
+        if self._k >= self.n_steps:
+            raise episode_over()
         core = self.core
+        decision = core.parse(action, self._act_space)
         before = self.trader.wealth(core.mid())
-        n_fills = len(core.apply(self.trader, action, self._act_space))
+        n_fills = len(core.apply(self.trader, decision))
         self._k += 1
         until = core.t0 + min(self._k * self.decision_interval, core.session_length)
         fills = core.flow.advance(core.book, self.rng, until)
@@ -435,11 +472,15 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
       its next observation).
 
     Traders' orders interact: one trader's resting quote can be filled by
-    another's market order. The inventory penalty accrues per unit of time, so a
+    another's market order (but never by its own: self-trade prevention, as in
+    LimitOrderBookEnv). The inventory penalty accrues per unit of time, so a
     trader's penalty does not depend on how often the others act; `info[agent]["dt"]`
     is the time the step covered. Traders whose decision times coincide act in name
-    order. Actions, observations, masks (`action_mask(agent)`)
-    and rewards per trader are as in LimitOrderBookEnv.
+    order. Every action is validated before any is carried out, so a step that
+    raises `InvalidAction` changes nothing. Actions, observations, masks
+    (`action_mask(agent)`) and rewards per trader are as in LimitOrderBookEnv. At the
+    end of the session every trader is terminated (and `agents` is empty); `step()`
+    then raises `ResetRequired`.
 
     Args:
         n_agents: Number of traders, named "trader_0", "trader_1", ...
@@ -477,11 +518,11 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
     ) -> None:
         if n_agents < 1:
             raise ValueError("n_agents must be >= 1.")
-        intervals = np.broadcast_to(np.asarray(decision_intervals, dtype=np.float64), (n_agents,))
-        if np.any(intervals <= 0):
-            raise ValueError("decision_intervals must be positive.")
-        if not 0.0 <= jitter < 1.0:
-            raise ValueError("jitter must be in [0, 1).")
+        intervals = np.broadcast_to(
+            check_numbers("decision_intervals", decision_intervals, ">0"), (n_agents,)
+        )
+        if not 0.0 <= check_number("jitter", jitter) < 1.0:
+            raise ValueError(f"jitter must be in [0, 1), got {jitter!r}.")
         self.core = _LOBCore(
             flow=flow,
             mid_price=mid_price,
@@ -544,19 +585,23 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
     def step(self, actions: dict[str, Any]) -> MAStepResult[dict[str, Any], str]:
         if not self._started:
             raise ResetRequired()
+        if not self.agents:
+            raise episode_over()
         if set(actions) != set(self.acting):
             raise ValueError(
                 f"Expected actions for the acting traders {sorted(self.acting)}, "
                 f"got {sorted(actions)}."
             )
         core = self.core
+        # Every action is checked before any is carried out: an invalid one changes nothing.
+        decisions = {agent: core.parse(actions[agent], self._act_space) for agent in self.acting}
         mid = core.mid()
         before = {a: self.traders[a].wealth(mid) for a in self.agents}
         n_fills = dict.fromkeys(self.agents, 0)
         owners = {t.owner: a for a, t in self.traders.items()}
         for agent in self.acting:
             trader = self.traders[agent]
-            own_fills = core.apply(trader, actions[agent], self._act_space)
+            own_fills = core.apply(trader, decisions[agent])
             n_fills[agent] += len(own_fills)
             for fill in own_fills:  # book the other side for a trader whose quote was hit
                 maker = owners.get(fill.maker_owner)

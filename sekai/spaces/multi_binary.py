@@ -38,7 +38,10 @@ class MultiBinary(Space[NDArray[np.int8]]):
 
     def contains(self, x: Any) -> bool:
         if isinstance(x, (list, tuple)):
-            x = np.asarray(x)
+            try:
+                x = np.asarray(x)
+            except ValueError:  # ragged nesting
+                return False
         if not isinstance(x, np.ndarray):
             return False
         return bool(

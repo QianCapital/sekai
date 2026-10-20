@@ -5,8 +5,8 @@ random windows; evaluation wants to walk through a period deterministically,
 episode after episode, or to replay one specific date. A sampler encapsulates
 that choice and every historical sekai env accepts one (`sampler=`), plus a
 per-reset override: `env.reset(options={"start": "2024-01-02"})` puts the
-episode's first decision at that timestamp (with datetime timestamps an integer
-is a row position; on numeric time axes it is a timestamp).
+episode's first decision at that timestamp (an integer is a row position, on
+every time axis; `Time(t)` looks up a numeric timestamp `t`).
 
 Data cut by `MarketData.split` or `walk_forward` begins with warm-up rows
 (`MarketData.warmup`) that may be observed but never traded on. Environments then
@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from sekai.finance.data import naive_datetime64
+from sekai.finance.data import row_of
 
 
 class EpisodeSampler(abc.ABC):
@@ -209,20 +209,25 @@ def resolve_start(
 ) -> int:
     """The window start for `reset(options={"start": option})`.
 
-    `option` is the timestamp of the episode's first decision (the first row at or
-    after it is used); the window begins `lookback` rows earlier. With datetime
-    timestamps an integer is read as a row position instead. On numeric axes an
-    integer is a timestamp, so `start=info["timestamp"]` replays an episode even
-    on a split whose timestamps do not start at 0. A first decision on one of the
-    data's `warmup` rows (lookback-only history of a split) is refused.
+    `option` places the episode's first decision, read as `MarketData.index_of`
+    reads it: an `int` is a row position on every time axis, and a timestamp puts
+    the decision on the first row at or after it (on datetime timestamps anything
+    `numpy.datetime64` accepts, on numeric ones a float, on either `Time(t)`). The
+    window begins `lookback` rows earlier. `info["timestamp"]` reports the decision
+    time, so `start=Time(info["timestamp"])` replays an episode on any data,
+    including a split whose numeric timestamps no longer start at 0. A first
+    decision on one of the data's `warmup` rows (lookback-only history of a split)
+    is refused.
+
+    Raises:
+        TypeError: If `option` is a bool.
+        ValueError: If `option` is a timestamp that does not suit the axis (such as
+            a date string on numeric timestamps), or the first decision would fall
+            outside the valid range: without `lookback` rows before it, on a warm-up
+            row, or without a full episode after it.
     """
     times = np.asarray(timestamps)
-    is_int = isinstance(option, (int, np.integer)) and not isinstance(option, bool)
-    if is_int and times.dtype.kind == "M":
-        decision = int(option)
-    else:
-        key = naive_datetime64(option, "start") if times.dtype.kind == "M" else option
-        decision = int(np.searchsorted(times, key, side="left"))
+    decision = row_of(times, option, what="start")
     first, last = max(lookback, warmup), lookback + n_starts - 1
     if first > last:
         raise _no_room(n_starts, lookback, warmup)
@@ -232,6 +237,12 @@ def resolve_start(
             if lookback <= decision < warmup
             else ""
         )
+        if (
+            isinstance(option, int | np.integer)
+            and times.dtype.kind != "M"
+            and times[0] <= option <= times[-1]
+        ):
+            reason += f". An int is a row position; for the timestamp {option}, pass Time({option})"
         raise ValueError(
             f"start {option!r} (row {decision}) is outside the valid range of first decisions: "
             f"rows {first}..{last} ({times[first]} .. {times[last]}){reason}."

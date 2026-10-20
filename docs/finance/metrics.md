@@ -28,7 +28,7 @@ Annualisation uses `periods_per_year`: 252 for daily bars (the default), 52 for 
 | `conditional_value_at_risk(r, level=0.95)` | $-\,\mathbb E[r \mid r \le q_{1-\text{level}}]$, the expected shortfall |
 | `hit_rate(r)` | the fraction of non-zero periods with a positive return |
 | `equity_curve(r, initial=1.0)` | `initial` followed by $\text{initial}\cdot\prod_{s \le t}(1 + r_s)$ |
-| `returns_from_equity(equity)` | the inverse of `equity_curve` |
+| `returns_from_equity(equity)` | the inverse of `equity_curve`: $E_t / E_{t-1} - 1$, with -1 for a wipe-out (the first $E_t \le 0$) and 0 after it, where equity must stay 0 |
 
 Here $n$ is the number of periods, $p$ = `periods_per_year`, and $r_f$ and the target are
 annual simple rates. Losses are limited, as in the environments: a return of -100% or worse
@@ -95,10 +95,13 @@ hit rate               49.60%
 `turnover` and `costs` (per-period series) add the mean turnover and the total cost.
 
 Returns are undefined for a process that starts from zero wealth, such as a market maker's
-mark-to-market P&L. `pnl_summary(pnl, periods_per_year=252)` summarises per-period P&L
-increments in absolute units into a `PnLSummary`: total, mean and volatility of P&L, a
-Sharpe ratio of the increments, the maximum drawdown of cumulative P&L from its running
-peak (which starts at 0), and the hit rate.
+mark-to-market P&L. `pnl_summary(pnl, periods_per_year=252, *, scale=0.0)` summarises
+per-period P&L increments in absolute units into a `PnLSummary`: total, mean and volatility
+of P&L, a Sharpe ratio of the increments, the maximum drawdown of cumulative P&L from its
+running peak (which starts at 0), and the hit rate. Increments computed as differences of a
+cumulative wealth $W$ carry rounding of order $10^{-16}\,\lvert W\rvert$; pass the wealth's
+size (its largest absolute value) as `scale`, and P&L that is constant up to that rounding
+has zero volatility and a Sharpe ratio of 0, as for returns. `RecordPerformance` does so.
 
 ```python
 from sekai.finance import pnl_summary

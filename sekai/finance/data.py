@@ -14,6 +14,13 @@ prevent the usual leaks between training and evaluation. A split records its
 history rows as `MarketData.warmup`, and the finance environments never make a
 decision on a warm-up row, whatever their lookback.
 
+A point in time (`index_of`, `between`, `split`, and an environment's
+`reset(options={"start": ...})`) is either a row position or a timestamp. An
+`int` is always a row position, counted within the object at hand, whatever its
+time axis. Timestamps are looked up by value: dates and times on datetime axes,
+floats on numeric axes, and `Time(t)` for any timestamp `t`, integers included
+(epoch seconds, or the numeric timestamps of a split, which no longer start at 0).
+
 Timestamps are timezone-naive. Timezone-aware input is refused rather than converted
 silently; convert it first (`index.tz_convert("UTC").tz_localize(None)` for UTC, or
 `index.tz_localize(None)` to keep local wall-clock times).
@@ -25,12 +32,61 @@ import datetime as _dt
 import operator
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-TimeLike = int | np.integer[Any] | np.datetime64 | str | _dt.date | _dt.datetime
+# Timestamp values: numbers on numeric time axes, these on datetime ones (`datetime`
+# and pandas `Timestamp` are `date` subclasses).
+_NUMBERS = (int, float, np.integer, np.floating)
+_DATETIMES = (str, _dt.date, np.datetime64)
+
+
+@dataclass(frozen=True, repr=False)
+class Time:
+    """A timestamp to look up by value, where a plain `int` would be a row position.
+
+    `MarketData.index_of`, `between` and `split`, and `reset(options={"start": ...})`
+    in the finance environments, read an `int` as a row position on every time axis.
+    `Time(t)` is always a timestamp: the first row at or after `t` is used. It is how
+    to address numeric timestamps that are integers, such as epoch seconds or the
+    timestamps of a split (which no longer start at 0). Since `info["timestamp"]`
+    reports an episode's decision times, `options={"start": Time(info["timestamp"])}`
+    replays an episode on any data.
+
+    Args:
+        value: A number on numeric timestamps; on datetime timestamps anything
+            `numpy.datetime64` accepts (a `datetime64`, `datetime`, `date`, pandas
+            `Timestamp` or date string).
+
+    Raises:
+        TypeError: If `value` is neither a number nor a date or time.
+
+    Example:
+        ```python
+        data = MarketData(prices, timestamps=epoch_seconds)
+        before, after = data.split(Time(1_700_000_000))
+        ```
+    """
+
+    value: Any
+
+    def __post_init__(self) -> None:
+        if isinstance(self.value, bool | np.bool_) or not isinstance(
+            self.value, _NUMBERS + _DATETIMES
+        ):
+            raise TypeError(
+                "Time takes a number or a date or time (datetime64, datetime, date, pandas "
+                f"Timestamp, date string), got {self.value!r}."
+            )
+
+    def __repr__(self) -> str:
+        return f"Time({self.value!r})"
+
+
+TimeLike = int | np.integer[Any] | float | np.floating[Any] | np.datetime64 | str | _dt.date | Time
 
 
 def _readonly(arr: NDArray[Any]) -> NDArray[Any]:
@@ -66,6 +122,57 @@ def naive_datetime64(value: Any, what: str, *, unit: str | None = None) -> Any:
     for warning in caught:  # pass on anything unrelated
         warnings.warn_explicit(warning.message, warning.category, warning.filename, warning.lineno)
     return out
+
+
+def row_of(
+    timestamps: NDArray[Any], when: Any, *, side: str = "left", what: str = "the time"
+) -> int:
+    """The row that `when` names on the time axis `timestamps` (see `MarketData.index_of`).
+
+    An `int` is a row position (negative counts from the end), returned without a
+    range check. Anything else is a timestamp: the first row at or after it (after
+    it with `side="right"`), or `len(timestamps)` if there is none.
+
+    Args:
+        timestamps: The `(T,)` strictly increasing time axis, datetime64 or numeric.
+        when: A row position, a timestamp of the axis' kind, or a `Time`.
+        side: "left" or "right", as in `numpy.searchsorted`.
+        what: Name of `when` in error messages.
+
+    Raises:
+        TypeError: If `when` is a bool.
+        ValueError: If a timestamp does not suit the axis (a date on numeric timestamps,
+            a number on datetime ones), is NaN or NaT, or is timezone-aware.
+    """
+    if isinstance(when, bool | np.bool_):
+        raise TypeError(f"{what} must be a row position or a timestamp, got {when!r}.")
+    if isinstance(when, int | np.integer):
+        return int(when) if when >= 0 else int(timestamps.shape[0]) + int(when)
+    value = when.value if isinstance(when, Time) else when
+    key: Any
+    if timestamps.dtype.kind == "M":
+        if not isinstance(value, _DATETIMES):
+            raise ValueError(
+                f"{what} {when!r} is not a date or time, but the timestamps are datetimes. "
+                "Pass anything numpy.datetime64 accepts (a datetime64, datetime, pandas "
+                "Timestamp or date string), or an int row position."
+            )
+        key = naive_datetime64(value, what)
+        if np.isnat(key):
+            raise ValueError(f"{what} {when!r} is NaT.")
+    else:
+        if not isinstance(value, _NUMBERS) or isinstance(value, bool | np.bool_):
+            raise ValueError(
+                f"{what} {when!r} is not a number, but the timestamps are numeric "
+                f"({timestamps[0]} .. {timestamps[-1]}). Pass an int row position or "
+                "Time(t) for the timestamp t; to address dates, give the data datetime "
+                "timestamps."
+            )
+        if not np.isfinite(value):
+            raise ValueError(f"{what} {when!r} is not finite.")
+        key = value
+    position: Any = np.searchsorted(timestamps, key, side=side)  # type: ignore[call-overload,unused-ignore]
+    return int(position)
 
 
 class MarketData:
@@ -343,15 +450,24 @@ class MarketData:
         return out
 
     def index_of(self, when: TimeLike, *, side: str = "left") -> int:
-        """Row position of a timestamp (the first row at or after it, by default).
+        """Row position of a point in time: a row position or a timestamp.
 
-        Integers are taken as row positions when the timestamps are datetimes.
+        - An `int` is a row position on every time axis (negative counts from the
+          end), returned as is.
+        - A timestamp gives the first row at or after it (after it with
+          `side="right"`), or `n_steps` if there is none. On datetime timestamps it is
+          anything `numpy.datetime64` accepts (a `datetime64`, `datetime`, `date`,
+          pandas `Timestamp` or date string); on numeric timestamps, a float.
+        - `Time(t)` is a timestamp on either kind of axis, so it also looks up integer
+          timestamps (epoch seconds, or the timestamps of a split).
+
+        Raises:
+            TypeError: If `when` is a bool.
+            ValueError: If a timestamp does not suit the axis (a date on numeric
+                timestamps, a number on datetime ones), is NaN or NaT, or is
+                timezone-aware.
         """
-        if self.is_datetime and isinstance(when, (int, np.integer)):
-            return int(when) if when >= 0 else self.n_steps + int(when)
-        key: Any = naive_datetime64(when, "the time") if self.is_datetime else when
-        position: Any = np.searchsorted(self._timestamps, key, side=side)  # type: ignore[call-overload,unused-ignore]
-        return int(position)
+        return row_of(self._timestamps, when, side=side)
 
     # ------------------------------------------------------------------
     # Derived data
@@ -389,7 +505,13 @@ class MarketData:
         return self._replace(rows=rows)
 
     def between(self, start: TimeLike | None = None, end: TimeLike | None = None) -> MarketData:
-        """Rows with `start <= timestamp < end` (either bound optional)."""
+        """Rows from `start` up to, not including, `end` (either bound optional).
+
+        Each bound is read as by `index_of`: timestamps select `start <= timestamp <
+        end` (`between("2020-01-01", "2021-01-01")` is the rows of 2020, and on numeric
+        timestamps `between(Time(100), Time(200))` the rows stamped 100 to 199), while
+        an `int` is a row position (`between(100, 200)` is `data[100:200]`).
+        """
         lo = 0 if start is None else self.index_of(start)
         hi = self.n_steps if end is None else self.index_of(end)
         return self[lo:hi]
@@ -428,19 +550,25 @@ class MarketData:
     # Chronological splits
     # ------------------------------------------------------------------
 
-    def _boundary(self, b: float | TimeLike) -> int:
-        if isinstance(b, float) and not isinstance(b, np.datetime64):
+    def _boundary(self, b: TimeLike) -> int:
+        if isinstance(b, float | np.floating):
             if not 0.0 < b < 1.0:
-                raise ValueError(f"Fractional split points must be in (0, 1), got {b}.")
-            return round(b * self.n_steps)
+                raise ValueError(
+                    f"Fractional split points must be in (0, 1), got {b}. A float is a "
+                    f"fraction of the rows here: pass Time({b}) to split at a timestamp."
+                )
+            return round(float(b) * self.n_steps)
         return self.index_of(b)
 
-    def split(
-        self, *boundaries: float | TimeLike, embargo: int = 0, history: int = 0
-    ) -> list[MarketData]:
+    def split(self, *boundaries: TimeLike, embargo: int = 0, history: int = 0) -> list[MarketData]:
         """Split chronologically at the given points.
 
-        Points are fractions of the rows (`0.8`), row positions, or timestamps.
+        A point is a fraction of the rows (a float in (0, 1), such as `0.8`), a row
+        position (an `int`, counted within this data on every time axis, so
+        `test.split(50)` cuts `test` at its own row 50; negative counts from the
+        end), or a timestamp: on datetime timestamps anything `numpy.datetime64`
+        accepts (`"2021-01-01"`), on any axis `Time(t)` (as in `index_of`; a float is
+        a fraction here, so numeric timestamps need `Time`).
         Every part after the first starts `embargo` rows after its split point (a
         gap that keeps information from straddling the boundary) and then
         prepends `history` rows before that start, which an environment may
@@ -533,4 +661,4 @@ class MarketData:
         )
 
 
-__all__ = ["MarketData"]
+__all__ = ["MarketData", "Time"]

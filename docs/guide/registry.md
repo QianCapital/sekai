@@ -8,7 +8,7 @@ The registry maps environment IDs to `EnvSpec`s, so environments can be built by
 |---|---|
 | `register(id, entry_point, *, max_episode_steps=None, reward_threshold=None, nondeterministic=False, kwargs=None, additional_wrappers=(), vector_entry_point=None)` | add an environment; returns its `EnvSpec` |
 | `make(id_or_spec, *, max_episode_steps=None, **kwargs)` | build one environment |
-| `make_vec(id_or_spec, num_envs=1, *, vectorization_mode=None, vector_kwargs=None, wrappers=(), **kwargs)` | build a [vector environment](vector.md) (native when the env has one) |
+| `make_vec(id_or_spec, num_envs=1, *, vectorization_mode=None, vector_kwargs=None, wrappers=(), **kwargs)` | build a [vector environment](vector.md) (native when the env has one and no per-env wrappers apply) |
 | `spec(id)` | look up an `EnvSpec` |
 | `all_specs()` | every registered `EnvSpec` |
 | `deregister(id)` | remove an environment |
@@ -79,6 +79,11 @@ print(type(vec).__name__, vec.spec.vector_entry_point)  # PortfolioVecEnv sekai.
 print(type(sekai.make_vec("desk/Portfolio-v1", 4, vectorization_mode="sync")).__name__)  # SyncVecEnv
 ```
 
+A native env has no per-env objects to wrap, so for an ID that also has
+[`additional_wrappers`](#default-wrappers) `make_vec()` builds the per-env version
+(`SyncVecEnv`) by default, and `vectorization_mode="native"` raises `ValueError` rather than
+drop the wrappers.
+
 `max_episode_steps` is consumed by `make()` and is **not** passed to the environment's
 constructor (as in gymnasium); every other keyword argument is. Pass `max_episode_steps=-1`
 to drop a registered time limit altogether.
@@ -96,7 +101,7 @@ An unknown ID raises `EnvNotFound` with close matches:
 try:
     sekai.make("desk/Tradin-v1")
 except sekai.EnvNotFound as e:
-    print(e.suggestions)  # ('desk/Trading-v1', 'Trading-v0')
+    print(e.suggestions)  # ('desk/Trading-v1', 'Trading-v0', 'desk/Portfolio-v1')
 ```
 
 ### Default wrappers
@@ -206,6 +211,8 @@ Registered environments:
   [no namespace]
     Acrobot-v1
     CartPole-v1
+    LimitOrderBook-v0
+    Market-v0
     MarketMaking-v0
     MountainCar-v0
     MountainCarContinuous-v0
@@ -215,6 +222,7 @@ Registered environments:
     Trading-v0
   [desk]
     desk/CartPoleNormalized-v0
+    desk/Portfolio-v1
     desk/Trading-v1
   [lab]
     lab/Pendulum-v9

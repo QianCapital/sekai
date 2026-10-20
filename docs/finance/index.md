@@ -8,12 +8,12 @@ arguments) or to assemble your own.
 
 | Module | For | Main names |
 |---|---|---|
-| `data` | historical panels with listings and delistings; leak-free splits | `MarketData` |
+| `data` | historical panels with listings and delistings; leak-free splits | `MarketData`, `Time` |
 | `sampling` | where each episode starts in a history | `RandomStart`, `SequentialStart`, `FixedStart` |
 | `simulators` | synthetic markets, batch-first | `GBM`, `Heston`, `RegimeSwitching`, `ListingProcess`, `Randomized`, ... |
 | `features` | point-in-time transforms and a look-ahead detector | `momentum`, `rolling_zscore`, `asof_join`, `check_causal`, ... |
 | `costs` | transaction costs and market impact | `ProportionalCost`, `SpreadCost`, `SquareRootImpact`, ... |
-| `account` | target weights, leverage, financing, drift | `AccountConfig`, `project_weights`, `settle` |
+| `account` | target weights, leverage, financing, drift | `AccountConfig`, `project_weights`, `settle`, `Settlement` |
 | `rewards` | what the agent optimises | `LogReturn`, `DifferentialSharpe`, `DrawdownPenalty`, ... |
 | `metrics` | how policies compare | `performance_summary`, `RecordPerformance`, ... |
 | `universe` | stable slots for a changing set of instruments | `SlotMap` |

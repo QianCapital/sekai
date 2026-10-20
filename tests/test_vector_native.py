@@ -12,7 +12,7 @@ import sekai
 from sekai.finance.costs import FixedCost
 from sekai.finance.data import MarketData
 from sekai.finance.sampling import EpisodeSampler, FixedStart, RandomStart, SequentialStart
-from sekai.vector.native import NativeVecEnv, split_infos, take_index
+from sekai.vector.native import NativeVecEnv, shared, split_infos, take_index
 from tests.conftest import CountingEnv, DictObsEnv
 from tests.test_dynamic import TradesEnv, UniverseEnv
 
@@ -101,10 +101,101 @@ class TestNativeVecEnv:
             c.reset(seed=[1, 2, 3]).observations,
             BatchCounting(3).reset(seed=[1, 2, 3]).observations,
         )
-        with pytest.raises(TypeError):
-            c.reset(seed=[1, None, 3])
         with pytest.raises(ValueError):
             c.reset(seed=[1, 2])
+
+    def test_seeds_with_none_entries_continue_the_stream(self) -> None:
+        a, b = BatchCounting(3), BatchCounting(3)
+        for vec in (a, b):
+            vec.reset(seed=0)
+        # A None entry draws from the current stream: reproducible after a seeded reset...
+        mixed = a.reset(seed=[1, None, 3]).observations
+        np.testing.assert_array_equal(mixed, b.reset(seed=[1, None, 3]).observations)
+        assert not np.array_equal(mixed, BatchCounting(3).reset(seed=[1, 2, 3]).observations)
+        # ...and a list of only None continues it, exactly like seed=None.
+        np.testing.assert_array_equal(a.reset(seed=[None] * 3).observations, b.reset().observations)
+        # A Generator entry draws its contribution from that generator.
+        rng = np.random.default_rng
+        np.testing.assert_array_equal(
+            a.reset(seed=[rng(5), 2, rng(6)]).observations,
+            b.reset(seed=[rng(5), 2, rng(6)]).observations,
+        )
+
+    @pytest.mark.parametrize(
+        "seed",
+        [
+            None,
+            7,
+            np.int64(7),
+            [1, 2, 3],
+            [1, None, 3],
+            [None, None, None],
+            [np.random.default_rng(0), 2, None],
+            np.random.default_rng(0),
+            [1, 2],
+            "seven",
+        ],
+        ids=[
+            "none",
+            "int",
+            "np-int",
+            "ints",
+            "ints-and-none",
+            "nones",
+            "generator-entry",
+            "generator",
+            "wrong-length",
+            "str",
+        ],
+    )
+    def test_accepts_exactly_what_sync_accepts(self, seed: Any) -> None:
+        def outcome(vec: sekai.VecEnv) -> str:
+            try:
+                vec.reset(seed=seed)
+            except Exception as e:
+                return type(e).__name__
+            return "ok"
+
+        sync = sekai.SyncVecEnv([CountingEnv] * 3)
+        assert outcome(BatchCounting(3)) == outcome(sync)
+
+    def test_step_before_reset_raises(self) -> None:
+        vec = BatchCounting(2)
+        with pytest.raises(sekai.ResetRequired):
+            vec.step(np.zeros(2, int))
+        vec.reset(seed=0)
+        assert vec.step(np.zeros(2, int)).observations[:, 0].tolist() == [1, 1]
+
+    @pytest.mark.parametrize(
+        "env_id", ["Trading-v0", "Portfolio-v0", "MarketMaking-v0", "OptimalExecution-v0"]
+    )
+    def test_finance_native_step_before_reset_raises_like_sync(self, env_id: str) -> None:
+        for mode in ["native", "sync"]:
+            vec = sekai.make_vec(env_id, 2, vectorization_mode=mode)
+            with pytest.raises(sekai.ResetRequired):
+                vec.step(vec.batch_action_space.sample())
+            vec.close()
+
+    def test_shared_members_are_not_split(self) -> None:
+        class Scheduled(BatchCounting):
+            @shared
+            def schedule(self) -> np.ndarray:
+                return np.linspace(0.0, 1.0, self.num_envs)[:, None]  # (n_steps, 1), n_steps == N
+
+            @property
+            @shared
+            def levels(self) -> np.ndarray:
+                return np.arange(float(self.num_envs))
+
+            def per_env(self) -> np.ndarray:
+                return np.arange(float(self.num_envs))[:, None]
+
+        vec = Scheduled(4)
+        vec.reset(seed=0)
+        assert all(s.shape == (4, 1) for s in vec.call("schedule"))  # whole, for every env
+        assert all(level.shape == (4,) for level in vec.get_attr("levels"))
+        assert all(level.shape == (4,) for level in vec.call("levels"))
+        assert [p.tolist() for p in vec.call("per_env")] == [[0.0], [1.0], [2.0], [3.0]]
 
     def test_attribute_access(self) -> None:
         vec = BatchCounting(3)
@@ -127,6 +218,18 @@ class TestNativeVecEnv:
         vec.close()
         with pytest.raises(sekai.VecEnvClosed):
             vec.step(np.ones(2, int))
+
+    def test_episode_statistics_without_autoreset(self) -> None:
+        vec = sekai.VecRecordEpisodeStatistics(BatchCounting(3, autoreset=False))
+        vec.reset(seed=0, options=[{"horizon": 1}, {"horizon": 2}, {"horizon": 4}])
+        finished = np.zeros(3, bool)
+        episodes = []
+        while not finished.all():
+            result = vec.step(np.ones(3, int))
+            finished |= result.dones
+            episodes += [info["episode"] for info in result.infos if "episode" in info]
+        assert [e.episode_length for e in episodes] == [1, 2, 4]  # each recorded once
+        assert vec.tracker.summary()["num_episodes"] == 3
 
     def test_helpers(self) -> None:
         space = sekai.Dict(a=sekai.Box(0, 1, (2,)), b=sekai.Discrete(3))
@@ -164,6 +267,26 @@ class TestMakeVec:
             sekai.make_vec(
                 registered, 2, vectorization_mode="native", wrappers=[sekai.FlattenObservation]
             )
+
+    def test_registered_wrappers_fall_back_or_raise(self) -> None:
+        env_id = "test/NativeClipped-v0"
+        sekai.register(
+            env_id,
+            entry_point=CountingEnv,
+            vector_entry_point=BatchCounting,
+            additional_wrappers=(
+                sekai.WrapperSpec("ClipReward", "sekai.wrappers:ClipReward", {"max_reward": 0.5}),
+            ),
+        )
+        try:
+            vec = sekai.make_vec(env_id, 2)
+            assert isinstance(vec, sekai.SyncVecEnv)  # the native env would drop the wrapper
+            vec.reset(seed=0)
+            assert vec.step([2, 2]).rewards.tolist() == [0.5, 0.5]
+            with pytest.raises(ValueError, match=r"additional_wrappers \(ClipReward\)"):
+                sekai.make_vec(env_id, 2, vectorization_mode="native")
+        finally:
+            sekai.deregister(env_id)
 
     def test_no_native_implementation(self) -> None:
         with pytest.raises(ValueError, match="native"):
@@ -293,7 +416,7 @@ def same_value(a: Any, b: Any) -> bool:
     if isinstance(a, (np.ndarray, np.number, int, float)) and not isinstance(a, bool):
         x, y = np.asarray(a), np.asarray(b)
         return x.shape == y.shape and bool(np.allclose(x, y, rtol=1e-12, equal_nan=True))
-    if isinstance(a, (bool, str, dict, sekai.Space)) or a is None:
+    if isinstance(a, (bool, np.bool_, str, dict, sekai.Space)) or a is None:
         return bool(a == b)
     return repr(a) == repr(b)  # cost models, reward functions, market models
 
@@ -393,6 +516,39 @@ class TestNativeTimeLimit:
             assert native.call("elapsed_steps") == [t % 30] * 2
         native.reset(seed=0)
         assert native.get_attr("elapsed_steps") == [0, 0]
+
+
+# Frozen sub-envs keep being stepped (with their last action) while the others run; the
+# native envs must leave their state alone (the Trading / Portfolio ones used to read past
+# their price windows).
+FROZEN_CASES = {
+    "OptimalExecution-v0": np.array([[1.0], [0.3], [0.1], [0.04]], np.float32),  # sells at once
+    "MarketMaking-v0": np.full((4, 2), 1.0, np.float32),
+    "Trading-v0": np.array([0, 1, 2, 2]),
+    "Portfolio-v0": np.array([[1, 0, 0, 0], [0, 0, 0, 1], [1, 1, 1, 0], [0, 2, 1, 1]], np.float32),
+}
+
+
+@pytest.mark.parametrize("limit", [None, 7])
+@pytest.mark.parametrize("env_id", sorted(FROZEN_CASES))
+def test_finance_native_freezes_finished_sub_envs_like_sync(env_id: str, limit: int | None) -> None:
+    kwargs = {**DETERMINISTIC[env_id], "max_episode_steps": limit or -1}
+    off = {"autoreset": False}
+    native = sekai.make_vec(env_id, 4, vector_kwargs=off, **kwargs)
+    sync = sekai.make_vec(env_id, 4, vectorization_mode="sync", vector_kwargs=off, **kwargs)
+    assert_same(native.reset(seed=0).observations, sync.reset(seed=0).observations)
+    done = np.zeros(4, bool)
+    for t in range(75):  # well past every sub-env's end; sync never steps a finished one
+        x, y = native.step(FROZEN_CASES[env_id]), sync.step(FROZEN_CASES[env_id])
+        assert_same(x.observations, y.observations, f"t{t}.obs")
+        assert_same(x.rewards, y.rewards, f"t{t}.rewards")
+        assert x.terminated.tolist() == y.terminated.tolist(), t
+        assert x.truncated.tolist() == y.truncated.tolist(), t
+        for i, (ix, iy) in enumerate(zip(x.infos, y.infos)):
+            assert_same(ix, iy, f"t{t}.infos[{i}]")
+        assert not any(x.infos[i] for i in np.flatnonzero(done))  # frozen: empty infos
+        done |= y.dones
+    assert done.all() and native.frozen.all()
 
 
 class TestNativeSamplers:

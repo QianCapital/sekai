@@ -17,6 +17,9 @@ raises a clear error. A model never prices a trade at zero because its input is
 missing: an asset without a valid value is charged the cross-sectional median, and
 when no asset has one the model raises, unless it was given an explicit fallback
 (`SpreadCost(fallback_spread=...)`, `SquareRootImpact(fallback_volatility=...)`).
+A model's own parameters (rates, spreads, fees, thresholds, coefficients,
+fallbacks) must be finite and non-negative; anything else raises `ValueError`
+when the model is built.
 """
 
 from __future__ import annotations
@@ -112,13 +115,22 @@ def _fill_from_median(
     return np.where(ok, values, np.asarray(median, dtype=np.float64)[..., None])
 
 
-def _check_fallback(value: float | None, name: str) -> float | None:
-    if value is None:
-        return None
-    out = float(value)
-    if not (np.isfinite(out) and out >= 0):
+def _non_negative(value: ArrayLike, name: str) -> Array:
+    """A model parameter as a float array, refusing NaN, infinite and negative values."""
+    out = np.asarray(value, dtype=np.float64)
+    if not (np.all(np.isfinite(out)) and np.all(out >= 0)):
         raise ValueError(f"{name} must be finite and non-negative, got {value!r}.")
     return out
+
+
+def _non_negative_scalar(value: float, name: str) -> float:
+    if np.ndim(value) != 0:
+        raise TypeError(f"{name} must be a single number, got {value!r}.")
+    return float(_non_negative(value, name))
+
+
+def _check_fallback(value: float | None, name: str) -> float | None:
+    return None if value is None else _non_negative_scalar(value, name)
 
 
 def _require(name: str, value: ArrayLike | None, model: str) -> Array:
@@ -145,13 +157,12 @@ class ProportionalCost(CostModel):
     """`rate * |trade|` per asset: commissions and fees proportional to traded value.
 
     Args:
-        rate: Cost per unit of traded value; a scalar or one rate per asset.
+        rate: Cost per unit of traded value; a scalar or one rate per asset (finite,
+            >= 0).
     """
 
     def __init__(self, rate: ArrayLike) -> None:
-        self.rate = np.asarray(rate, dtype=np.float64)
-        if np.any(self.rate < 0) or not np.all(np.isfinite(self.rate)):
-            raise ValueError("rate must be finite and non-negative.")
+        self.rate = _non_negative(rate, "rate")
 
     def __call__(self, trades: ArrayLike, **context: Any) -> Array:
         t = np.abs(np.asarray(trades, dtype=np.float64))
@@ -168,11 +179,11 @@ class SpreadCost(CostModel):
     """Crossing half the bid-ask spread on every trade.
 
     Args:
-        half_spread: Half-spread as a fraction of the price (scalar or per asset).
-            If None, the env's quoted `spread` (full spread, as a fraction of the
-            price) is used instead; an asset whose spread is missing (NaN) or
-            negative is charged the cross-sectional median spread, while a zero
-            spread is valid and costs nothing.
+        half_spread: Half-spread as a fraction of the price (scalar or per asset;
+            finite, >= 0). If None, the env's quoted `spread` (full spread, as a
+            fraction of the price) is used instead; an asset whose spread is missing
+            (NaN) or negative is charged the cross-sectional median spread, while a
+            zero spread is valid and costs nothing.
         fallback_spread: Full spread (fraction of the price) charged when no asset
             has a valid quoted spread. Without it, trading on such a row raises
             `ValueError` rather than trading for free. Only used with quoted spreads.
@@ -181,9 +192,9 @@ class SpreadCost(CostModel):
     def __init__(
         self, half_spread: ArrayLike | None = None, *, fallback_spread: float | None = None
     ) -> None:
-        self.half_spread = None if half_spread is None else np.asarray(half_spread, np.float64)
-        if self.half_spread is not None and np.any(self.half_spread < 0):
-            raise ValueError("half_spread must be non-negative.")
+        self.half_spread = (
+            None if half_spread is None else _non_negative(half_spread, "half_spread")
+        )
         if self.half_spread is not None and fallback_spread is not None:
             raise ValueError("fallback_spread only applies to quoted spreads (half_spread=None).")
         self.fallback_spread = _check_fallback(fallback_spread, "fallback_spread")
@@ -218,17 +229,17 @@ class FixedCost(CostModel):
     """A fixed fee in currency for every asset traded (a ticket charge).
 
     Args:
-        amount: Fee per traded asset, in the same currency as the env's capital.
-        threshold: Weight changes at or below this size are not counted as trades (the
-            default is above float32 rounding, so echoing back observed weights is free).
+        amount: Fee per traded asset, in the same currency as the env's capital
+            (finite, >= 0).
+        threshold: Weight changes at or below this size are not counted as trades
+            (finite, >= 0; the default is above float32 rounding, so echoing back
+            observed weights is free).
     """
 
     def __init__(self, amount: float, *, threshold: float = 1e-6) -> None:
-        if amount < 0:
-            raise ValueError("amount must be non-negative.")
         self.requires = frozenset({"equity"})
-        self.amount = float(amount)
-        self.threshold = float(threshold)
+        self.amount = _non_negative_scalar(amount, "amount")
+        self.threshold = _non_negative_scalar(threshold, "threshold")
 
     def __call__(
         self, trades: ArrayLike, *, equity: ArrayLike | None = None, **context: Any
@@ -264,7 +275,7 @@ class SquareRootImpact(CostModel):
     Environments refuse this model with `lookback=1`, which gives no estimate.
 
     Args:
-        coefficient: Impact coefficient (order 0.1-1 in empirical studies).
+        coefficient: Impact coefficient (finite, >= 0; order 0.1-1 in empirical studies).
         fallback_volatility: Per-step volatility used when no asset has a valid
             volatility estimate. Without it such trades raise instead of being free.
     """
@@ -272,10 +283,8 @@ class SquareRootImpact(CostModel):
     def __init__(
         self, coefficient: float = 0.5, *, fallback_volatility: float | None = None
     ) -> None:
-        if coefficient < 0:
-            raise ValueError("coefficient must be non-negative.")
         self.requires = frozenset({"equity", "volatility", "volume"})
-        self.coefficient = float(coefficient)
+        self.coefficient = _non_negative_scalar(coefficient, "coefficient")
         self.fallback_volatility = _check_fallback(fallback_volatility, "fallback_volatility")
         self.fallbacks = (
             frozenset() if self.fallback_volatility is None else frozenset({"volatility"})
@@ -350,9 +359,7 @@ def as_cost_model(cost: float | CostModel) -> CostModel:
     if isinstance(cost, CostModel):
         return cost
     if isinstance(cost, (int, float, np.integer, np.floating)) and not isinstance(cost, bool):
-        if cost < 0:
-            raise ValueError("transaction_cost must be non-negative.")
-        return ProportionalCost(float(cost))
+        return ProportionalCost(_non_negative_scalar(cost, "transaction_cost"))
     raise TypeError(f"Expected a CostModel or a non-negative rate, got {cost!r}.")
 
 

@@ -1,14 +1,17 @@
-"""Plumbing shared by the finance environments: history windows and cost context."""
+"""Plumbing shared by the finance environments: price sources, history windows, cost
+context and parameter checks."""
 
 from __future__ import annotations
 
 import copy
+import sys
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from sekai.envs.finance.market import validate_prices
+from sekai.error import ResetRequired
 from sekai.finance.data import MarketData
 from sekai.finance.sampling import (
     EpisodeSampler,
@@ -18,13 +21,118 @@ from sekai.finance.sampling import (
 )
 
 
+def check_sources(
+    env: str, *, data: Any, model: Any, prices: Any = None, takes_prices: bool = True
+) -> None:
+    """Check the price source given to a finance env: at most one, each of the right kind.
+
+    `prices=` takes raw historical prices (arrays, pandas; Trading-v0 and Portfolio-v0
+    only), `data=` a MarketData, and `model=` a market model to simulate.
+
+    Raises:
+        TypeError: For a MarketData passed as `prices=`, or anything else as `data=`.
+        ValueError: When more than one source is given.
+    """
+    if isinstance(prices, MarketData):
+        raise TypeError(
+            f"{env}: pass a MarketData as data=, not prices= (prices= takes a price array, "
+            "a pandas DataFrame or a Series)."
+        )
+    if data is not None and not isinstance(data, MarketData):
+        hint = (
+            "pass a price array or pandas object as prices=, or build a MarketData"
+            if takes_prices
+            else "build one with MarketData(prices, ...) or MarketData.from_pandas(frame)"
+        )
+        raise TypeError(f"{env}: data= takes a MarketData, got {type(data).__name__}; {hint}.")
+    given = [
+        f"{name}="
+        for name, value in (("prices", prices), ("data", data), ("model", model))
+        if value is not None
+    ]
+    if len(given) > 1:
+        options = (
+            "historical prices= or data=, or a model= to simulate"
+            if takes_prices
+            else "historical data= or a model= to simulate"
+        )
+        raise ValueError(f"{env} got {' and '.join(given)}; pass one source: {options}.")
+
+
+def dated_pandas(prices: Any) -> MarketData | None:
+    """A pandas Series or DataFrame indexed by dates as a MarketData that keeps the dates.
+
+    None for anything else (arrays, or pandas with another index, whose rows are then
+    numbered from 0 like an array's).
+    """
+    pd = sys.modules.get("pandas")  # pandas objects exist only once pandas is imported
+    if pd is None or not isinstance(prices, (pd.Series, pd.DataFrame)):
+        return None
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        return None
+    frame = prices.to_frame() if isinstance(prices, pd.Series) else prices
+    return MarketData.from_pandas(frame)
+
+
+_BOUNDS = {"": "", ">0": " > 0", ">=0": " >= 0"}
+
+
+def _in_bounds(values: NDArray[np.float64], bound: str) -> bool:
+    ok = np.isfinite(values)
+    if bound == ">0":
+        ok &= values > 0
+    elif bound == ">=0":
+        ok &= values >= 0
+    return bool(np.all(ok))
+
+
+def check_number(name: str, value: Any, bound: str = "") -> float:
+    """`value` as a finite float, also `> 0` (bound ">0") or `>= 0` (bound ">=0").
+
+    Raises:
+        ValueError: Naming the parameter, for a value that is not a finite number in range.
+    """
+    try:
+        out = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError):
+        out = np.full(1, np.nan)
+    if out.ndim == 0 and _in_bounds(out, bound):
+        return float(out)
+    raise ValueError(f"{name} must be a finite number{_BOUNDS[bound]}, got {value!r}.")
+
+
+def check_numbers(name: str, values: Any, bound: str = "") -> NDArray[np.float64]:
+    """`values` (a scalar or an array) as float64, each finite and within `bound`.
+
+    Raises:
+        ValueError: Naming the parameter, for values that are not finite numbers in range.
+    """
+    try:
+        out = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError):
+        out = np.full(1, np.nan)
+    if _in_bounds(out, bound):
+        return out
+    raise ValueError(f"{name} must hold finite numbers{_BOUNDS[bound]}, got {values!r}.")
+
+
+def episode_over() -> ResetRequired:
+    """The error for a step() after the episode ended (and before the next reset())."""
+    return ResetRequired(
+        "The episode is over (it terminated or was truncated); call reset() before stepping again."
+    )
+
+
 class History:
-    """A price history (array or MarketData) that episodes are cut from.
+    """A price history (array, pandas object or MarketData) that episodes are cut from.
 
     Handles validation, the sampler, and `reset(options={"start": ...})`.
 
     Args:
-        source: An array of prices (`(T,)` or `(T, n)`) or a MarketData.
+        source: Prices (`(T,)` or `(T, n)`: an array, or a pandas Series or DataFrame) or a
+            MarketData. Pandas input indexed by dates (a `DatetimeIndex`) becomes a
+            MarketData with those timestamps (and column names as assets); with any other
+            index its rows are numbered from 0, as an array's are.
         ndim: 1 for a single-asset env (the history must hold one asset), 2 for multi-asset.
         window: Rows per episode (lookback + episode_length + 1).
         lookback: Rows before the first decision.
@@ -42,8 +150,9 @@ class History:
         sampler: str | int | EpisodeSampler,
         allow_missing: bool = False,
     ) -> None:
-        if isinstance(source, MarketData):
-            data = source
+        dated = source if isinstance(source, MarketData) else dated_pandas(source)
+        if dated is not None:
+            data = dated
             if data.n_steps < window:
                 raise ValueError(
                     f"The history has {data.n_steps} rows but at least {window} are needed "
@@ -55,11 +164,16 @@ class History:
                     "panel. Use Market-v0 (sekai.envs.finance.MarketEnv) for changing universes."
                 )
             if ndim == 1 and data.n_assets != 1:
+                pick = (
+                    "pick one with data.select([asset])"
+                    if isinstance(source, MarketData)
+                    else "pass a single column, frame[name]"
+                )
                 raise ValueError(
-                    f"This env trades one asset but the MarketData has {data.n_assets}; pick one "
-                    "with data.select([asset])."
+                    f"This env trades one asset but the history has {data.n_assets}; {pick}."
                 )
         else:
+            assert not isinstance(source, MarketData)  # a MarketData is its own dated form
             prices = validate_prices(source, ndim=ndim, min_length=window)
             data = MarketData(prices)
         self.data = data
@@ -151,4 +265,14 @@ def field_or_none(data: MarketData | None, name: str) -> NDArray[np.float64] | N
     return data.field(name)
 
 
-__all__ = ["History", "check_cost_inputs", "field_or_none", "step_length"]
+__all__ = [
+    "History",
+    "check_cost_inputs",
+    "check_number",
+    "check_numbers",
+    "check_sources",
+    "dated_pandas",
+    "episode_over",
+    "field_or_none",
+    "step_length",
+]

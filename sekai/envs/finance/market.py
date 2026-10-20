@@ -71,10 +71,15 @@ def random_correlation(
 
 
 def validate_prices(prices: ArrayLike, *, ndim: int, min_length: int) -> NDArray[np.float64]:
-    """Check user-supplied historical prices and return them as float64."""
+    """Check user-supplied historical prices and return them as float64.
+
+    For `ndim=1` a single column `(T, 1)` (a one-column DataFrame) is accepted as `(T,)`.
+    """
     arr = np.asarray(prices, dtype=np.float64)
     if ndim == 2 and arr.ndim == 1:
         arr = arr[:, None]
+    if ndim == 1 and arr.ndim == 2 and arr.shape[1] == 1:
+        arr = arr[:, 0]
     if arr.ndim != ndim:
         raise ValueError(f"prices must be {ndim}-D, got shape {arr.shape}.")
     if arr.shape[0] < min_length:

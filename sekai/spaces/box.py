@@ -102,7 +102,8 @@ class Box(Space[NDArray[Any]]):
         high_arr = _as_bound(high, dtype_, "high")
 
         if shape is not None:
-            shape = tuple(shape)
+            # Python ints, so NumPy integers in shape= do not leak into repr() or to_jsonable().
+            shape = tuple(int(d) for d in shape)
             low_arr = np.full(shape, low_arr, dtype=dtype_)
             high_arr = np.full(shape, high_arr, dtype=dtype_)
         else:

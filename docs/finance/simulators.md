@@ -254,7 +254,16 @@ $$
 $$
 
 with $\lambda$ = `listing_rate` and $\delta$ = `delisting_rate` per year. In the long run
-an asset is listed a fraction $\lambda / (\lambda + \delta)$ of the time. Whenever fewer
+(leaving aside the `min_listed` floor) an asset is listed a fraction
+
+$$
+\frac{\Pr(\text{list})}{\Pr(\text{list}) + \Pr(\text{delist})}
+= \frac{1 - e^{-\lambda\Delta t}}{\big(1 - e^{-\lambda\Delta t}\big) + \big(1 - e^{-\delta\Delta t}\big)}
+$$
+
+of the time, the stationary probability of the chain. It tends to $\lambda / (\lambda + \delta)$
+as $\Delta t \to 0$ and is close to it for daily steps, but not for long ones: with
+$\lambda = 1$, $\delta = 0.25$ and $\Delta t = 1$ year it is 0.741, not 0.8. Whenever fewer
 than `min_listed` assets are listed, the lowest-index unlisted ones are listed. Prices come
 from the inner path (NaN while unlisted, `mask` False), so an asset that relists resumes
 from where its inner path has got to; the inner model's state passes through.

@@ -37,6 +37,27 @@
   border-radius: 0.2rem;
 }
 
+/* Finance dashboards: large enough to read their labels, two to a row on wide screens. */
+.sk-env-preview--wide {
+  max-width: 600px;
+  width: 100%;
+}
+.sk-dashboards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.8rem;
+}
+.sk-dashboards figure {
+  margin: 0;
+}
+.sk-dashboards img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+
 /* Signatures in the API reference: a little more breathing room. */
 .doc-signature {
   margin-bottom: 0.6rem;

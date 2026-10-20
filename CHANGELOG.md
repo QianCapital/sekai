@@ -24,15 +24,18 @@ documentation site.
   `action_space.sample(mask=...)`. `sekai.get_action_mask(env)` finds it through wrappers,
   `check_env` samples random actions with it (and reports malformed masks),
   `ActionMaskObservation` adds it to the observation, and `to_gymnasium()` exposes it as
-  `action_masks()` for sb3-contrib's MaskablePPO.
+  `action_masks()` for sb3-contrib's MaskablePPO. `MultiDiscrete.sample(mask=...)` and
+  `flatten_action_mask()` reject mask entries with the wrong number of flags, and
+  `RescaleAction` passes the env's zero for the components the env masks.
 - Wrappers `PadSequenceObservation` (Sequence → MaskedBox), `ActionMaskObservation`, and
   `DelayAction` (order latency: actions execute `delay` steps after they are chosen).
 - `FrameStackObservation` stacks any batchable observation space (Dict, Tuple, MaskedBox,
   Discrete, ...), leaf by leaf, with `padding="reset"` or `"zeros"`.
 - `NormalizeObservation` / `VecNormalizeObservation` normalise nested observation spaces (each Box
   leaf, MaskedBox leaves per feature over occupied slots only, other leaves passed through), can
-  use exponentially weighted statistics for non-stationary data (`stats="ewm", halflife=...`),
-  clip (`clip=`), and save/restore with `state_dict()` / `load_state_dict()`.
+  use exponentially weighted statistics for non-stationary data (`stats="ewm", halflife=...`;
+  the half-life counts steps, so it needs no scaling with `num_envs`), clip (`clip=`), and
+  save/restore with `state_dict()` / `load_state_dict()`.
   `sekai.ExponentialMovingStats` is the EWM counterpart of `RunningMeanStd`.
 
 **Vectorisation**
@@ -44,7 +47,11 @@ documentation site.
   (`vectorization_mode=None` → `"native"` when available, else `"sync"`). Native envs take
   `max_episode_steps` and truncate exactly like `TimeLimit` (`infos[i]["elapsed_steps"]` and
   `get_attr("elapsed_steps")` included), and `set_attr()` raises `AttributeError` for names the
-  env doesn't have.
+  env doesn't have. They raise `ResetRequired` when stepped before `reset()` and accept the
+  same seeds as every VecEnv. A member that is the same for every sub-env can be marked
+  `@sekai.vector.shared`, so `get_attr()` / `call()` return it whole instead of splitting it
+  by sub-env. An ID registered with `additional_wrappers` vectorises with `SyncVecEnv`
+  (explicit `"native"` raises), since a native env can't apply them.
 - Episode samplers have a `spawn()` hook: `make_vec()` (every backend) and the native finance
   envs give each sub-env `sampler.spawn()`, so sub-envs behave as independent copies of the env.
   `SequentialStart` spawns a fresh copy, so with `sampler="sequential"` every sub-env replays
@@ -56,7 +63,8 @@ documentation site.
   `allow_short`) and the data are read-only. Likewise `episode_length` and `lookback` are
   read-only on `Trading-v0`, `Portfolio-v0` and `Market-v0`.
 - `ProcVecEnv(num_workers=..., shared_memory=...)`: observations travel through shared memory
-  (fixed-size spaces, on by default) and several sub-envs can share a worker process.
+  (fixed-size spaces, on by default) and several sub-envs can share a worker process. A dead
+  worker that hosts several sub-envs is reported as `Worker w (sub-envs a-b) raised ...`.
 - `sekai bench --mode auto|native|sync|async|proc --workers N`; `sekai list` marks environments
   with a native vector implementation.
 
@@ -69,16 +77,23 @@ documentation site.
   makes a decision on one, whatever its lookback (sampler positions, and their error messages,
   count the windows after the warm-up). Timezone-aware timestamps are rejected with
   a message showing how to convert them, never shifted silently.
+  An integer always means a row position (counted within the object, negative from the end)
+  in `index_of()`, `between()`, `split()` and `reset(options={"start": ...})`, on dated and
+  numeric time axes alike; `sekai.finance.Time(t)` looks up a timestamp by value on any axis
+  (`options={"start": Time(info["timestamp"])}` replays an episode). A date on numeric
+  timestamps, or a float on datetime ones, raises `ValueError` instead of picking a row.
 - Episode samplers (`RandomStart`, `SequentialStart`, `FixedStart`) and
-  `reset(options={"start": date})` for every historical environment (a start on a warm-up row
-  raises `ValueError`).
+  `reset(options={"start": ...})` (a row, a date or `Time(t)`) for every historical environment
+  (a start on a warm-up row raises `ValueError`).
 - Market simulators, batch-first with latent state: GBM, Heston, Merton jump-diffusion, regime
   switching, GARCH(1,1), exponential Ornstein-Uhlenbeck, cointegrated pairs, block bootstrap,
   `Randomized` (domain randomisation) and `ListingProcess` (assets list and delist).
 - Causal feature transforms (rolling/EWM statistics, momentum, cross-sectional ranks and
   z-scores), point-in-time `asof_join` with publication lags, and `check_causal`, which detects
   look-ahead bias (raising the new `sekai.LookAheadError`) by rescaling, reordering,
-  sign-flipping and re-masking the future and checking the past is unaffected.
+  sign-flipping and re-masking the future and checking the past is unaffected. Every check
+  includes the first row as a cut point, and an output whose shape depends on the future also
+  raises `LookAheadError`.
 - Cost models (`ProportionalCost`, `SpreadCost`, `FixedCost`, `SquareRootImpact`, composable with
   `+`), weight-space accounting (`AccountConfig`: leverage, shorting, cash, margin and borrow rates),
   and reward functions (`LogReturn`, `ProfitAndLoss`, `MeanVariance`, `DifferentialSharpe`,
@@ -86,11 +101,15 @@ documentation site.
   trade at zero because an input is missing: they raise unless given `fallback_spread=` /
   `fallback_volatility=`. Only NaN (or a negative value) counts as missing; a finite zero
   spread or volatility is valid and costs nothing. Environments reject a volatility-based cost
-  with `lookback=1`, fallback or not.
+  with `lookback=1`, fallback or not. Cost models and `AccountConfig` reject NaN, infinite
+  and (where meaningless) negative parameters.
   `ProfitAndLoss` uses `StepOutcome.pnl`, the exact change in equity, so its rewards sum to
   final equity − 1 even through a wipe-out.
 - Performance metrics (Sharpe, Sortino, Calmar, drawdown, VaR/CVaR, ...), `PerformanceSummary`,
   and the `RecordPerformance` wrapper (`info["performance"]` at the end of each episode).
+  `returns_from_equity()` inverts `equity_curve()` also through a wipe-out, and
+  `pnl_summary(..., scale=)` (which `RecordPerformance` uses in P&L mode) measures rounding
+  against the wealth level, so a constant P&L reports zero volatility, not a huge Sharpe ratio.
 - `SlotMap` (stable slots for a changing universe) and a limit order book: a price-time priority
   matching engine (`OrderBook`) with zero-intelligence Poisson order flow.
 
@@ -103,8 +122,11 @@ documentation site.
   - Finance: `Trading-v0` (single-asset trading), `Portfolio-v0` (multi-asset allocation),
     `MarketMaking-v0` (Avellaneda–Stoikov) and `OptimalExecution-v0` (Almgren–Chriss),
     with simulated markets or your own price history, plus closed-form baselines
-    (`avellaneda_stoikov_action()`, `almgren_chriss_actions()`). Trading and Portfolio accept
-    `MarketData`, any market `model=`, any cost model, a `reward=` function and a `sampler=`.
+    (`avellaneda_stoikov_action()`, `almgren_chriss_actions()`). Trading and Portfolio take
+    exactly one price source: raw prices (`prices=`, arrays or pandas, where a
+    `DatetimeIndex` keeps its dates), a `MarketData` (`data=`, the keyword Market-v0 uses
+    too) or any market `model=`; plus any cost model, a `reward=` function and a `sampler=`.
+    Portfolio-v0's `n_assets` must agree with the history or model when given.
     In both, positions drift with prices between steps and costs are charged on the trade back
     to the target, so they agree exactly on one asset.
   - Episode horizons follow one rule: environments whose horizon is part of the task
@@ -112,12 +134,22 @@ documentation site.
     horizon; those whose episode is a window of an ongoing market (`Trading-v0`,
     `Portfolio-v0`, `Market-v0`) truncate and don't observe time (add `TimeAwareObservation`
     to observe it).
+  - Finance environments raise `ResetRequired` when stepped after the episode ended, check
+    their numeric parameters at construction (`ValueError` naming the parameter), and copy
+    a `reward_fn` set later (also through `set_attr`), so vector sub-envs never share a
+    stateful reward. Read-only accessors expose the current state to renderers and loggers:
+    `timestamp` (Trading, Portfolio, Market), `price_history` (Trading, Portfolio),
+    `latent_state` (Market) and `MarketMaking-v0`'s last quotes and fills (`bid`, `ask`,
+    `bid_filled`, `ask_filled`).
   - `Market-v0`: multi-asset trading over a changing universe (padded-set observations, action
     masks, stable slots), with data fields and exogenous series as features, cost models,
     financing, leverage and shorting, pluggable rewards and optional privileged (latent) state;
     simulated by default from a two-regime market whose assets list and delist.
   - `LimitOrderBook-v0`: event-driven market making and trading in a simulated order book,
     and `LimitOrderBookMarket`, a multi-agent market in which traders act on their own clocks.
+    A trader's market order first cancels its own resting quote on the other side
+    (self-trade prevention), and `LimitOrderBookMarket` checks every action before carrying
+    out any.
   - Native vector versions of the four classic finance environments (`TradingVecEnv`,
     `PortfolioVecEnv`, `MarketMakingVecEnv`, `OptimalExecutionVecEnv`), used by `make_vec()`:
     1.3-2.6 million environment steps per second at 1024 sub-envs on an 8-core machine,
@@ -134,11 +166,49 @@ documentation site.
 - **PettingZoo interop** (`pip install "sekai[pettingzoo]"`): `sekai.compat.to_pettingzoo()` and
   `from_pettingzoo()` convert between `MultiAgentEnv` and PettingZoo's Parallel API.
 - **Rendering**: a dependency-free NumPy `Canvas`, RGB renderers for every classic control
-  env (`CartPoleRenderer`, ...), the `RecordFrames` wrapper and `save_gif()` / `save_video()`.
-- **Wrappers**: `ClipReward`, `RescaleObservation`, `DtypeObservation`, `FilterObservation`,
-  `TimeAwareObservation`, `DelayObservation`, `StickyAction`, `ActionRepeat`.
-- **Vector wrappers**: `VecRecordEpisodeStatistics`, `VecNormalizeObservation`,
-  `VecNormalizeReward`, `VecTransformObservation`, `VecTransformReward`.
+  env (`CartPoleRenderer`, ...), the `RecordFrames` wrapper and `save_gif()` / `save_video()`,
+  which reject float frames, values outside [0, 255] and mixed frame sizes before writing.
+- **Finance renderers** (`sekai.envs.finance`): `TradingRenderer`, `PortfolioRenderer`,
+  `MarketRenderer`, `MarketMakingRenderer`, `OptimalExecutionRenderer`,
+  `LimitOrderBookRenderer` and `LimitOrderBookMarketRenderer` draw each episode as a dashboard:
+  prices (with the lookback window), positions shaded and trades marked, equity against a
+  benchmark, allocations over time, the changing universe, quotes and fills, the
+  Almgren–Chriss schedule, and the order book as a depth ladder with the agent's orders at
+  their place in the queue. They take `width`, `height`, `theme` and `window` (a scrolling
+  time axis), and draw a frame in 10–20 ms.
+- **Dashboards** (`sekai.rendering.Dashboard`): renderers for any environment, assembled from
+  charts that read its state through sources (attribute paths or functions) and record it per
+  episode. A new episode is detected from `elapsed_steps`, with one history per env. The charts
+  are `LineChart` with `Series` (rebased, signed, step or shaded), `BarChart` and
+  `StackedArea`; `sekai.finance.rendering` adds `PriceChart`, `OrderBookChart` and
+  `UniverseChart`. Dashboards also provide `Row` / `Column` layouts, a header of `Stat`s with
+  their change since the start, a time axis shared across charts, and `Panel` for charts of
+  your own. `sekai.rendering.charts` holds the drawing helpers (`Plot`, `nice_ticks`,
+  `format_number`, ...).
+- **Themes**: `sekai.rendering.LIGHT` and `DARK`, in the Qian Capital palette. Colours are named
+  by role (the `up` / `down` polarity pair, `accent`, `highlight`, ...), with an eight-colour
+  categorical palette checked for colour-vision deficiency. `Theme.with_colors()` adapts a
+  theme.
+- `Canvas(..., antialias=True)` draws shapes with exact edge coverage, and every shape takes
+  `alpha=`. Canvas also gains `clip()`, rounded `rect(radius=)`, dashed lines,
+  `fill_between()`, `image()` and `text()`. Text uses BDO Grotesk glyphs rasterised ahead of
+  time (9–32 px, regular and bold, kerned, with tabular digits), shipped under the SIL Open
+  Font License, so the package's license expression is now `Apache-2.0 AND OFL-1.1`.
+  `sekai.rendering.text_width()` measures text. Without `antialias`, existing shapes draw
+  exactly as before.
+- `save_gif()` gives an RGB GIF's frames one shared palette, so each frame stores only what
+  changed (animated charts come out about half the size) and colours can't flicker. Frames
+  with 256 colours or fewer are saved exactly.
+- `examples/render_finance.py` records every finance environment with a baseline policy; it
+  produced the documentation's animations.
+- **Wrappers**: `ClipReward` (`None` leaves a side unbounded), `RescaleObservation`,
+  `DtypeObservation`, `FilterObservation`, `TimeAwareObservation`, `DelayObservation`,
+  `StickyAction`, `ActionRepeat`. Stateful wrappers (`TimeLimit`, `TimeAwareObservation`,
+  `FrameStackObservation`, `DelayObservation`, `DelayAction`, `StickyAction`) warn when built
+  around an `AutoReset`, which must be the outermost wrapper.
+- **Vector wrappers**: `VecRecordEpisodeStatistics` (each episode recorded once, with
+  autoreset on or off), `VecNormalizeObservation`, `VecNormalizeReward`,
+  `VecTransformObservation` and `VecTransformReward` (which take `func`, like gymnasium's).
 - `sekai.make_vec(id, num_envs, vectorization_mode="sync" | "async" | "proc")`.
 - `sekai.make(..., max_episode_steps=N)` overrides the registered time limit (`-1` removes it);
   `make()` also accepts an `EnvSpec`. The spec attached to the env records the kwargs actually used.
@@ -152,8 +222,14 @@ documentation site.
   terminal observations stored by autoreset.
 - Space utilities: `batch_space` for every space type, `concatenate()`, `iterate()`,
   `space_from_jsonable()` / `register_space_type()`, and `from_jsonable()` for `Dict`/`Tuple`.
+  `Dict.seed()` / `Tuple.seed()` take per-sub-space seeds (a dict / list), as their
+  constructors do.
 - `check_env`: `check_determinism` is now implemented; new checks for the async API,
   `Space` types, observation dtypes and observations mutated in place after being returned.
+  It checks every `reset()` (between episodes and `reset(seed=0)` too; one that raises is
+  reported as an error), warns when `reset()` overwrites the terminal observation in place,
+  validates action masks with `flatten_action_mask()`, and records copies for the
+  determinism check.
 - `ResetResult.done` (always `False`), so `result = env.reset()` /
   `while not result.done: result = env.step(...)` works with one variable. Likewise
   `MAResetResult.all_done` / `any_done` and `VecResetResult.dones`.
@@ -162,9 +238,11 @@ documentation site.
   `elapsed_steps` on the finance envs.
 - sekai exceptions can be pickled (e.g. raised inside a `ProcessPoolExecutor` job).
 - `sekai.RunningMeanStd`, with `state_dict()` / `load_state_dict()` to save normalisation stats.
+  Its first batch sets the mean (no variance bias for data far from zero), and empty batches
+  are ignored.
 - A `sekai` command-line tool (also `python -m sekai`): `list`, `info`, `check`, `bench`.
 - `py.typed`: sekai now ships type information, and type-checks clean under `mypy --strict`.
-- A test suite, GitHub Actions CI on Linux/macOS/Windows and Python 3.10–3.14,
+- A test suite, GitHub Actions CI (Python 3.10–3.14 on Linux, plus macOS and Windows),
   trusted-publishing release workflow, MkDocs documentation site (Qian Capital theme),
   runnable examples.
 
@@ -174,8 +252,12 @@ These change behaviour for code written against 0.1.x:
 
 - **Vector envs reset finished sub-envs automatically** (`autoreset=True`), AutoReset-style:
   the returned observation starts the new episode, and the terminal observation/info are in
-  `infos[i]["final_observation"]` / `["final_info"]`. Pass `autoreset=False` for the old
-  behaviour. Sub-envs already wrapped in `AutoReset` are not reset twice.
+  `infos[i]["final_observation"]` / `["final_info"]`. Sub-envs already wrapped in
+  `AutoReset` are not reset twice. Pass `autoreset=False` to manage resets yourself: a
+  finished sub-env is then frozen until the next `reset()` (where 0.1.x stepped it again).
+  It is not stepped, its action is ignored, and each later step returns its final
+  observation, reward 0, its final `terminated` / `truncated` flags and an empty info, so
+  `while not finished.all()` evaluation loops work with every backend and env.
 - **`Env._set_rng(None)` keeps the current RNG** instead of re-seeding from OS entropy, so
   `reset(seed=s)` followed by plain `reset()` calls is reproducible (gymnasium semantics).
   Previously every unseeded reset drew fresh entropy.
@@ -208,6 +290,10 @@ These change behaviour for code written against 0.1.x:
   `isinstance(r, Renderer)`. Context-manager support moved to `BaseRenderer`.
 - `Box` reprs show exact bounds without float32 noise, and per-dimension bounds when they differ.
 - `check_env` reports each per-step problem once, with how many steps showed it.
+- A custom `Space` subclass without `__eq__` compares by identity (it used to equal every
+  instance of its type), and `MultiDiscrete` equality includes the dtype.
+- `Dict` / `Tuple` raise `ValueError` for seeds that name unknown keys or extra sub-spaces,
+  instead of ignoring them.
 - Wrapper argument validation raises `TypeError` / `ValueError` instead of `AssertionError`
   (asserts disappear under `python -O`). `Wrapper(...)` rejects objects that aren't `sekai.Env`.
 - Optional dependency groups: `all` now installs the runtime extras
@@ -217,6 +303,9 @@ These change behaviour for code written against 0.1.x:
 
 - `sekai.backend` (`BackendOps`, `NumpyBackend`) warns on import and will be removed in 0.3. Nothing
   in sekai used it; for fast batched simulation write a native vector environment instead.
+  `sekai.BackendMismatch` goes with it: it is no longer in `sekai.__all__` and warns when used.
+- The `fn=` keyword of `TransformObservation` / `TransformReward`: the argument is now `func`,
+  gymnasium's name (positional calls are unaffected). `fn=` warns and will be removed in 0.3.
 
 ### Fixed
 
@@ -258,6 +347,18 @@ These change behaviour for code written against 0.1.x:
 - A sub-env whose `close()` raised stopped `VecEnv.close()` from closing the others, and made
   `ProcVecEnv.close()` wait out its whole timeout; every sub-env is now closed, the first error
   is raised afterwards, and workers that ignore termination are killed.
+- `SyncVecEnv`, `AsyncVecEnv` and `ProcVecEnv` leaked the sub-envs already built when building
+  another one failed; they are closed before the error propagates.
+- `ProcVecEnv` left an "Exception ignored ... BufferError" message at exit after an error.
+- `unflatten()` could return values outside the space (a float64 `Box` just above its upper
+  bound; an int64 `Box` value near the dtype's maximum with its sign flipped). `Box` values
+  are now clipped into the bounds, integer ones rounded without overflow, and `MultiBinary`
+  values thresholded at 0.5.
+- Vector envs dropped every action when the action space contained an empty `Dict` / `Tuple`.
+- `MultiBinary.contains()` and `MultiDiscrete.contains()` raised on ragged input instead of
+  returning `False`.
+- `Box` kept NumPy integers in its shape, so its `to_jsonable()` output could not be
+  serialised to JSON.
 
 ## [0.1.2] - 2026-05-06
 

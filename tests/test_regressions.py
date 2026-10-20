@@ -22,6 +22,7 @@ from sekai.finance import (
     SequentialStart,
     SquareRootImpact,
     StepOutcome,
+    Time,
 )
 from sekai.finance.simulators import GBM
 from sekai.spaces import MaskedBox, Sequence, batch_space
@@ -177,17 +178,18 @@ def test_a_cost_of_the_whole_account_wipes_it_out() -> None:
     assert r.terminated and r.info["equity"] == 0.0
 
 
-def test_integer_start_is_a_timestamp_on_numeric_axes() -> None:
-    _, test = history(1000, 1).split(0.5)
-    env = TradingEnv(test, episode_length=20, lookback=10)
-    r = env.reset(seed=0, options={"start": 800})
+def test_integer_start_is_a_row_and_time_a_timestamp_on_numeric_axes() -> None:
+    _, test = history(1000, 1).split(0.5)  # timestamps 500..999
+    env = TradingEnv(data=test, episode_length=20, lookback=10)
+    r = env.reset(seed=0, options={"start": Time(800)})
     assert r.info["timestamp"] == 800
-    replay = env.reset(seed=0, options={"start": r.info["timestamp"]})
+    replay = env.reset(seed=0, options={"start": Time(r.info["timestamp"])})
     assert replay.info["timestamp"] == 800
+    assert env.reset(seed=0, options={"start": 300}).info["timestamp"] == 800  # row 300
 
 
 def test_sequential_epoch_flips_after_the_last_window() -> None:
-    env = PortfolioEnv(history(), episode_length=50, lookback=10, sampler=SequentialStart())
+    env = PortfolioEnv(data=history(), episode_length=50, lookback=10, sampler=SequentialStart())
     sampler = env._history.sampler  # type: ignore[union-attr]
     starts = []
     while sampler.epoch == 0:  # type: ignore[attr-defined]
@@ -216,7 +218,9 @@ def test_per_asset_cost_parameters_follow_assets_not_slots() -> None:
 
 
 def test_echoing_observed_weights_charges_no_ticket_fees() -> None:
-    env = PortfolioEnv(history(), episode_length=20, lookback=5, transaction_cost=FixedCost(5.0))
+    env = PortfolioEnv(
+        data=history(), episode_length=20, lookback=5, transaction_cost=FixedCost(5.0)
+    )
     env.reset(seed=0)
     obs = env.step(np.ones(4, np.float32)).observation
     for _ in range(5):
@@ -242,7 +246,7 @@ def test_differential_sharpe_is_identical_for_scalars_and_batches() -> None:
 def test_native_portfolio_is_bit_identical_and_infos_match() -> None:
     data = history(400, 5)
     common = {
-        "prices": data,
+        "data": data,
         "episode_length": 30,
         "lookback": 8,
         "sampler": 40,
@@ -264,7 +268,7 @@ def test_native_portfolio_is_bit_identical_and_infos_match() -> None:
 def test_native_timestamps_stay_datetimes() -> None:
     data = MarketData(history().prices, timestamps=np.datetime64("2024-01-01") + np.arange(300))
     vec = sekai.make_vec(
-        "Trading-v0", 2, prices=data.select(["asset_0"]), episode_length=10, lookback=5
+        "Trading-v0", 2, data=data.select(["asset_0"]), episode_length=10, lookback=5
     )
     info = vec.reset(seed=0).infos[0]
     assert isinstance(info["timestamp"], np.datetime64)

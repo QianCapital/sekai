@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import Sequence
-from typing import Any, Generic
+import contextlib
+from collections.abc import Callable, Sequence
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 
@@ -12,6 +13,11 @@ from sekai.core.result import ResetResult, StepResult
 from sekai.error import VecEnvClosed
 from sekai.spaces.space import Space
 from sekai.vector.result import VecResetResult, VecStepResult
+
+_E = TypeVar("_E")
+
+# One generator cannot seed num_envs sub-envs independently.
+GENERATOR_SEED_ERROR = "VecEnv.reset() takes an int seed or a list of seeds, not a Generator."
 
 
 class VecEnv(abc.ABC, Generic[ObsType, ActType]):
@@ -30,6 +36,13 @@ class VecEnv(abc.ABC, Generic[ObsType, ActType]):
     first observation of the new episode; the terminal observation and info
     are in `infos[i]["final_observation"]` and `infos[i]["final_info"]`, and the
     reset info in `infos[i]["reset_info"]`. This matches the AutoReset wrapper.
+
+    Without autoreset (`autoreset=False`), a sub-env that finishes an episode is
+    frozen until the next reset(): it is not stepped again and its action is
+    ignored, and every later step() returns, for it, its final observation,
+    reward 0, its final terminated / truncated flags (so `dones` stays True) and
+    an empty info. A sub-env that resets itself (e.g. wrapped in AutoReset, so
+    its info carries final_observation) is not frozen.
 
     Every VecEnv has async_step()/async_reset(); by default they run the sync
     methods (AsyncVecEnv overrides them to run sub-envs concurrently). As with
@@ -146,7 +159,7 @@ class VecEnv(abc.ABC, Generic[ObsType, ActType]):
         if seed is None:
             return [None] * self.num_envs
         if isinstance(seed, np.random.Generator):
-            raise TypeError("VecEnv.reset() takes an int seed or a list of seeds, not a Generator.")
+            raise TypeError(GENERATOR_SEED_ERROR)
         from sekai.utils.seeding import make_seed_sequence
 
         return list(make_seed_sequence(int(seed), self.num_envs))
@@ -231,6 +244,19 @@ def env_call(env: Any, name: str, args: Any, kwargs: Any) -> Any:
     return attr(*args, **kwargs) if callable(attr) else attr
 
 
+def build_envs(env_fns: Sequence[Callable[[], _E]]) -> list[_E]:
+    """Call every env_fn; if one raises, close the envs already built, then re-raise."""
+    envs: list[_E] = []
+    try:
+        for fn in env_fns:
+            envs.append(fn())
+    except BaseException:
+        with contextlib.suppress(Exception):  # the construction error is the one to report
+            close_envs(envs)
+        raise
+    return envs
+
+
 def close_envs(envs: Sequence[Any]) -> None:
     """Close every env, then re-raise the first error, so one failure leaks no other env."""
     error: Exception | None = None
@@ -251,6 +277,21 @@ def needs_autoreset(result: StepResult[Any]) -> bool:
     new episode's first observation.
     """
     return result.done and "final_observation" not in result.info
+
+
+def frozen_step(final: StepResult[Any]) -> StepResult[Any]:
+    """What a finished sub-env returns, without being stepped, while autoreset is off.
+
+    Its final observation and terminated / truncated flags, reward 0 and a new empty
+    info (see VecEnv); `final` is the step that finished its episode.
+    """
+    return StepResult(
+        observation=final.observation,
+        reward=0.0,
+        terminated=final.terminated,
+        truncated=final.truncated,
+        info={},
+    )
 
 
 def merge_autoreset(step: StepResult[Any], reset: ResetResult[Any]) -> StepResult[Any]:

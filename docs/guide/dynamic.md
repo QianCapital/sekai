@@ -133,8 +133,13 @@ accepts ([Masked sampling](spaces.md#masked-sampling)):
 | Action space | `action_mask()` returns |
 |---|---|
 | `Discrete(n)` | an `int8` array `(n,)`; 1 = allowed |
-| `MultiDiscrete(nvec)` | a tuple of `int8` arrays, one per entry, or one array padded to `max(nvec)` |
+| `MultiDiscrete(nvec)` | a tuple of `int8` arrays, one per entry (entry `i` of length `nvec[i]`), or one array padded to `max(nvec)` |
 | `Box` | an array broadcastable to the shape; 0 = that component must stay at zero |
+
+For a `Box`, "zero" is the action space's `zero()` (zero clipped into the bounds).
+`RescaleAction` changes the policy's action space, so it sends the env's zero for every masked
+component itself: sampling in `[-1, 1]` with the env's mask gives 0 there, which would
+otherwise reach the env as the middle of its range.
 
 The method can live on the env or on any wrapper. A wrapper that forbids shorting in
 `Trading-v0` (whose actions are short / flat / long):
@@ -165,7 +170,7 @@ Everything that samples or learns picks the mask up from the same method:
 | Consumer | How it gets the mask |
 |---|---|
 | your own loop | `sekai.get_action_mask(env)`, or `env.action_mask()` directly |
-| [`check_env`](checking.md) | samples every random action with the env's mask, and reports a mask that `sample()` rejects |
+| [`check_env`](checking.md) | samples every random action with the env's mask, and reports a mask that `sample()` or `flatten_action_mask()` rejects |
 | a policy that applies the mask itself (masked logits) | `ActionMaskObservation(env)` adds the mask to the observation |
 | vector envs | `vec.call("action_mask")` returns one mask per sub-env |
 | sb3-contrib's `MaskablePPO` | `to_gymnasium(env)` has an `action_masks()` method returning the flat boolean mask it looks for |

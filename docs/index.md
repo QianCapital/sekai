@@ -36,7 +36,7 @@ Stable-Baselines3, CleanRL, RLlib and multi-agent libraries work out of the box.
 ## Install
 
 ```bash
-pip install sekai                 # NumPy is the only hard dependency
+pip install sekai                 # needs only NumPy and cloudpickle
 pip install "sekai[gymnasium]"    # + gymnasium bridge (SB3, CleanRL, RLlib, ...)
 pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, video export
 ```

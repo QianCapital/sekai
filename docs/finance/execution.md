@@ -133,7 +133,7 @@ data = MarketData(prices, fields={"volume": np.full(prices.shape, 2e6),
                                   "spread": np.full(prices.shape, 5e-4)})
 
 for capital in (1e6, 1e8, 1e9):
-    env = sekai.make("Portfolio-v0", prices=data, lookback=60, episode_length=252,
+    env = sekai.make("Portfolio-v0", data=data, lookback=60, episode_length=252,
                      transaction_cost=SpreadCost() + SquareRootImpact(0.5), capital=capital)
     env.reset(seed=0)
     info = env.step(np.ones(5, np.float32)).info
@@ -350,7 +350,9 @@ equity 1.0079  drawdown penalty 0.0200  reward -0.03030
 Pass a reward to any of `Trading-v0`, `Portfolio-v0` or `Market-v0` (and their native vector
 versions) with `reward=`. Each environment keeps its own copy (a deep copy, so one
 stateful reward passed to several environments, or to `make_vec`, never shares state
-between them) and resets it at every episode start:
+between them) and resets it at every episode start. Setting `env.reward_fn` later stores
+a copy too, so `vec.set_attr("reward_fn", DifferentialSharpe(0.1))`, which hands every
+sub-env the same object, still gives each its own state:
 
 ```python
 from sekai.finance import DifferentialSharpe

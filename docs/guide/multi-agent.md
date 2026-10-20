@@ -121,7 +121,8 @@ slower trader decides every minute, an execution algorithm wakes up on fills. se
 convention for such environments:
 
 - `observations` holds only the agents that act next; its keys say who moves;
-- `step()` takes actions from exactly those agents;
+- `step()` takes actions from exactly those agents, and checks them all before carrying out
+  any, so a step that raises (an invalid action, a missing agent) leaves the env unchanged;
 - `rewards`, `terminated`, `truncated` and `info` cover every agent, so a reward earned
   between an agent's decisions is not lost.
 
@@ -132,8 +133,10 @@ transition. Steps then have different lengths for different agents; discount by 
 
 `sekai.envs.finance.LimitOrderBookMarket` is the built-in example: several traders in one
 limit order book, trader `i` deciding every `decision_intervals[i]` units of session time
-(the [finance documentation](../finance/index.md) covers the market itself). With intervals
-of 1, 2 and 5, all three act first, then only the fast one:
+(the [finance documentation](../finance/index.md) covers the market itself). One trader's
+market order can fill another's resting quote but never its own (self-trade prevention:
+it first cancels the trader's quote on the opposite side). With intervals of 1, 2 and 5,
+all three act first, then only the fast one:
 
 ```python
 from sekai.envs.finance import LimitOrderBookMarket
@@ -169,7 +172,8 @@ while not result.all_done:
 print(decisions)  # {'trader_0': 60, 'trader_1': 30, 'trader_2': 12}
 ```
 
-On the last step every agent receives a final observation.
+On the last step every agent receives a final observation; `env.agents` is then empty, and
+another `step()` raises `ResetRequired` until the next `reset()`.
 
 ## Action masks
 

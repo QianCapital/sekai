@@ -32,6 +32,7 @@ from sekai.finance import (
     SpreadCost,
     SquareRootImpact,
     StepOutcome,
+    Time,
     TurnoverPenalty,
 )
 from sekai.finance.account import project_weights, settle, turnover
@@ -492,7 +493,7 @@ class TestCostsAreNeverSilentlyFree:
             if kind == "market":
                 return MarketEnv(data=data, transaction_cost=cost, **options)
             env_cls = TradingEnv if kind == "trading" else PortfolioEnv
-            return env_cls(data, transaction_cost=cost, **options)
+            return env_cls(data=data, transaction_cost=cost, **options)
 
         with pytest.raises(ValueError, match="lookback=1"):
             build(SquareRootImpact(0.5), 1)
@@ -537,7 +538,7 @@ class TestZeroInputsAreValid:
     def test_flat_window_trades_at_zero_impact(self) -> None:
         prices = self.flat_prices()
         env = TradingEnv(
-            MarketData(prices, fields={"volume": np.full(200, 1e5)}),
+            data=MarketData(prices, fields={"volume": np.full(200, 1e5)}),
             lookback=5,
             episode_length=150,
             transaction_cost=SquareRootImpact(),
@@ -551,7 +552,7 @@ class TestZeroInputsAreValid:
         spread = np.full(200, 4e-4)
         spread[50] = 0.0
         env = TradingEnv(
-            MarketData(self.flat_prices(), fields={"spread": spread}),
+            data=MarketData(self.flat_prices(), fields={"spread": spread}),
             lookback=5,
             episode_length=150,
             transaction_cost=SpreadCost(),
@@ -610,24 +611,27 @@ class TestWarmup:
 
     def test_no_env_decides_on_a_warmup_row(self) -> None:
         _, test = make_data(dates=False).split(0.8, embargo=3, history=30)
-        first = 243  # the first test row; rows 213..242 are warm-up
+        first = 243  # the first test row (row 30); rows 0..29, stamped 213..242, are warm-up
         complete = test.select(["A0", "A1"])
         envs: list[Any] = [
             MarketEnv(data=test, lookback=5, episode_length=10),
-            TradingEnv(test.select(["A0"]), lookback=5, episode_length=10),
-            PortfolioEnv(complete, lookback=5, episode_length=10),
+            TradingEnv(data=test.select(["A0"]), lookback=5, episode_length=10),
+            PortfolioEnv(data=complete, lookback=5, episode_length=10),
         ]
         for env in envs:
             seen = {env.reset(seed=seed).info["timestamp"] for seed in range(40)}
             assert min(seen) >= first, type(env).__name__
             with pytest.raises(ValueError, match="warm-up"):
-                env.reset(options={"start": 230})
-            assert env.reset(options={"start": first}).info["timestamp"] == first
+                env.reset(options={"start": Time(230)})
+            with pytest.raises(ValueError, match="warm-up"):
+                env.reset(options={"start": 17})  # the same row, by position
+            assert env.reset(options={"start": Time(first)}).info["timestamp"] == first
+            assert env.reset(options={"start": 30}).info["timestamp"] == first
         fixed = MarketEnv(data=test, lookback=5, episode_length=10, sampler=0)
         assert fixed.reset(seed=0).info["timestamp"] == first
         for vec in (
-            TradingVecEnv(8, prices=test.select(["A0"]), lookback=5, episode_length=10),
-            PortfolioVecEnv(8, prices=complete, lookback=5, episode_length=10),
+            TradingVecEnv(8, data=test.select(["A0"]), lookback=5, episode_length=10),
+            PortfolioVecEnv(8, data=complete, lookback=5, episode_length=10),
         ):
             stamps = [info["timestamp"] for info in vec.reset(seed=0).infos]
             assert min(stamps) >= first
@@ -644,8 +648,8 @@ class TestWarmup:
             r"\(positions 0\.\.179: window starts 50\.\.229, first decisions at rows 60\.\.239\)"
         )
         with pytest.raises(ValueError, match=expected):
-            PortfolioEnv(test, sampler=200, **options).reset(seed=0)
-        last = PortfolioEnv(test, sampler=179, **options).reset(seed=0)
+            PortfolioEnv(data=test, sampler=200, **options).reset(seed=0)
+        last = PortfolioEnv(data=test, sampler=179, **options).reset(seed=0)
         assert last.info["timestamp"] == test.timestamps[239]
 
 
@@ -678,3 +682,120 @@ class TestTimezones:
         utc = MarketData.from_pandas(frame.tz_convert("UTC").tz_localize(None))
         assert local.timestamps[0] == np.datetime64("2024-01-01T16:00")
         assert utc.timestamps[0] == np.datetime64("2024-01-01T21:00")
+
+
+class TestRowsAndTimestamps:
+    """An int was a row position on datetime axes but a timestamp on numeric ones."""
+
+    def test_integers_are_row_positions_on_every_axis(self) -> None:
+        prices = 100 + np.arange(1000.0)
+        late = MarketData(prices)[100:]  # numeric timestamps 100..999
+        a, b = late.split(300)  # used to cut at timestamp 300, i.e. row 200
+        assert len(a) == 300 and b.timestamps[0] == 400
+        assert late.index_of(300) == 300 and late.index_of(-1) == 899
+        assert late.between(100, 200).timestamps[[0, -1]].tolist() == [200, 299]
+        _, test = MarketData(prices).split(0.8)  # timestamps 800..999
+        first, second = test.split(50)  # used to raise "got rows [0]"
+        assert (len(first), second.timestamps[0]) == (50, 850)
+        dated = make_data()
+        assert dated.index_of(5) == 5 and len(dated.split(100)[0]) == 100
+
+    def test_time_looks_up_timestamps(self) -> None:
+        late = MarketData(100 + np.arange(1000.0))[100:]
+        assert late.index_of(Time(300)) == 200 and late.index_of(300.0) == 200
+        assert late.index_of(Time(300), side="right") == 201
+        assert len(late.split(Time(300))[0]) == 200
+        with pytest.raises(ValueError, match=r"pass Time\(300\.0\) to split at a timestamp"):
+            late.split(300.0)  # a float is a fraction in split()
+        assert late.between(Time(150), Time(250)).timestamps[[0, -1]].tolist() == [150, 249]
+        dated = make_data()
+        assert dated.index_of(Time("2021-01-03")) == dated.index_of("2021-01-03") == 2
+        assert repr(Time(5)) == "Time(5)" and Time(5) == Time(5)
+        for bad in (None, True, [1, 2]):
+            with pytest.raises(TypeError, match="Time takes"):
+                Time(bad)
+
+    def test_timestamps_must_suit_the_axis(self) -> None:
+        numeric = MarketData(100 + np.arange(1000.0))
+        dated = make_data()
+        with pytest.raises(ValueError, match="not a number"):
+            numeric.index_of("2020-03-02")
+        with pytest.raises(ValueError, match="not a number"):
+            numeric.split(Time(np.datetime64("2020-03-02")))
+        with pytest.raises(ValueError, match="not a date"):
+            dated.index_of(1.5)
+        with pytest.raises(ValueError, match="not a date"):
+            dated.between(Time(5))
+        with pytest.raises(ValueError, match="not finite"):
+            numeric.index_of(np.nan)
+        with pytest.raises(TypeError, match="row position"):
+            numeric.index_of(True)
+
+    def test_start_options(self) -> None:
+        # Regression: a date on a numeric axis was compared as a string with the integer
+        # timestamps and started the episode at an arbitrary row (2021 for "2020-03-02").
+        with pytest.raises(ValueError, match=r"start '2020-03-02' is not a number"):
+            resolve_start("2020-03-02", timestamps=np.arange(5000), lookback=10, n_starts=100)
+        _, test = MarketData(100 + np.arange(1000.0)).split(0.5)  # timestamps 500..999
+        kwargs: dict[str, Any] = {"timestamps": test.timestamps, "lookback": 10, "n_starts": 470}
+        assert resolve_start(300, **kwargs) == 290  # row 300
+        assert resolve_start(Time(800), **kwargs) == resolve_start(800.0, **kwargs) == 290
+        with pytest.raises(ValueError, match=r"row position; for the timestamp 800, pass Time"):
+            resolve_start(800, **kwargs)
+        env = MarketEnv(data=test, lookback=10, episode_length=20)
+        stamp = env.reset(seed=3).info["timestamp"]
+        assert env.reset(options={"start": Time(stamp)}).info["timestamp"] == stamp
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: ProportionalCost(np.nan),
+        lambda: ProportionalCost([1e-3, -1e-3]),
+        lambda: SpreadCost(half_spread=np.nan),
+        lambda: SpreadCost(half_spread=np.inf),
+        lambda: SpreadCost(half_spread=[1e-4, np.nan]),
+        lambda: SpreadCost(half_spread=-1e-4),
+        lambda: SpreadCost(fallback_spread=np.nan),
+        lambda: FixedCost(np.nan),
+        lambda: FixedCost(np.inf),
+        lambda: FixedCost(-1.0),
+        lambda: FixedCost(1.0, threshold=np.nan),
+        lambda: FixedCost(1.0, threshold=-1.0),
+        lambda: FixedCost(1.0, threshold=np.inf),
+        lambda: SquareRootImpact(np.nan),
+        lambda: SquareRootImpact(np.inf),
+        lambda: SquareRootImpact(-0.5),
+        lambda: SquareRootImpact(fallback_volatility=np.inf),
+        lambda: as_cost_model(np.nan),
+        lambda: AccountConfig(max_leverage=np.nan),
+        lambda: AccountConfig(max_leverage=np.inf),
+        lambda: AccountConfig(max_leverage=0.0),
+        lambda: AccountConfig(cash_rate=np.nan),
+        lambda: AccountConfig(margin_rate=np.inf),
+        lambda: AccountConfig(borrow_rate=np.nan),
+        lambda: AccountConfig(borrow_rate=-0.01),
+    ],
+)
+def test_invalid_model_parameters_are_refused(build: Any) -> None:
+    # Regression: NaN and infinite parameters (and negative thresholds) were accepted and
+    # priced trades at NaN, inf or the wrong number of tickets.
+    with pytest.raises(ValueError, match=r"finite|positive|non-negative"):
+        build()
+
+
+def test_valid_edge_parameters_are_accepted() -> None:
+    trades = np.array([0.1, 0.0, 0.0])
+    assert FixedCost(5.0, threshold=0.0)(trades, equity=1e6) == pytest.approx(5e-6)
+    assert SpreadCost(half_spread=0.0)(trades) == 0.0
+    assert SquareRootImpact(0.0).coefficient == 0.0
+    assert AccountConfig(cash_rate=-0.005, margin_rate=-0.001).effective_margin_rate == -0.001
+
+
+def test_settlement_and_time_are_exported() -> None:
+    import sekai.finance as finance
+    from sekai.finance import account, data
+
+    assert finance.Settlement is account.Settlement and finance.Time is data.Time
+    assert {"Settlement", "Time"} <= set(finance.__all__)
+    assert all(hasattr(finance, name) for name in finance.__all__)

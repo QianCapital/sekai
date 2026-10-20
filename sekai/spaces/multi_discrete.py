@@ -43,17 +43,11 @@ class MultiDiscrete(Space[NDArray[np.intp]]):
         mask: per entry, an int8 array of length nvec[i] with 1 marking allowed
         values. Give either a tuple of such arrays (nested to match nvec's shape,
         as in gymnasium) or one array whose last axis is padded to max(nvec).
+        A mask of any other shape raises ValueError.
         """
         if mask is not None:
             result = np.zeros(self.nvec.shape, dtype=self.dtype)
-            for idx in np.ndindex(self.nvec.shape):
-                if isinstance(mask, np.ndarray):
-                    m = mask[idx]
-                else:
-                    m = mask
-                    for i in idx:
-                        m = m[i]
-                m = np.asarray(m)[: int(self.nvec[idx])]
+            for idx, m in zip(np.ndindex(self.nvec.shape), self._mask_entries(mask)):
                 valid = np.flatnonzero(m == 1)
                 if len(valid) == 0:
                     raise ValueError(f"All actions masked in dimension {idx}.")
@@ -64,9 +58,57 @@ class MultiDiscrete(Space[NDArray[np.intp]]):
             self.dtype
         )
 
+    def _mask_entries(self, mask: Any) -> list[NDArray[Any]]:
+        """The flags of a mask (see sample()) for each entry, in np.ndindex order.
+
+        Each has length nvec[idx]. Raises ValueError for a mask of the wrong structure or
+        with an entry of the wrong length (flags would otherwise be silently dropped or
+        missing).
+        """
+        if isinstance(mask, np.ndarray):
+            width = int(np.max(self.nvec)) if self.nvec.size else 0
+            if (
+                mask.ndim != self.nvec.ndim + 1
+                or mask.shape[:-1] != self.nvec.shape
+                or mask.shape[-1] < width
+            ):
+                raise ValueError(
+                    f"A mask array for {self!r} must have shape {(*self.nvec.shape, width)} "
+                    f"(one row per entry, padded to max(nvec)), got {mask.shape}."
+                )
+            return [mask[idx][: int(self.nvec[idx])] for idx in np.ndindex(self.nvec.shape)]
+
+        entries: list[NDArray[Any]] = []
+
+        def walk(node: Any, idx: tuple[int, ...]) -> None:
+            if len(idx) == self.nvec.ndim:
+                n = int(self.nvec[idx])
+                flags = np.asarray(node)
+                if flags.shape != (n,):
+                    raise ValueError(
+                        f"The mask for dimension {idx} must have shape ({n},) "
+                        f"(nvec{list(idx)} = {n}), got {flags.shape}."
+                    )
+                entries.append(flags)
+                return
+            size = self.nvec.shape[len(idx)]
+            if not hasattr(node, "__len__") or len(node) != size:
+                found = len(node) if hasattr(node, "__len__") else type(node).__name__
+                raise ValueError(
+                    f"A mask for {self!r} needs {size} sub-masks at dimension {idx}, got {found}."
+                )
+            for i in range(size):
+                walk(node[i], (*idx, i))
+
+        walk(mask, ())
+        return entries
+
     def contains(self, x: Any) -> bool:
         if isinstance(x, (list, tuple)):
-            x = np.asarray(x)
+            try:
+                x = np.asarray(x)
+            except ValueError:  # ragged nesting
+                return False
         if not isinstance(x, np.ndarray):
             return False
         return bool(
@@ -105,5 +147,7 @@ class MultiDiscrete(Space[NDArray[np.intp]]):
         if not isinstance(other, MultiDiscrete):
             return False
         return bool(
-            np.array_equal(self.nvec, other.nvec) and np.array_equal(self.start, other.start)
+            np.array_equal(self.nvec, other.nvec)
+            and np.array_equal(self.start, other.start)
+            and self.dtype == other.dtype
         )

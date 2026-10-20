@@ -10,6 +10,7 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.envs._utils import flat_action
+from sekai.envs.finance._common import check_number, episode_over
 from sekai.error import InvalidAction, ResetRequired
 from sekai.spaces.box import Box
 
@@ -35,10 +36,17 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
       remaining is observed, so this is a true terminal state, not a truncation.
     - **info**: `mid_price`, `inventory`, `cash`, `wealth`, `bid`, `ask`,
       `bid_filled`, `ask_filled`, `timestamp` (session time, in units of `total_time`)
-      and `dt`.
+      and `dt`. The last step's quotes and fills are also the attributes `bid`, `ask`,
+      `bid_filled` and `ask_filled` (NaN and False after `reset()`).
 
     `avellaneda_stoikov_action()` returns the model's closed-form optimal quotes,
-    a strong baseline to compare learned policies against.
+    a strong baseline to compare learned policies against. `step()` after the
+    session has ended raises `ResetRequired`.
+
+    Raises:
+        ValueError: For a parameter out of range: `total_time`, `fill_intensity` and
+            `fill_decay` must be positive, `sigma`, `risk_aversion` and `max_offset`
+            non-negative, `s0` finite, and `n_steps`, `max_inventory`, `order_size` >= 1.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 20}
@@ -59,19 +67,17 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
     ) -> None:
         if n_steps < 1 or max_inventory < 1 or order_size < 1:
             raise ValueError("n_steps, max_inventory and order_size must be >= 1.")
-        if sigma < 0 or fill_intensity <= 0 or fill_decay <= 0 or risk_aversion < 0:
-            raise ValueError("sigma, risk_aversion must be >= 0 and fill parameters > 0.")
-        self.s0 = s0
-        self.sigma = sigma
-        self.total_time = total_time
+        self.s0 = check_number("s0", s0)
+        self.sigma = check_number("sigma", sigma, ">=0")
+        self.total_time = check_number("total_time", total_time, ">0")
         self.n_steps = n_steps
-        self.dt = total_time / n_steps
-        self.A = fill_intensity
-        self.k = fill_decay
-        self.risk_aversion = risk_aversion
+        self.dt = self.total_time / n_steps
+        self.A = check_number("fill_intensity", fill_intensity, ">0")
+        self.k = check_number("fill_decay", fill_decay, ">0")
+        self.risk_aversion = check_number("risk_aversion", risk_aversion, ">=0")
         self.max_inventory = max_inventory
         self.order_size = order_size
-        self.max_offset = max_offset
+        self.max_offset = check_number("max_offset", max_offset, ">=0")
 
         self.observation_space = Box(
             np.array([-1.0, 0.0], dtype=np.float32), np.array([1.0, 1.0], dtype=np.float32)
@@ -83,6 +89,14 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
         self.mid = s0
         self.inventory = 0
         self.cash = 0.0
+        self._clear_quotes()
+
+    def _clear_quotes(self) -> None:
+        # The last step's quotes and fills (NaN / False until the first step of an episode).
+        self.bid = math.nan
+        self.ask = math.nan
+        self.bid_filled = False
+        self.ask_filled = False
 
     @property
     def wealth(self) -> float:
@@ -126,13 +140,14 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
         self.mid = self.s0
         self.inventory = 0
         self.cash = 0.0
-        return ResetResult(
-            observation=self._get_obs(), info=self._info(math.nan, math.nan, False, False)
-        )
+        self._clear_quotes()
+        return ResetResult(observation=self._get_obs(), info=self._info())
 
     def step(self, action: NDArray[np.float32]) -> StepResult[NDArray[np.float32]]:
         if not self._started:
             raise ResetRequired()
+        if self._t >= self.n_steps:
+            raise episode_over()
         a = flat_action(action).astype(np.float64)
         if a.shape != (2,) or not np.all(np.isfinite(a)):
             raise InvalidAction(action, self.action_space)
@@ -143,12 +158,13 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
         can_buy = self.inventory + self.order_size <= self.max_inventory
         can_sell = self.inventory - self.order_size >= -self.max_inventory
         u_bid, u_ask = self.rng.random(2)
-        bid_filled = bool(can_buy and u_bid < self.fill_probability(bid_offset))
-        ask_filled = bool(can_sell and u_ask < self.fill_probability(ask_offset))
-        if bid_filled:
+        self.bid, self.ask = float(bid), float(ask)
+        self.bid_filled = bool(can_buy and u_bid < self.fill_probability(bid_offset))
+        self.ask_filled = bool(can_sell and u_ask < self.fill_probability(ask_offset))
+        if self.bid_filled:
             self.inventory += self.order_size
             self.cash -= self.order_size * bid
-        if ask_filled:
+        if self.ask_filled:
             self.inventory -= self.order_size
             self.cash += self.order_size * ask
 
@@ -162,7 +178,7 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
             reward=float(reward),
             terminated=self._t >= self.n_steps,
             truncated=False,
-            info=self._info(bid, ask, bid_filled, ask_filled),
+            info=self._info(),
         )
 
     def _get_obs(self) -> NDArray[np.float32]:
@@ -171,16 +187,16 @@ class MarketMakingEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
             dtype=np.float32,
         )
 
-    def _info(self, bid: float, ask: float, bid_filled: bool, ask_filled: bool) -> dict[str, Any]:
+    def _info(self) -> dict[str, Any]:
         return {
             "mid_price": self.mid,
             "inventory": self.inventory,
             "cash": self.cash,
             "wealth": self.wealth,
-            "bid": float(bid),
-            "ask": float(ask),
-            "bid_filled": bid_filled,
-            "ask_filled": ask_filled,
+            "bid": self.bid,
+            "ask": self.ask,
+            "bid_filled": self.bid_filled,
+            "ask_filled": self.ask_filled,
             "timestamp": self._t * self.dt,
             "dt": self.dt,
         }

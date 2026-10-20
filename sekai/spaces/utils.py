@@ -40,13 +40,22 @@ def flatdim(space: Space[Any]) -> int:
 
 @singledispatch
 def flatten(space: Space[Any], x: Any) -> NDArray[np.float32]:
-    """Flatten a sample from space into a 1D float32 array."""
+    """Flatten a sample from space into a 1D float32 array.
+
+    float32 holds integers exactly only up to 2**24 in magnitude, and rounds float64
+    values, so such samples do not survive a flatten/unflatten round trip exactly.
+    """
     raise NotImplementedError(f"flatten not implemented for {type(space).__name__}")
 
 
 @singledispatch
 def unflatten(space: Space[Any], x: NDArray[Any]) -> Any:
-    """Unflatten a 1D array back into a valid sample from space."""
+    """Unflatten a 1D array back into a valid sample from space.
+
+    The result is always contained in space: Box values are cast to its dtype
+    (integers rounded) and clipped into its bounds, MultiBinary values are thresholded
+    at 0.5, and (Multi)Discrete one-hots are read with argmax.
+    """
     raise NotImplementedError(f"unflatten not implemented for {type(space).__name__}")
 
 
@@ -85,8 +94,41 @@ def _flatten_box(space: Box, x: NDArray[Any]) -> NDArray[np.float32]:
 
 @unflatten.register(Box)
 def _unflatten_box(space: Box, x: NDArray[Any]) -> NDArray[Any]:
-    assert space.dtype is not None
-    return np.asarray(x).reshape(space.shape).astype(space.dtype)
+    values = np.asarray(x).reshape(space.shape)
+    if np.issubdtype(space.dtype, np.integer):
+        return _to_int_box(space, values)
+    out: NDArray[Any] = values.astype(space.dtype)
+    if np.issubdtype(space.dtype, np.floating):
+        # Clip after the cast: float32 rounding can land a bound one ulp outside (0.1 in
+        # float32 is 0.1000000015 as float64).
+        out = np.clip(out, space.low, space.high)
+    return out
+
+
+def _to_int_box(space: Box, values: NDArray[Any]) -> NDArray[Any]:
+    """values rounded and clipped into an integer Box, without overflow on the cast."""
+    if np.issubdtype(values.dtype, np.integer):
+        if np.can_cast(values.dtype, space.dtype):
+            clipped: NDArray[Any] = np.clip(values.astype(space.dtype), space.low, space.high)
+            return clipped
+        # e.g. int64 into uint8, or uint64 into int64: compare as exact Python ints.
+        low, high = space.low.astype(object), space.high.astype(object)
+        exact = np.minimum(np.maximum(values.astype(object), low), high)
+        return np.asarray(exact).astype(space.dtype)
+    r = np.rint(np.asarray(values, dtype=np.float64))
+    # The bounds as float64 may round (int64's max becomes 2**63), so compare against them
+    # but take the exact integer bound wherever a value reaches it. Strictly between the
+    # rounded bounds, a (whole) float64 value lies within the exact ones and casts safely.
+    low_f, high_f = space.low.astype(np.float64), space.high.astype(np.float64)
+    at_low, at_high = r <= low_f, r >= high_f
+    nan = np.isnan(r)
+    inside = ~(at_low | at_high | nan)
+    out = np.empty(space.shape, dtype=space.dtype)
+    out[inside] = r[inside].astype(space.dtype)
+    out[at_low] = space.low[at_low]
+    out[at_high] = space.high[at_high]
+    out[nan] = space.zero()[nan]
+    return out
 
 
 @flatten_space.register(Box)
@@ -169,7 +211,7 @@ def _flatten_mb(space: MultiBinary, x: NDArray[Any]) -> NDArray[np.float32]:
 
 @unflatten.register(MultiBinary)
 def _unflatten_mb(space: MultiBinary, x: NDArray[Any]) -> NDArray[np.int8]:
-    return np.asarray(x).reshape(space.n).astype(np.int8)
+    return (np.asarray(x).reshape(space.n) > 0.5).astype(np.int8)
 
 
 @flatten_space.register(MultiBinary)
@@ -343,13 +385,45 @@ def iterate(space: Space[Any], batch: Any) -> Iterator[Any]:
     return iter(batch)
 
 
+def _has_data(space: Space[Any]) -> bool:
+    """False for a Dict or Tuple without any other sub-space, e.g. `Dict()` or
+    `Tuple([Dict()])`: its samples (`{}`, `({},)`) are always the same and a batch of
+    them, being the same too, does not record how many samples it holds."""
+    if isinstance(space, Dict):
+        return any(_has_data(sub) for sub in space.values())
+    if isinstance(space, Tuple):
+        return any(_has_data(sub) for sub in space.spaces)
+    return True
+
+
+def _num_rows(space: Space[Any], columns: Sequence[list[Any]]) -> int:
+    """The number of samples in a Dict/Tuple batch, from its sub-batches holding data."""
+    lengths = sorted({len(column) for column in columns})
+    if not lengths:
+        raise ValueError(
+            f"Cannot split a batch of {space!r} into samples: the space has no sub-space "
+            "holding data, so its batches do not record how many samples they hold."
+        )
+    if len(lengths) > 1:
+        raise ValueError(
+            f"The parts of a batch of {space!r} hold different numbers of samples: {lengths}."
+        )
+    return lengths[0]
+
+
 @iterate.register(Dict)
 def _iterate_dict(space: Dict, batch: Any) -> Iterator[Any]:
     if not isinstance(batch, Mapping):
         return iter(batch)
     keys = list(space.keys())
-    columns = [list(iterate(space[key], batch[key])) for key in keys]
-    return (dict(zip(keys, row)) for row in zip(*columns))
+    # An empty sub-Dict/Tuple batches to {} / (), which has no rows of its own: every
+    # sample gets its (constant) value, and the row count comes from the other parts.
+    columns = {key: list(iterate(space[key], batch[key])) for key in keys if _has_data(space[key])}
+    n = _num_rows(space, list(columns.values()))
+    return (
+        {key: columns[key][i] if key in columns else zero_sample(space[key]) for key in keys}
+        for i in range(n)
+    )
 
 
 @iterate.register(Tuple)
@@ -357,8 +431,19 @@ def _iterate_tuple(space: Tuple, batch: Any) -> Iterator[Any]:
     # A tuple is the batched form (one entry per sub-space); a list is per-env samples.
     if not isinstance(batch, tuple):
         return iter(batch)
-    columns = [list(iterate(sub, part)) for sub, part in zip(space.spaces, batch)]
-    return (tuple(row) for row in zip(*columns))
+    columns = {
+        i: list(iterate(sub, part))
+        for i, (sub, part) in enumerate(zip(space.spaces, batch))
+        if _has_data(sub)
+    }
+    n = _num_rows(space, list(columns.values()))
+    return (
+        tuple(
+            columns[j][i] if j in columns else zero_sample(sub)
+            for j, sub in enumerate(space.spaces)
+        )
+        for i in range(n)
+    )
 
 
 # ---------------------------------------------------------------------------

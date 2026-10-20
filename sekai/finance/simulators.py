@@ -1229,7 +1229,9 @@ class ListingProcess(_Model):
     1 - exp(-listing_rate dt) and a listed asset delists with probability
     1 - exp(-delisting_rate dt). Whenever fewer than `min_listed` assets are listed (also at
     t = 0), the lowest-index unlisted assets are listed until `min_listed` are. In the long run
-    an asset is listed a fraction listing_rate / (listing_rate + delisting_rate) of the time.
+    an asset is listed a fraction p_list / (p_list + p_delist) of the steps, where p_list and
+    p_delist are the two step probabilities above; this tends to
+    listing_rate / (listing_rate + delisting_rate) as dt -> 0.
 
     Prices come from the inner model's path; where unlisted they are NaN and `mask` is False.
     If the inner simulation has its own mask, the two are combined with a logical AND

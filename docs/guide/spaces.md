@@ -17,7 +17,10 @@ environments.
 | `MaskedBox` | up to `max_size` `Box` elements in fixed slots, plus a validity mask | `dict`: `"values"` `(max_size, *shape)`, `"mask"` `int8` `(max_size,)` | `MaskedBox(low, high, shape=None, *, max_size, dtype=np.float32, fill_value=None, seed=None)` |
 
 Every space implements `sample(mask=None)`, `contains(x)` (also `x in space`), `seed(seed)`,
-`is_flattenable`, `to_jsonable()` / `from_jsonable()`, `==` and a readable `repr`.
+`is_flattenable`, `to_jsonable()` / `from_jsonable()`, `==` and a readable `repr`. Spaces
+compare by value (a `MultiDiscrete`'s dtype included) and, being mutable, are not hashable.
+`contains()` returns `False`, rather than raising, for anything that is not a member, ragged
+nested lists included.
 
 ## Box
 
@@ -183,7 +186,7 @@ normalising over occupied slots only.
 | Space | Mask format |
 |---|---|
 | `Discrete(n)` | `int8` array (or list) of shape `(n,)`; `1` marks allowed values (all zeros raises `ValueError`) |
-| `MultiDiscrete` | a tuple of `int8` arrays, one per entry (nested to match `nvec`), **or** one array whose last axis is padded to `max(nvec)` |
+| `MultiDiscrete` | a tuple of `int8` arrays, one per entry (nested to match `nvec`) and of length `nvec[i]`, **or** one array of shape `(*nvec.shape, max(nvec))`, each entry's flags padded to `max(nvec)`; another structure or length raises `ValueError` |
 | `MultiBinary` | `int8` array (or list) of the space's shape: `1` forces 1, `0` forces 0, `-1` samples randomly |
 | `Dict` | a dict of sub-masks (missing keys sample unmasked) |
 | `Tuple` | a tuple with one sub-mask (or `None`) per sub-space (another length raises `ValueError`) |
@@ -212,14 +215,20 @@ An environment that restricts its actions publishes the current mask through an
 
 Each space has its own generator, created lazily from OS entropy. Seed it with the `seed=`
 constructor argument or `space.seed(s)` (which returns the seed used). Seeding a `Dict` or
-`Tuple` seeds every sub-space deterministically; pass a dict (`Dict`) or a list (`Tuple`) of
-seeds to seed sub-spaces individually.
+`Tuple` seeds every sub-space deterministically. To seed sub-spaces individually, pass a dict
+of seeds (`Dict`) or a list (`Tuple`, `None` to skip one), to the constructor or to `seed()`
+(which then returns `-1`, as there is no single seed); a key that is not a sub-space, or more
+seeds than sub-spaces, raises `ValueError`.
 
 ```python
 a = sekai.Dict({"x": sekai.Discrete(10), "y": sekai.Box(0, 1, shape=(2,))})
 b = sekai.Dict({"x": sekai.Discrete(10), "y": sekai.Box(0, 1, shape=(2,))})
 a.seed(123)
 b.seed(123)
+print(a.sample()["x"] == b.sample()["x"])  # True
+
+a.seed({"x": 7})
+b["x"].seed(7)
 print(a.sample()["x"] == b.sample()["x"])  # True
 ```
 
@@ -238,6 +247,11 @@ flattenable space to and from a 1-D `float32` array:
 `Box` and `MultiBinary` are raveled; `Discrete` becomes a one-hot vector and `MultiDiscrete`
 concatenated one-hots; `Dict` and `Tuple` concatenate their parts in key/index order, so a
 `MaskedBox` flattens to its values followed by its mask. `Sequence` is not flattenable.
+
+`unflatten()` always returns a member of the space: `Box` values are cast to its dtype (integer
+dtypes rounded) and clipped into its bounds, so `float32` rounding cannot push a value past a
+bound. The flat vector is `float32`, which represents integers exactly only up to `2**24`, so
+larger integer `Box` values (and `float64` values) do not round-trip exactly.
 
 ```python
 from sekai.spaces import flatdim, flatten, flatten_space, unflatten
@@ -283,7 +297,11 @@ print(batch["prices"].shape, batch["regime"].shape)  # (4, 5) (4,)
 print(len(list(iterate(obs_space, batch))))  # 4
 ```
 
-So a batched `Dict` observation is a dict of arrays, not a list of dicts.
+So a batched `Dict` observation is a dict of arrays, not a list of dicts. An empty `Dict` or
+`Tuple` inside a space batches to `{}` / `()`, and `iterate()` gives every sample that same
+value, taking the number of samples from the other parts. A space with nothing but empty
+`Dict`s and `Tuple`s cannot be split: its batches do not record how many samples they hold, so
+`iterate()` raises `ValueError` (and `Sequence(..., stack=True)` rejects it as a feature space).
 
 ## Zero samples
 
@@ -397,3 +415,6 @@ print(batch_space(weights, 8))  # Box(0.0, 1.0, (8, 4), float32)
 
 `iterate()` needs no registration for array-like batches: its default splits along the first
 axis.
+
+`Simplex` defines `__eq__`. A space that does not compares by identity: two instances are equal
+only if they are the same object, and so are two `Sequence`s or `Dict`s holding them.

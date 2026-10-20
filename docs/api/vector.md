@@ -1,6 +1,6 @@
 # Vector
 
-Exported from `sekai` and `sekai.vector`. See the
+Exported from `sekai` and `sekai.vector` (`shared` from `sekai.vector` only). See the
 [Vector environments guide](../guide/vector.md).
 
 ## Vector environments
@@ -23,6 +23,8 @@ Exported from `sekai` and `sekai.vector`. See the
         - rng
       filters: []
       show_if_no_docstring: true
+
+::: sekai.vector.shared
 
 ## Results
 

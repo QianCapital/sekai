@@ -20,10 +20,23 @@ thousands of sub-envs at once. All of them are assembled from the
 [finance toolkit](../finance/index.md), whose parts (market models, cost models, reward
 functions, metrics) they also accept as arguments.
 
+Each has an RGB renderer in `sekai.envs.finance` that draws its episodes as a dashboard
+(`TradingRenderer`, `PortfolioRenderer`, `MarketRenderer`, `MarketMakingRenderer`,
+`OptimalExecutionRenderer`, `LimitOrderBookRenderer` and `LimitOrderBookMarketRenderer`):
+the animations on this page, made by
+[`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).
+See [Rendering](../guide/rendering.md#finance) for what each shows, and for building the same
+kind of renderer for your own environment.
+
 Rewards are additive over an episode: log growth of wealth for `Trading-v0`, `Portfolio-v0`
 and `Market-v0` (or any `reward=` you pass), risk-adjusted P&L for market making in both
 its forms, and minus the implementation-shortfall objective (in basis points) for
 execution. The horizon is part of each environment, so `make()` adds no `TimeLimit`.
+Once an episode has ended (terminated or truncated), `step()` raises `sekai.ResetRequired`
+until the next `reset()`, as it does before the first one; the vector versions reset
+finished sub-envs themselves. Parameters are checked when the environment is built: a
+negative volatility, a horizon, capital or price that is not positive, or a NaN raises
+`ValueError` naming the parameter.
 
 All baselines below are evaluated with one helper, over the same 200 seeds:
 
@@ -48,8 +61,13 @@ def evaluate(env, policy, episodes=200):
 ## Your own price history
 
 `Trading-v0` and `Portfolio-v0` accept historical closing prices through `prices=`:
-a 1-D array for `Trading-v0`, a `(T, n_assets)` array for `Portfolio-v0`, or a
-[`MarketData`](../finance/data.md) for either ([below](#options-shared-by-trading-v0-and-portfolio-v0)).
+a 1-D array (or a pandas Series) for `Trading-v0`, a `(T, n_assets)` array (or a pandas
+DataFrame) for `Portfolio-v0`. A [`MarketData`](../finance/data.md), with dates, asset
+names and data fields, goes in `data=` instead, in these two environments as in
+`Market-v0` ([below](#options-shared-by-trading-v0-and-portfolio-v0)); a MarketData passed
+as `prices=` raises `TypeError`. Give one source: `prices=`, `data=` or a `model=` to
+simulate; more than one raises `ValueError`.
+
 Every `reset()` then draws a random contiguous window of `lookback + episode_length + 1`
 rows, so each episode starts at a different date. Prices must be finite and strictly
 positive, and the history at least one window long; otherwise the constructor raises
@@ -60,15 +78,30 @@ prices = np.loadtxt("closes.csv", delimiter=",", skiprows=1, usecols=(1, 2, 3, 4
 env = sekai.make("Portfolio-v0", prices=prices, episode_length=126, lookback=20)
 ```
 
+A pandas DataFrame or Series indexed by dates (a `DatetimeIndex`) keeps them: it is
+converted with `MarketData.from_pandas`, so `info["timestamp"]` reports the dates, `dt`
+follows their spacing and `reset(options={"start": "2020-03-02"})` finds the date. With any
+other index the rows are numbered from 0, as for an array.
+
+```py
+import pandas as pd
+
+closes = pd.read_csv("closes.csv", index_col=0, parse_dates=True)  # dates x tickers
+env = sekai.make("Portfolio-v0", prices=closes, episode_length=126, lookback=20)
+result = env.reset(seed=0, options={"start": "2020-03-02"})  # info["timestamp"]: 2020-03-02
+```
+
 The examples on this page use synthetic "histories" from `simulate_gbm()` (below) so that
 they run offline; load real data the same way.
 
 ## Trading-v0
 
+![Trading-v0, drawn by TradingRenderer](../assets/finance_trading.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
 Trade a single asset by choosing a target position, as a fraction of equity, every step.
 
-**Dynamics.** Without `prices`, the price follows geometric Brownian motion, simulated with
-the exact log-normal transition:
+**Dynamics.** Without a history or a `model`, the price follows geometric Brownian motion,
+simulated with the exact log-normal transition:
 
 $$
 S_{t+1} = S_t \exp\!\Big(\big(\mu - \tfrac12\sigma^2\big)\Delta t + \sigma\sqrt{\Delta t}\,Z_t\Big),
@@ -103,7 +136,8 @@ and pays for it.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `prices` | `None` | 1-D historical prices or a one-asset `MarketData`; `None` simulates |
+| `prices` | `None` | 1-D historical prices (an array or a pandas Series); `None` simulates |
+| `data` | `None` | a one-asset `MarketData` instead of `prices` |
 | `episode_length` | `252` | steps per episode (one trading year of days) |
 | `lookback` | `30` | log returns in the observation |
 | `positions` | `(-1.0, 0.0, 1.0)` | allowed target positions, e.g. `(0.0, 1.0)` for long-only or `(-2, -1, 0, 1, 2)` for leverage |
@@ -148,11 +182,13 @@ a year here.
 
 ## Portfolio-v0
 
+![Portfolio-v0, drawn by PortfolioRenderer](../assets/finance_portfolio.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
 Allocate wealth across `n_assets` risky assets and cash, rebalancing every step.
 
-**Dynamics.** Without `prices`, asset prices follow correlated GBMs (as above, with
-correlated shocks $Z_t \sim \mathcal N(0, \Sigma)$). The default market is fixed across
-resets: drifts of 6%, volatilities spread evenly from 15% to 35%, and a fixed random
+**Dynamics.** Without a history or a `model`, asset prices follow correlated GBMs (as
+above, with correlated shocks $Z_t \sim \mathcal N(0, \Sigma)$). The default market is fixed
+across resets: drifts of 6%, volatilities spread evenly from 15% to 35%, and a fixed random
 correlation matrix; only the path is random.
 
 The action is mapped to target weights $w_t$ over (assets, cash). Rebalancing from the
@@ -190,8 +226,9 @@ print(long_short.action_to_weights(np.array([0.8, -0.6, 0.2], np.float32)).round
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `prices` | `None` | `(T, n_assets)` history or a complete `MarketData` (sets `n_assets`); `None` simulates |
-| `n_assets` | `5` | number of risky assets (ignored when `prices` is given) |
+| `prices` | `None` | `(T, n_assets)` history (an array or a pandas DataFrame); `None` simulates |
+| `data` | `None` | a complete `MarketData` instead of `prices` |
+| `n_assets` | `None` | number of risky assets: 5 in the default simulation, else that of the history or `model` (a different value raises `ValueError`) |
 | `episode_length` | `252` | steps per episode |
 | `lookback` | `30` | rows of returns in the observation |
 | `transaction_cost` | `1e-3` | cost per unit of turnover ($\kappa$), or any `CostModel` |
@@ -254,15 +291,16 @@ directly or through a vector env's `set_attr`, raises `AttributeError`; make a n
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `prices` | `None` | also a [`MarketData`](../finance/data.md): dated rows, asset names, and fields such as `volume` and `spread` for cost models. `Trading-v0` needs one asset (`data.select([name])`); `Portfolio-v0` a complete panel (use [`Market-v0`](#market-v0) when assets list and delist) |
-| `model` | `None` | any [market model](../finance/simulators.md) in place of GBM: one asset for `Trading-v0`, always-listed assets for `Portfolio-v0` (`n_assets` follows the model) |
+| `data` | `None` | a [`MarketData`](../finance/data.md) history in place of `prices`: dated rows, asset names, and fields such as `volume` and `spread` for cost models. `Trading-v0` needs one asset (`data.select([name])`); `Portfolio-v0` a complete panel (use [`Market-v0`](#market-v0) when assets list and delist) |
+| `model` | `None` | any [market model](../finance/simulators.md) in place of GBM, when there is no history: one asset for `Trading-v0`, always-listed assets for `Portfolio-v0` (`n_assets` follows the model) |
 | `transaction_cost` | `1e-3` | a proportional rate or any [`CostModel`](../finance/execution.md#cost-models) |
-| `reward` | `LogReturn()` | any [`RewardFunction`](../finance/execution.md#reward-functions) |
+| `reward` | `LogReturn()` | any [`RewardFunction`](../finance/execution.md#reward-functions); the env keeps a copy, as it does of a `reward_fn` set later |
 | `sampler` | `"random"` | where episodes start in a history: `"sequential"`, an int, or an [`EpisodeSampler`](../finance/data.md#episode-samplers) |
 | `capital` | `1_000_000` | account size in currency, for cost models that need it |
 
 With a history, `reset(options={"start": t})` puts the episode's first decision at
-timestamp (or row) `t`. Both report `timestamp` (the decision time: the data's timestamp,
+row `t` (an int) or timestamp `t` (a date, or `sekai.finance.Time(t)` for a numeric
+timestamp). Both report `timestamp` (the decision time: the data's timestamp,
 else the step index) and `dt` in `info`, plus `turnover` (`Trading-v0`) and `equity`
 (`Portfolio-v0`, equal to `portfolio_value`): the keys
 [`RecordPerformance`](../finance/metrics.md#recordperformance) reads.
@@ -276,13 +314,13 @@ data = MarketData(prices, timestamps=dates, assets=["EQ1", "EQ2", "EQ3", "BOND"]
                   fields={"volume": np.full(prices.shape, 1e6),  # units traded per day
                           "spread": np.full(prices.shape, 4e-4)})  # 4 bp quoted spread
 
-env = sekai.make("Portfolio-v0", prices=data, lookback=60, episode_length=252,
+env = sekai.make("Portfolio-v0", data=data, lookback=60, episode_length=252,
                  transaction_cost=SpreadCost() + SquareRootImpact(0.5), capital=1e8)
 result = env.reset(seed=0, options={"start": "2020-01-02"})
 result = env.step(np.ones(5, np.float32))
 print(result.info["timestamp"], f"{result.info['cost'] * 1e4:.1f} bp")  # 2020-01-03 41.3 bp
 
-single = sekai.make("Trading-v0", prices=data.select(["EQ3"]), lookback=20)
+single = sekai.make("Trading-v0", data=data.select(["EQ3"]), lookback=20)
 
 calm = GBM(mu=0.10, sigma=[0.12, 0.15, 0.20, 0.05])
 stress = GBM(mu=-0.25, sigma=[0.35, 0.40, 0.50, 0.10])
@@ -292,6 +330,8 @@ print(regimes.n_assets, regimes.observation_space["returns"])  # 4 Box(-inf, inf
 ```
 
 ## Market-v0
+
+![Market-v0, drawn by MarketRenderer](../assets/finance_market.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Trade a universe whose members list and delist, with per-asset features, market-wide data,
 any cost model, shorting, leverage and financing: the general-purpose environment,
@@ -495,6 +535,8 @@ random         -0.0086 ± 0.0753
 
 ## MarketMaking-v0
 
+![MarketMaking-v0, drawn by MarketMakingRenderer](../assets/finance_market_making.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
 Quote a bid and an ask around a moving mid price, earning the spread while managing inventory
 risk: the market-making model of Avellaneda & Stoikov (2008), with the parameters of the
 paper's numerical example.
@@ -587,6 +629,8 @@ symmetric quote. `make()` adds no wrappers to the finance environments, so metho
 on `env.unwrapped`.
 
 ## OptimalExecution-v0
+
+![OptimalExecution-v0, drawn by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Liquidate a large position over a fixed horizon, trading off market impact (sell fast and
 you move the price) against risk (sell slowly and the price may move against you): the
@@ -701,6 +745,8 @@ print(f"simulated:   E[IS] = ${np.mean(shortfalls):,.0f}, sd = ${np.std(shortfal
 
 ## LimitOrderBook-v0
 
+![LimitOrderBook-v0, drawn by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
 Make markets, or trade, in a simulated limit order book: the microstructure counterpart of
 `MarketMaking-v0`. Where that environment draws fills from a formula, here the agent's
 quotes rest in a real price-time priority [order book](../finance/order-book.md) against
@@ -712,10 +758,14 @@ flow. The class is `sekai.envs.finance.LimitOrderBookEnv`.
 limit orders, market orders and cancellations) run for `warmup` time units. Then, every
 $\Delta$ = `decision_interval` units of time until `session_length`, the agent
 
-1. optionally sends a market order of `order_size` lots,
+1. optionally sends a market order of `order_size` lots, after cancelling its own resting
+   quote on the opposite side: a market buy first cancels the agent's ask, a market sell its
+   bid. This is self-trade prevention, as in the cancel-resting mode of most exchanges: the
+   agent never trades with itself;
 2. places, keeps, moves or cancels one bid and one ask (a quote left at the same price keeps
    its place in the queue; moving it sends it to the back; repeating an action keeps a quote
-   that is still at that level, including a level-1 quote alone at the best price),
+   that is still at that level, including a level-1 quote alone at the best price; a quote
+   cancelled in step 1 is placed again, at the back of its queue, unless its level is 0),
 
 and the book evolves through however many background events occur before the next
 decision, which may fill the agent's resting quotes. With cash $X_t$ and inventory $q_t$
@@ -731,7 +781,7 @@ $\phi$ = `inventory_penalty` per squared lot per unit of time.
 | | |
 |---|---|
 | Observation | `Dict` (below) |
-| Action | `MultiDiscrete([K + 1, K + 1, 3])`, $K$ = `max_quote_offset`: the bid level (0 = no bid, 1 = join the best bid of the *other* traders, $k$ = $k - 1$ ticks behind it), the ask level (likewise), and a market order (0 sell, 1 none, 2 buy). A resting quote already at the requested level stays where it is with its queue position, and a level-1 quote stays put while it is itself the best price, even alone there, so an unchanged action only moves a quote to follow the other traders' best price |
+| Action | `MultiDiscrete([K + 1, K + 1, 3])`, $K$ = `max_quote_offset`: the bid level (0 = no bid, 1 = join the best bid of the *other* traders, $k$ = $k - 1$ ticks behind it), the ask level (likewise), and a market order (0 sell, 1 none, 2 buy), which first cancels the agent's own quote on the opposite side (self-trade prevention). A resting quote already at the requested level stays where it is with its queue position, and a level-1 quote stays put while it is itself the best price, even alone there, so an unchanged action only moves a quote to follow the other traders' best price |
 | `action_mask()` | a tuple of per-dimension `int8` masks: at the long inventory limit no bid and no market buy, at the short limit no ask and no market sell |
 | Reward | change in mark-to-market wealth (ticks) minus the inventory penalty |
 | Termination | at the end of the session (`n_steps` = `session_length / decision_interval` decisions); the clock is observed |
@@ -793,7 +843,7 @@ for name, policy in {
 inventory skew    +86.2148 ± 7.0613
 join both quotes  -1.7224 ± 131.6676
 no quotes         +0.0000 ± 0.0000
-random            -302.5304 ± 203.1913
+random            -393.1354 ± 235.4022
 ```
 
 Quoting both sides at the touch earns the spread but lets inventory random-walk with the
@@ -804,12 +854,14 @@ positions and recent trades it observes.
 
 ## LimitOrderBookMarket
 
+![LimitOrderBookMarket, drawn by LimitOrderBookMarketRenderer](../assets/finance_order_book_market.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
 Several RL traders in one order book, each deciding on its own clock: an
 [event-driven](../guide/multi-agent.md#event-driven-environments) multi-agent environment
 (`sekai.envs.finance.LimitOrderBookMarket`, a `sekai.MultiAgentEnv`; construct it
-directly). One trader's market order can fill another's resting quote, so the
-traders compete for the spread and for queue priority as well as against the background
-flow.
+directly). One trader's market order can fill another's resting quote (never its own:
+self-trade prevention applies to every trader), so the traders compete for the spread and
+for queue priority as well as against the background flow.
 
 `LimitOrderBookMarket(n_agents=2, *, decision_intervals=1.0, jitter=0.0, **market)` names
 its traders `"trader_0"`, `"trader_1"`, ...; trader $i$ decides every
@@ -820,8 +872,10 @@ arguments (`flow`, `mid_price`, `session_length`, `levels`, `max_quote_offset`,
 `LimitOrderBook-v0`, and so are each trader's observation, action, `action_mask(agent)` and
 reward.
 
-Each `step(actions)` takes actions from exactly the traders whose turn it is, then advances
-the book to the next decision time of any trader, and returns:
+Each `step(actions)` takes actions from exactly the traders whose turn it is, checks them all
+(an invalid one raises `InvalidAction` before any is carried out, so the failed step changes
+nothing), carries them out in name order, then advances the book to the next decision time
+of any trader, and returns:
 
 - `observations` only for the traders that act next: the keys say who moves;
 - `rewards`, `terminated`, `truncated` and `info` for every trader, so rewards earned
@@ -831,7 +885,8 @@ the book to the next decision time of any trader, and returns:
 
 When several traders' decision times coincide they act in name order, so `trader_0`'s
 quotes reach the book (and the queue) first. At the end of the session every trader is
-terminated and observed.
+terminated and observed; `agents` is then empty, and `step()` raises `ResetRequired` until
+the next `reset()`.
 
 ```python
 from sekai.envs.finance import LimitOrderBookMarket

@@ -10,6 +10,8 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 
 ::: sekai.finance.data.MarketData
 
+::: sekai.finance.data.Time
+
 ## Sampling
 
 `sekai.finance.sampling`. See [Episode samplers](../finance/data.md#episode-samplers).
@@ -186,3 +188,14 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 ::: sekai.finance.lob.BACKGROUND
 
 ::: sekai.finance.lob.ZeroIntelligenceFlow
+
+## Rendering
+
+`sekai.finance.rendering`: charts for [dashboards](../guide/rendering.md#dashboards-for-your-own-environments)
+of market environments. The classes are also exported from `sekai.finance`.
+
+::: sekai.finance.rendering.PriceChart
+
+::: sekai.finance.rendering.OrderBookChart
+
+::: sekai.finance.rendering.UniverseChart

@@ -11,7 +11,7 @@ provides each:
 | `sekai.finance.sampling` | episode samplers: where in the history each episode starts |
 | `sekai.finance.features` | causal feature transforms, point-in-time `asof_join`, the `check_causal` look-ahead detector |
 
-`Trading-v0`, `Portfolio-v0` and `Market-v0` all accept a `MarketData`.
+`Trading-v0`, `Portfolio-v0` and `Market-v0` all accept a `MarketData` as `data=`.
 
 ## MarketData
 
@@ -73,7 +73,7 @@ print(data.mask.astype(int))
 | `warmup` | number of leading warm-up rows (0 unless the data came from `split` or `walk_forward`) |
 | `periods_per_year` | rows per year implied by datetime timestamps (`None` for numeric ones) |
 | `log_returns()` | `(T, N)` log returns, NaN in row 0 and wherever either price is missing |
-| `index_of(t)` | row of the first timestamp at or after `t` (integers are row positions) |
+| `index_of(t)` | the row `t` names: an `int` is a row position on any time axis (negative counts from the end); a timestamp gives the first row at or after it ([rows and timestamps](#rows-and-timestamps)) |
 
 `periods_per_year` is what `Market-v0` uses for its step length `dt`: about 252 for
 exchange trading days, 261 for every weekday, 365.25 for calendar days. For the five rows
@@ -175,10 +175,35 @@ print(history.select(["EQ1", "BOND"]))  # MarketData(T=2520, N=2, fields=['close
 either bound optional) and `select(assets)` picks columns by id. All of them carry every
 field and exogenous series along.
 
+### Rows and timestamps
+
+Wherever a point in time is expected (`index_of`, `between`, `split`, and an environment's
+`reset(options={"start": ...})`), an `int` is a **row position**, counted within the object
+at hand whatever its time axis (negative counts from the end), so `between(100, 200)` is
+`data[100:200]`. Anything else is a **timestamp**, looked up by value (the first row at or
+after it): on datetime timestamps, anything `numpy.datetime64` accepts (a `datetime64`,
+`datetime`, pandas `Timestamp` or date string); on numeric timestamps, a float (except in
+`split`, where a float is a fraction of the rows). A date on numeric timestamps, or a float
+on datetime ones, raises a `ValueError`.
+
+A numeric timestamp that is an integer itself (epoch seconds, or the timestamps of a slice
+or split, which no longer start at 0) would read as a row position; wrap it in `Time` to
+look it up by value:
+
+```python
+from sekai.finance import Time
+
+late = MarketData(history.prices)[1000:]  # numeric timestamps 1000, 1001, ..., 2519
+print(late.timestamps[100], late.index_of(100), late.index_of(Time(1100)))  # 1100 100 100
+print(len(late.between(Time(2000))), len(late.split(100)[0]))  # 520 100
+```
+
 ## Chronological splits
 
-`split(*points, embargo=0, history=0)` cuts the data at fractions of the rows (`0.8`), row
-positions, or timestamps:
+`split(*points, embargo=0, history=0)` cuts the data at fractions of the rows (a float in
+(0, 1), such as `0.8`), row positions (an `int`, counted within the data being split, so
+`test.split(100)` cuts `test` at its own row 100) or timestamps (`"2021-01-01"`, or
+`Time(t)` for a numeric timestamp; a float here is always a fraction):
 
 ```python
 train, test = history.split(0.8, embargo=5, history=30)
@@ -286,7 +311,7 @@ runs every window once.
 from sekai.finance import SequentialStart
 
 sampler = SequentialStart()
-env = sekai.make("Portfolio-v0", prices=test, lookback=30, episode_length=63, sampler=sampler)
+env = sekai.make("Portfolio-v0", data=test, lookback=30, episode_length=63, sampler=sampler)
 first_decisions = []
 while sampler.epoch == 0:
     result = env.reset(seed=len(first_decisions))
@@ -301,26 +326,29 @@ print(first_decisions)
 ```
 
 Rows after the last full window, too few for another whole episode (here the last 57),
-are not visited; pick `episode_length` (or `stride`) to suit the period. A sampler is
-stateful. `sekai.make_vec()` gives every sub-env its own copy (on every backend, native
-included), so each sub-env behaves like a separate environment: with a sequential sampler
-they all replay the same windows. To split a period across sub-envs instead, give each one
-its own offset sampler or start (see
+are not visited; pick `episode_length` (or `stride`) to suit the period. A sampler may keep
+state, such as a sequential sampler's position. `sekai.make_vec()` gives every sub-env
+`sampler.spawn()` (on every backend, native included). By default that is the sampler
+itself, shared by all sub-envs, so a later change to it (a curriculum widening its range)
+reaches them all; `SequentialStart` spawns a fresh copy with its own position, so with a
+sequential sampler every sub-env replays the same windows. To split a period across
+sub-envs instead, give each one its own offset sampler or start (see
 [Episode samplers](../guide/vector.md#episode-samplers)). One `EpisodeSampler` instance that
 you pass to several environments you build yourself is shared between them.
 
 **Starting at a given date.** `reset(options={"start": t})` overrides the sampler for one
-episode. `t` is the timestamp of the episode's **first decision**: for dated data anything
-`numpy.datetime64` accepts, or an `int` row position; for numeric timestamps a number,
-which is a timestamp (as in `index_of`). The window begins `lookback` rows earlier, and
-`info["timestamp"]` after the reset reports the decision time, so
-`options={"start": info["timestamp"]}` replays an episode, also on a split whose numeric
-timestamps no longer start at 0. (For plain arrays the timestamps are `0, 1, ..., T-1`, so
-rows and timestamps coincide.) A start without enough history before it, on a warm-up
-row, or without a full episode after it, raises a `ValueError` that names the valid range:
+episode. `t` places the episode's **first decision**, read as by `index_of`
+([rows and timestamps](#rows-and-timestamps)): an `int` is a row position on any data, a
+date or time a timestamp on dated data, and `Time(t)` a timestamp on any data. The window
+begins `lookback` rows earlier, and `info["timestamp"]` after the reset reports the decision
+time, so `options={"start": Time(info["timestamp"])}` replays an episode, also on a split
+whose numeric timestamps no longer start at 0. (For plain arrays the timestamps are
+`0, 1, ..., T-1`, so rows and timestamps coincide.) A start without enough history before
+it, on a warm-up row, or without a full episode after it, raises a `ValueError` that names
+the valid range, as does a date on numeric timestamps:
 
 ```python
-env = sekai.make("Portfolio-v0", prices=test, lookback=30, episode_length=63)
+env = sekai.make("Portfolio-v0", data=test, lookback=30, episode_length=63)
 print(env.reset(seed=0, options={"start": "2023-03-01"}).info["timestamp"])  # 2023-03-01
 print(env.reset(options={"start": 30}).info["timestamp"])  # 2022-09-30
 try:
@@ -398,10 +426,11 @@ with `with_exogenous(cpi=...)`; before the first release it is NaN.
 
 ## Detecting look-ahead
 
-`check_causal(fn, x)` tests a transform empirically: for a few random cut points `c` it
-changes the rows of `x` after `c` and checks that the output for rows `0..c` is unchanged.
-Each cut is tried with several perturbations, so that a leak cannot hide in what one of
-them preserves:
+`check_causal(fn, x)` tests a transform empirically: for cut point 0 and a few random cut
+points `c` it changes the rows of `x` after `c` and checks that the output for rows `0..c`
+is unchanged. Cut point 0 is always tested, since a leak into the first row only (filling
+the leading NaN of returns backwards, normalising by row 1) shows nowhere else. Each cut is
+tried with several perturbations, so that a leak cannot hide in what one of them preserves:
 
 | Perturbation | Applies to | Catches leaks through |
 |---|---|---|
@@ -411,9 +440,10 @@ them preserves:
 | $\lvert x + \text{noise}\rvert$, some entries set to 0 | non-negative data with zeros | future zeros (no volume tomorrow) |
 | some valid entries set to NaN, NaNs filled with values from `x` | data with NaNs | the future NaN pattern: survivorship bias, e.g. dropping assets that delist later |
 
-Perturbations stay in the data's domain (strictly positive prices stay positive), and
-numpy floating-point warnings are silenced while `fn` runs on perturbed copies. A causal
-feature passes silently:
+An output whose shape changes with the future, such as keeping only the columns of assets
+still listed at the end, is a look-ahead too. Perturbations stay in the data's domain
+(strictly positive prices stay positive), and numpy floating-point warnings are silenced
+while `fn` runs on perturbed copies. A causal feature passes silently:
 
 ```python
 features.check_causal(lambda p: features.rolling_zscore(features.momentum(p, 60), 250),
@@ -439,8 +469,9 @@ Look-ahead bias detected: the output at time index 1 changed when only inputs af
 ```
 
 `fn` must be deterministic and return an array aligned with the input's time axis.
-`n_checks` (default 5) sets the number of cut points, `rng` their source, and `rtol` /
-`atol` the comparison tolerance. Run it in your tests for every feature you add.
+`n_checks` (default 5) sets the number of random cut points tested besides 0, `rng` their
+source, and `rtol` / `atol` the comparison tolerance. Run it in your tests for every feature
+you add.
 
 ## Walk-forward evaluation
 
@@ -467,7 +498,7 @@ sharpes = {"equal weight": [], "inverse volatility": []}
 print(f"{'test from':10s}  {'policy':18s} {'Sharpe':>6s} {'return':>7s} {'max DD':>6s}")
 for train, test in history.walk_forward(3 * YEAR, YEAR, embargo=5, history=LOOKBACK):
     env = RecordPerformance(
-        sekai.make("Portfolio-v0", prices=test, lookback=LOOKBACK, episode_length=YEAR - 1),
+        sekai.make("Portfolio-v0", data=test, lookback=LOOKBACK, episode_length=YEAR - 1),
         periods_per_year=YEAR,
     )
     for name, action in {"equal weight": equal_weight,

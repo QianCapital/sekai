@@ -19,6 +19,16 @@ Wrappers apply from the inside out: the last one you add sees the env's output l
 own input first. Order matters, e.g. put `RecordEpisodeStatistics` *inside* reward
 normalisation so it records the raw returns.
 
+!!! warning "AutoReset goes outermost"
+    `AutoReset` starts the next episode itself, so the `reset()` never reaches wrappers outside
+    it. Those that keep per-episode state (`TimeLimit`, `TimeAwareObservation`,
+    `FrameStackObservation`, `DelayObservation`, `DelayAction`, `StickyAction`) would carry
+    one episode's state into the next: `TimeLimit(AutoReset(env), 5)` truncates every step
+    after the fifth, and `TimeAwareObservation`'s time feature sticks at 1. Write
+    `AutoReset(TimeLimit(env, 5))` instead; these wrappers warn when built around an
+    `AutoReset`. `RecordEpisodeStatistics` works on either side of it. Vector envs reset their
+    sub-envs through the whole stack, so they need no `AutoReset`.
+
 ## Inspecting a stack
 
 Iterating over a wrapper walks from the outermost layer to the base env, and `len()` counts the
@@ -46,7 +56,7 @@ All of these are exported from `sekai` and from `sekai.wrappers`.
 | Wrapper | What it does |
 |---|---|
 | `TimeLimit(env, max_episode_steps)` | sets `truncated=True` after `max_episode_steps` steps; adds `info["elapsed_steps"]`. `make()` applies it from the registry. |
-| `AutoReset(env)` | resets as soon as an episode ends; the returned observation starts the new episode, the terminal one is in `info["final_observation"]` (also `final_info`, `reset_info`) |
+| `AutoReset(env)` | resets as soon as an episode ends; the returned observation starts the new episode, the terminal one is in `info["final_observation"]` (also `final_info`, `reset_info`); make it the [outermost wrapper](#wrappers) |
 | `OrderEnforcing(env)` | raises `ResetRequired` if `step()` is called before the first `reset()` |
 | `RecordEpisodeStatistics(env, tracker=None, deque_size=100)` | puts an `EpisodeStats` in `info["episode"]` when an episode ends and reports it to a [tracker](statistics.md) |
 
@@ -57,7 +67,7 @@ All of these are exported from `sekai` and from `sekai.wrappers`.
 | `FlattenObservation(env)` | flattens any [flattenable space](spaces.md#flattening) to a 1-D `float32` `Box` |
 | `NormalizeObservation(env, epsilon=1e-8, *, stats="running", halflife=1000.0, clip=None)` | normalises every `Box` part of the observation (a `MaskedBox` over its occupied slots only; other parts pass through) with a running mean/variance, or with `stats="ewm"` an exponentially weighted one; optional `clip`; output is `float64`; `obs_rms`, `state_dict()` |
 | `FrameStackObservation(env, num_stack, *, padding="reset")` | stacks the last `num_stack` observations on a new leading axis, leaf by leaf for any batchable space (`Dict`, `Tuple`, `MaskedBox`, `Discrete`, ...); after `reset()` it is filled with the first observation, or with `padding="zeros"` the space's [zero sample](spaces.md#zero-samples) |
-| `TransformObservation(env, fn, new_observation_space=None)` | applies `fn` to every observation |
+| `TransformObservation(env, func, new_observation_space=None)` | applies `func` to every observation (`fn=`, sekai 0.1's name, is deprecated) |
 | `RescaleObservation(env, min_obs, max_obs)` | maps a bounded `Box` affinely onto `[min_obs, max_obs]`; integer observations (e.g. `uint8` pixels) become `float32` |
 | `DtypeObservation(env, dtype)` | casts a `Box` observation, e.g. a `float64` simulator feeding a `float32` policy |
 | `FilterObservation(env, keys)` | keeps only `keys` of a `Dict` observation |
@@ -71,7 +81,7 @@ All of these are exported from `sekai` and from `sekai.wrappers`.
 | Wrapper | What it does |
 |---|---|
 | `ClipAction(env)` | clips `Box` actions to the bounds |
-| `RescaleAction(env, min_action, max_action)` | lets the policy act in `[min_action, max_action]` (e.g. `[-1, 1]`), rescaled to the env's bounded `Box` and clipped to its bounds |
+| `RescaleAction(env, min_action, max_action)` | lets the policy act in `[min_action, max_action]` (e.g. `[-1, 1]`), rescaled to the env's bounded `Box` and clipped to its bounds; components the env's [action mask](dynamic.md#action-masks) masks are sent as the env's zero |
 | `StickyAction(env, repeat_action_probability)` | with that probability, repeats the previous action (a stored copy) instead: execution lag (Machado et al., 2018); its own RNG is derived from the `reset()` seed (an int, or a `Generator`'s `SeedSequence`), without drawing from the env's |
 | `ActionRepeat(env, repeat)` | repeats each action `repeat` times, summing rewards; stops early at episode end; `info["action_repeats"]` |
 | `DelayAction(env, delay, *, noop=None)` | executes each action `delay` steps after it is chosen (order latency), and `noop` until then; `noop` defaults to zeros for a `Box` action space and is required otherwise; `pending_actions` |
@@ -81,8 +91,8 @@ All of these are exported from `sekai` and from `sekai.wrappers`.
 | Wrapper | What it does |
 |---|---|
 | `NormalizeReward(env, gamma=0.99, epsilon=1e-8)` | divides rewards by the running std of the discounted return (`return_rms`); the mean is not subtracted |
-| `TransformReward(env, fn)` | applies `fn` to every reward |
-| `ClipReward(env, min_reward=-inf, max_reward=inf)` | clips every reward |
+| `TransformReward(env, func)` | applies `func` to every reward (`fn=`, sekai 0.1's name, is deprecated) |
+| `ClipReward(env, min_reward=-inf, max_reward=inf)` | clips every reward; a bound of `None` leaves that side unbounded |
 
 **Rendering** (in `sekai.rendering`)
 

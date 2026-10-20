@@ -2,6 +2,8 @@
 
     sekai.make("CartPole-v1")
     sekai.make("Portfolio-v0", n_assets=10)
+    sekai.make("Portfolio-v0", prices=closes)  # a (T, n) array or a DataFrame of closes
+    sekai.make("Market-v0", data=market_data)  # a MarketData: so too in Trading/Portfolio
 
 Classic control envs match gymnasium's dynamics exactly; the finance envs are
 sekai's own. See `sekai list` or sekai.pprint_registry() for every ID.

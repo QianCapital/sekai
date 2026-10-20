@@ -65,8 +65,9 @@ print(book.get(mine))  # Order(order_id=4, side=<Side.BID: 1>, price=99, quantit
 `Side.BID` is +1 and `Side.ASK` -1 (the sign of the owner's position change on a fill).
 A `Fill` records the price, quantity, both order ids and owners, the taker's side and the
 time; an `Order` its id, side, price, remaining quantity, owner and arrival time. `owner`
-is any integer: `BACKGROUND` (-1) for background flow, agent ids otherwise. Self-trades are
-allowed. `book.time` is a plain attribute the caller (or the background flow) advances; it
+is any integer: `BACKGROUND` (-1) for background flow, agent ids otherwise. The book
+itself allows self-trades (an order may fill against a resting order of the same owner);
+the environments prevent them for their agents (below). `book.time` is a plain attribute the caller (or the background flow) advances; it
 stamps orders and fills. `book.last_price` is the last fill's price.
 
 ```python
@@ -205,8 +206,12 @@ without being swamped by it.
 `LimitOrderBook-v0` (`sekai.envs.finance.LimitOrderBookEnv`) puts one agent (owner 0) in a
 book driven by a `ZeroIntelligenceFlow` (pass your own with `flow=`). Each episode
 initialises the book at `mid_price` and lets the flow run for `warmup` time units; then, every
-`decision_interval`, the agent rests or moves a bid and an ask (or sends a market order)
-and the flow advances to the next decision. Quote levels count from the best price among
+`decision_interval`, the agent may send a market order, then rests or moves a bid and an
+ask, and the flow advances to the next decision. A market order first cancels the agent's
+own resting quote on the opposite side (a buy cancels its ask, a sell its bid), so the agent
+never trades with itself: self-trade prevention, as in the cancel-resting mode of most
+exchanges; the quote is then placed again if the action asks for it, at the back of its
+queue. Quote levels count from the best price among
 the *other* traders' orders (level 1 joins it, level $k$ rests $k - 1$ ticks behind), and a
 quote already at the requested level is left alone, including a level-1 quote that is itself
 the best price, alone there; so repeating an action moves a quote only to follow the other
@@ -216,7 +221,9 @@ to the back. The live book is `env.unwrapped.book`.
 
 `LimitOrderBookMarket` puts several agents (owners 0, 1, ...) in the same book, each
 deciding on its own clock: an event-driven multi-agent environment in which one agent's
-market order can fill another's resting quote. The observations, actions and rewards, the
+market order can fill another's resting quote (but not its own: self-trade prevention
+applies to every agent). All the actions of a step are checked before any is carried out.
+The observations, actions and rewards, the
 baselines and the multi-agent stepping rules are on the
 [environments page](../environments/finance.md#limitorderbook-v0).
 

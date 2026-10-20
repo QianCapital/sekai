@@ -59,7 +59,7 @@ def history(n_steps: int = 400, n_assets: int = 3, seed: int = 0) -> MarketData:
 class TestTradingAndPortfolioOptions:
     def test_market_data_start_and_timestamps(self) -> None:
         data = history()
-        env = TradingEnv(data.select(["S0"]), episode_length=20, lookback=5)
+        env = TradingEnv(data=data.select(["S0"]), episode_length=20, lookback=5)
         r = env.reset(seed=0, options={"start": "2020-03-01"})
         assert r.info["timestamp"] == np.datetime64("2020-03-01") and r.info["dt"] == env.dt
         assert env.price == pytest.approx(data.prices[data.index_of("2020-03-01"), 0])
@@ -69,12 +69,14 @@ class TestTradingAndPortfolioOptions:
             env.reset(options={"start": 2})  # needs `lookback` rows of history first
 
     def test_sequential_sampler_tiles_the_history(self) -> None:
-        env = PortfolioEnv(history(), episode_length=50, lookback=10, sampler="sequential")
+        env = PortfolioEnv(data=history(), episode_length=50, lookback=10, sampler="sequential")
         firsts = [env.reset(seed=0).info["timestamp"] for _ in range(3)]
         assert firsts[1] - firsts[0] == np.timedelta64(50, "D") == firsts[2] - firsts[1]
 
     def test_cost_models_and_rewards(self) -> None:
-        env = PortfolioEnv(history(), episode_length=20, lookback=5, transaction_cost=SpreadCost())
+        env = PortfolioEnv(
+            data=history(), episode_length=20, lookback=5, transaction_cost=SpreadCost()
+        )
         env.reset(seed=0)
         r = env.step(np.array([1, 0, 0, 0], np.float32))  # all into S0 from cash
         assert (
@@ -118,9 +120,9 @@ class TestTradingAndPortfolioOptions:
         gappy = history().prices.copy()
         gappy[:10, 1] = np.nan
         with pytest.raises(ValueError, match="Market-v0"):
-            PortfolioEnv(MarketData(gappy), episode_length=20, lookback=5)
+            PortfolioEnv(data=MarketData(gappy), episode_length=20, lookback=5)
         with pytest.raises(ValueError, match="select"):
-            TradingEnv(history(), episode_length=20, lookback=5)
+            TradingEnv(data=history(), episode_length=20, lookback=5)
         with pytest.raises(ValueError, match="history"):
             TradingEnv().reset(options={"start": 3})
         listed = ListingProcess(GBM(n_assets=3), initial_listed=0.3, min_listed=1)
@@ -295,7 +297,7 @@ class TestNativeFinance:
         [
             ("Trading-v0", {"prices": history().prices[:, 0]}),
             ("Trading-v0", {"prices": history().prices[:, 0], "positions": (-2, -0.5, 0, 1.5)}),
-            ("Portfolio-v0", {"prices": history()}),
+            ("Portfolio-v0", {"data": history()}),
         ],
     )
     def test_matches_sync_on_fixed_history(self, env_id: str, kwargs: dict[str, Any]) -> None:
@@ -327,7 +329,7 @@ class TestNativeFinance:
         prices = data.select(["S0"]) if env_id == "Trading-v0" else data
         costs = SpreadCost() + SquareRootImpact(0.5) + FixedCost(25.0)
         common = {
-            "prices": prices,
+            "data": prices,
             "episode_length": 20,
             "lookback": 8,
             "sampler": 30,
@@ -392,6 +394,47 @@ class TestNativeFinance:
         for k in range(len(schedule)):
             r = vec.step(np.tile(schedule[k], (32, 1)))
         assert r.terminated.all() and all(i["final_info"]["inventory"] == 0 for i in r.infos)
+
+    @pytest.mark.parametrize("limit", [None, 12])
+    def test_frozen_sub_envs_keep_their_state_like_sync(self, limit: int | None) -> None:
+        # Levered trading on a volatile history: sub-envs are wiped out at different steps,
+        # then stay frozen (autoreset off) while the others run on, and well past the end.
+        prices = 100 * np.exp(np.cumsum(np.random.default_rng(1).normal(0.0, 0.15, 300)))
+        kwargs: dict[str, Any] = {
+            "prices": prices,
+            "episode_length": 30,
+            "lookback": 5,
+            "sampler": 7,
+            "positions": (-3.0, 0.0, 3.0),
+            "max_episode_steps": limit or -1,
+            "vector_kwargs": {"autoreset": False},
+        }
+        native = sekai.make_vec("Trading-v0", 4, **kwargs)
+        sync = sekai.make_vec("Trading-v0", 4, vectorization_mode="sync", **kwargs)
+        native.reset(seed=0)
+        sync.reset(seed=0)
+        rng = np.random.default_rng(3)
+        finished_at = np.zeros(4, int)
+        for t in range(80):
+            a = rng.integers(0, 3, 4)
+            x, y = native.step(a), sync.step(a)
+            np.testing.assert_allclose(x.observations, y.observations, rtol=1e-6)
+            np.testing.assert_allclose(x.rewards, y.rewards, rtol=1e-12, atol=1e-15)
+            assert x.terminated.tolist() == y.terminated.tolist(), t
+            assert x.truncated.tolist() == y.truncated.tolist(), t
+            finished_at[(finished_at == 0) & y.dones] = t + 1
+        assert native.frozen.all() and (finished_at > 0).all()
+        if limit is None:
+            assert len(set(finished_at.tolist())) > 1  # lanes froze at different steps
+        for name in ("equity", "position", "price", "elapsed_steps"):
+            np.testing.assert_allclose(native.get_attr(name), sync.get_attr(name), rtol=1e-12)
+
+    def test_shared_schedule_is_not_split_per_sub_env(self) -> None:
+        vec = sekai.make_vec("OptimalExecution-v0", 25)  # n_steps == num_envs == 25
+        vec.reset(seed=0)
+        schedules = vec.call("almgren_chriss_actions")
+        assert len(schedules) == 25 and all(np.shape(a) == (25, 1) for a in schedules)
+        np.testing.assert_array_equal(schedules[3], vec.almgren_chriss_actions())
 
     def test_reward_state_is_reset_per_env(self) -> None:
         vec = PortfolioVecEnv(2, episode_length=3, reward=DifferentialSharpe(0.2))
@@ -594,3 +637,87 @@ class TestLimitOrderBook:
                 total += r.rewards["trader_0"]
             totals.append(total)
         assert totals[0] == pytest.approx(totals[1]) == pytest.approx(-0.01 * 20, rel=0.02)
+
+    def test_market_order_cancels_own_opposite_quote(self) -> None:
+        env = LimitOrderBookEnv(flow=STATIC_FLOW, warmup=0.0, inventory_penalty=0.0)
+        env.reset(seed=0)
+        env.step(np.array([0, 1, 1]))  # rest an ask at the best ask
+        assert env.trader.ask_id is not None
+        own = env.book.get(env.trader.ask_id)
+        assert own is not None
+        for order in env.book.orders_of(BACKGROUND):  # leave it first in the queue
+            if order.side is Side.ASK and order.price == own.price:
+                env.book.cancel(order.order_id)
+        assert env.book.best_ask() == own.price and env.book.queue_ahead(own.order_id) == 0
+        r = env.step(np.array([0, 0, 2]))  # no ask, buy at market
+        # Self-trade prevention: the own ask is cancelled first, so the buy lifts the next ask
+        # (it used to fill against the agent's own ask: inventory 0, cash 0).
+        assert r.info["inventory"] == 1 and r.info["fills"] == 1
+        assert r.info["cash"] < -own.price and env.book.get(own.order_id) is None
+        assert env.trader.ask_id is None
+        env.step(np.array([0, 1, 1]))
+        again = env.book.get(env.trader.ask_id) if env.trader.ask_id is not None else None
+        assert again is not None
+        r = env.step(np.array([0, 1, 2]))  # keep an ask and buy: the ask is placed anew
+        assert env.trader.ask_id not in (None, again.order_id) and r.info["inventory"] == 2
+
+    def test_no_self_trades_and_accounting_holds(self, monkeypatch: Any) -> None:
+        env = LimitOrderBookEnv()
+        book = env.book
+        fills: list[Any] = []
+        for name in ("market", "limit"):
+            method = getattr(book, name)
+
+            def logged(*args: Any, _method: Any = method, **kwargs: Any) -> Any:
+                out = _method(*args, **kwargs)
+                fills.extend(out[1])
+                return out
+
+            monkeypatch.setattr(book, name, logged)
+        agent_fills = 0
+        for seed in range(5):
+            r = env.reset(seed=seed)
+            env.action_space.seed(seed)
+            fills.clear()
+            total = penalties = 0.0
+            while not r.done:
+                r = env.step(env.action_space.sample(mask=env.action_mask()))
+                total += r.reward
+                penalties += env.core.inventory_penalty * r.info["inventory"] ** 2 * r.info["dt"]
+            agent = [f for f in fills if env.AGENT in (f.maker_owner, f.taker_owner)]
+            agent_fills += len(agent)
+            assert not [f for f in fills if f.maker_owner == f.taker_owner == env.AGENT]
+            assert total + penalties == pytest.approx(r.info["wealth"])  # rewards conserve wealth
+        assert agent_fills > 100
+
+    def test_multi_agent_traders_never_trade_with_themselves(self) -> None:
+        market = LimitOrderBookMarket(2, flow=STATIC_FLOW, warmup=0.0, inventory_penalty=0.0)
+        market.reset(seed=0)
+        for order in market.book.orders_of(BACKGROUND):  # empty the ask side
+            if order.side is Side.ASK:
+                market.book.cancel(order.order_id)
+        best_bid = market.book.best_bid()
+        assert best_bid is not None
+        # trader_0 rests the best ask (one tick inside the bid), trader_1 one tick behind it.
+        market.step({"trader_0": np.array([0, 1, 1]), "trader_1": np.array([0, 2, 1])})
+        t0, t1 = market.traders["trader_0"], market.traders["trader_1"]
+        asks = [market.book.get(t.ask_id) for t in (t0, t1) if t.ask_id is not None]
+        assert [a.price for a in asks if a is not None] == [best_bid + 1, best_bid + 2]
+        market.step({"trader_0": np.array([0, 0, 2]), "trader_1": np.array([0, 0, 1])})
+        assert (t0.inventory, t1.inventory) == (1, -1)  # bought trader_1's ask, not its own
+        assert t0.cash == pytest.approx(-(best_bid + 2)) and t0.ask_id is None
+
+    def test_multi_agent_invalid_action_changes_nothing(self) -> None:
+        market = LimitOrderBookMarket(2)
+        market.reset(seed=0)
+        state = (market.book.depth(5), market.next_decision.copy(), market._clock, len(market.book))
+        with pytest.raises(sekai.InvalidAction):
+            market.step({"trader_0": np.array([0, 0, 2]), "trader_1": np.array([9, 9, 9])})
+        # trader_0's market buy used to execute before trader_1's action was checked.
+        assert market.traders["trader_0"].inventory == 0 and market.traders["trader_0"].cash == 0
+        assert market._clock == state[2] and len(market.book) == state[3]
+        np.testing.assert_array_equal(market.next_decision, state[1])
+        for got, expected in zip(market.book.depth(5), state[0]):
+            np.testing.assert_array_equal(got, expected)
+        market.step({"trader_0": np.array([0, 0, 2]), "trader_1": np.array([0, 0, 1])})
+        assert market.traders["trader_0"].inventory == 1  # the retry buys once, not twice

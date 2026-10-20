@@ -250,6 +250,14 @@ class TestActionMasks:
         assert flat.tolist() == [True, False, False, True, True]
         assert action_mask_space(md) == sekai.MultiBinary(5)
 
+    def test_multi_discrete_masks_need_every_flag(self) -> None:
+        md = sekai.MultiDiscrete([6, 6, 3])
+        short = (np.ones(6, np.int8), np.ones(6, np.int8), np.array([1, 1], np.int8))
+        with pytest.raises(ValueError, match=r"dimension \(2,\) must have shape \(3,\)"):
+            flatten_action_mask(md, short)  # used to return 14 flags for sum(nvec) == 15
+        padded = np.array([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 0, 1, 1, 1, 1]], np.int8)
+        assert flatten_action_mask(md, padded).tolist() == [True] * 12 + [True, False, True]
+
     def test_check_env_samples_with_the_mask(self) -> None:
         # Unmasked random actions would make step() raise.
         assert sekai.check_env(MaskedDiscreteEnv(), n_steps=60, check_determinism=True) == []

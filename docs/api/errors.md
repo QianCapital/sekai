@@ -18,7 +18,11 @@ built-in `ValueError` / `TypeError` instead.
 | `VecEnvWorkerError` | a `ProcVecEnv` worker raised or died (carries `rank`, `exc_type`, `remote_traceback`) |
 | `VecEnvClosed` | a vector env is used after `close()` |
 | `LookAheadError` | a feature transform used information from the future (raised by `sekai.finance.features.check_causal`) |
-| `InvalidObservation`, `SpaceMismatch`, `AsyncCallPending`, `BackendMismatch` | not raised by sekai itself; available for your environments and tools |
+| `InvalidObservation`, `SpaceMismatch`, `AsyncCallPending` | not raised by sekai itself; available for your environments and tools |
+
+`BackendMismatch` is deprecated together with `sekai.backend` and will be removed in sekai 0.3.
+Nothing in sekai raises it; `sekai.BackendMismatch` and `sekai.error.BackendMismatch` still
+work but emit a `DeprecationWarning`, and it is no longer in `sekai.__all__`.
 
 ::: sekai.error
     options:
@@ -32,7 +36,6 @@ built-in `ValueError` / `TypeError` instead.
         - InvalidObservation
         - ResetRequired
         - AsyncCallPending
-        - BackendMismatch
         - SpaceMismatch
         - VecEnvWorkerError
         - VecEnvClosed

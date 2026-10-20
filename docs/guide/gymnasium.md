@@ -48,18 +48,21 @@ Most wrappers exist under the same name. Argument names that differ:
 | gymnasium | sekai |
 |---|---|
 | `Autoreset(env)` | `AutoReset(env)`; also sets `info["final_observation"]` |
-| `RecordEpisodeStatistics(env, buffer_length=100)` | `RecordEpisodeStatistics(env, tracker=None, deque_size=100)`; `info["episode"]` is an `EpisodeStats` |
+| `RecordEpisodeStatistics(env, buffer_length=100, stats_key="episode")` | `RecordEpisodeStatistics(env, tracker=None, deque_size=100)`; `info["episode"]` is an `EpisodeStats` |
 | `FrameStackObservation(env, stack_size, padding_type="reset")` | `FrameStackObservation(env, num_stack, padding="reset")`; `padding="zeros"` for gymnasium's `"zero"` (no custom padding value); any batchable space, `Dict` included |
-| `TransformObservation(env, func, observation_space)` | `TransformObservation(env, fn, new_observation_space=None)` |
+| `TransformObservation(env, func, observation_space)` | `TransformObservation(env, func, new_observation_space=None)` |
+| `ClipReward(env, min_reward=None, max_reward=None)` | `ClipReward(env, min_reward=-inf, max_reward=inf)`; `None` also leaves a side unbounded, and the bounds are floats (no arrays) |
+| `OrderEnforcing(env, disable_render_order_enforcing=False)` | `OrderEnforcing(env)` (sekai envs do not render) |
 | `FilterObservation(env, filter_keys)` | `FilterObservation(env, keys)` |
 | `TimeAwareObservation(env, flatten=True, normalize_time=False, dict_time_key="time")` | `TimeAwareObservation(env, max_episode_steps=None, normalize_time=True, dict_key="time")` |
 | `DelayObservation(env, delay)` | `DelayObservation(env, delay, padding="zeros")` (or `"reset"`) |
 | `StickyAction(env, repeat_action_probability, repeat_action_duration=1)` | `StickyAction(env, repeat_action_probability)` |
 | `MaxAndSkipObservation(env, skip=4)` | `ActionRepeat(env, repeat)` (sums rewards; no frame max-pooling) |
 
-`TimeLimit`, `OrderEnforcing`, `ClipAction`, `RescaleAction`, `FlattenObservation`,
-`NormalizeObservation`, `NormalizeReward`, `TransformReward`, `ClipReward`,
-`RescaleObservation` and `DtypeObservation` take the same arguments. sekai's
+`TimeLimit`, `ClipAction`, `RescaleAction`, `FlattenObservation`, `NormalizeObservation`,
+`NormalizeReward`, `TransformReward(env, func)`, `RescaleObservation` and `DtypeObservation`
+take the same arguments. (sekai 0.1 called the callable of `TransformObservation` and
+`TransformReward` `fn`; `fn=` still works until sekai 0.3, with a `DeprecationWarning`.) sekai's
 `NormalizeObservation` also accepts keyword-only `stats=`, `halflife=` and `clip=`, and
 normalises `Dict` observations part by part. `DelayAction`, `ActionMaskObservation` and
 `PadSequenceObservation` have no gymnasium counterpart; see [Wrappers](wrappers.md).
@@ -371,6 +374,9 @@ passed on as an `int`, and `reset(seed=generator)` keeps sekai's meaning by maki
 `Generator` the gymnasium env's `np_random`. To render such an env, create it with gymnasium's
 `render_mode` and use `sekai.compat.GymnasiumRenderer`, which calls the gymnasium env's own
 `render()`:
+
+gymnasium's classic-control environments draw with pygame, which `sekai[gymnasium]` does not
+install; `pip install "gymnasium[classic-control]"` adds it for this example.
 
 ```python
 from sekai.compat import GymnasiumRenderer

@@ -81,6 +81,33 @@ NumPy-only RGB renderers.
 
 ## Finance
 
+<div class="sk-dashboards" markdown>
+<figure markdown>
+![Trading-v0](../assets/finance_trading.gif){ loading=lazy }
+<figcaption>Trading-v0</figcaption>
+</figure>
+<figure markdown>
+![Portfolio-v0](../assets/finance_portfolio.gif){ loading=lazy }
+<figcaption>Portfolio-v0</figcaption>
+</figure>
+<figure markdown>
+![Market-v0](../assets/finance_market.gif){ loading=lazy }
+<figcaption>Market-v0</figcaption>
+</figure>
+<figure markdown>
+![MarketMaking-v0](../assets/finance_market_making.gif){ loading=lazy }
+<figcaption>MarketMaking-v0</figcaption>
+</figure>
+<figure markdown>
+![OptimalExecution-v0](../assets/finance_optimal_execution.gif){ loading=lazy }
+<figcaption>OptimalExecution-v0</figcaption>
+</figure>
+<figure markdown>
+![LimitOrderBook-v0](../assets/finance_limit_order_book.gif){ loading=lazy }
+<figcaption>LimitOrderBook-v0</figcaption>
+</figure>
+</div>
+
 | Environment | You control | The baseline to beat |
 |---|---|---|
 | [`Trading-v0`](finance.md#trading-v0) | a target position in one asset | buy and hold |
@@ -94,7 +121,8 @@ NumPy-only RGB renderers.
 [your own price history](finance.md#your-own-price-history).
 [`LimitOrderBookMarket`](finance.md#limitorderbookmarket) is a multi-agent order book (not
 registered; construct it from `sekai.envs.finance`). The components they are built from
-are documented in the [finance toolkit](../finance/index.md).
+are documented in the [finance toolkit](../finance/index.md). Each has a
+[renderer](../guide/rendering.md#finance) that draws its episodes as a dashboard.
 
 ## Adding your own
 

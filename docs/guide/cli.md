@@ -38,13 +38,15 @@ $ sekai list
 ID                        MAX STEPS  ENTRY POINT
 Acrobot-v1                      500  sekai.envs.classic_control.acrobot:AcrobotEnv
 CartPole-v1                     500  sekai.envs.classic_control.cartpole:CartPoleEnv
-MarketMaking-v0                   -  sekai.envs.finance.market_making:MarketMakingEnv
+LimitOrderBook-v0                 -  sekai.envs.finance.lob_env:LimitOrderBookEnv
+Market-v0                         -  sekai.envs.finance.market_env:MarketEnv
+MarketMaking-v0                   -  sekai.envs.finance.market_making:MarketMakingEnv  [native vec]
 MountainCar-v0                  200  sekai.envs.classic_control.mountain_car:MountainCarEnv
 MountainCarContinuous-v0        999  sekai.envs.classic_control.continuous_mountain_car:ContinuousMountainCarEnv
-OptimalExecution-v0               -  sekai.envs.finance.optimal_execution:OptimalExecutionEnv
+OptimalExecution-v0               -  sekai.envs.finance.optimal_execution:OptimalExecutionEnv  [native vec]
 Pendulum-v1                     200  sekai.envs.classic_control.pendulum:PendulumEnv
-Portfolio-v0                      -  sekai.envs.finance.portfolio:PortfolioEnv
-Trading-v0                        -  sekai.envs.finance.trading:TradingEnv
+Portfolio-v0                      -  sekai.envs.finance.portfolio:PortfolioEnv  [native vec]
+Trading-v0                        -  sekai.envs.finance.trading:TradingEnv  [native vec]
 ```
 
 ## info
@@ -55,7 +57,7 @@ id=CartPole-v1
 entry_point=sekai.envs.classic_control.cartpole:CartPoleEnv
 max_episode_steps=500
 reward_threshold=475.0
-observation_space=Box(-inf, inf, (4,), float32)
+observation_space=Box([-4.8, -inf, -0.41887903, -inf], [4.8, inf, 0.41887903, inf], (4,), float32)
 action_space=Discrete(2)
 metadata={'render_fps': 50}
 wrappers=TimeLimit -> CartPoleEnv

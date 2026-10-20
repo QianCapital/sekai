@@ -49,9 +49,10 @@ while not result.done:
 - **Fast vectorisation.** Native vector environments that step thousands of sub-envs with array operations (over a million env-steps per second), plus sync, asyncio and multiprocessing backends with shared-memory observations and autoreset.
 - **A finance toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
 - **Built-in environments.** Classic control with dynamics bit-for-bit identical to gymnasium; trading, portfolio, dynamic-universe, market-making, optimal-execution and order-book environments (single- and multi-agent), with closed-form baselines.
+- **Renderers for every environment, in NumPy alone.** The finance ones draw each episode as a dashboard: prices with positions and trades, equity, allocations, order-book depth with your orders in the queue. They are built from charts (`sekai.rendering.Dashboard`, `sekai.finance.rendering`) that render your own environments as well.
 - **Async-native.** Every environment has `async_step()` / `async_reset()`; `AsyncVecEnv` runs I/O-bound envs (live feeds, remote simulators) concurrently.
 - **Ecosystem-compatible.** `sekai.compat` converts to and from gymnasium (Stable-Baselines3, CleanRL, RLlib) and PettingZoo.
-- **Production quality.** Fully typed (`mypy --strict`), tested on Linux, macOS and Windows for Python 3.10–3.14, with `check_env` and a `sekai` CLI for validating and benchmarking environments.
+- **Production quality.** Fully typed (`mypy --strict`), tested on Python 3.10–3.14 on Linux and on macOS and Windows, with `check_env` and a `sekai` CLI for validating and benchmarking environments.
 
 ## Installation
 
@@ -133,9 +134,18 @@ print(batch.observations.shape)  # (8, 3)
 ```python
 import numpy as np
 import sekai
-from sekai.finance import MarketData, RecordPerformance, SpreadCost, SquareRootImpact
+from sekai.finance import (
+    GBM, ListingProcess, MarketData, RecordPerformance, SpreadCost, SquareRootImpact,
+)
 
-# closes: (T, N) prices with NaN while a stock is not listed; volumes: (T, N) shares traded
+# closes: (T, N) prices with NaN while a stock is not listed; volumes: (T, N) shares traded.
+# Simulated here; pass your own history the same way.
+rng = np.random.default_rng(0)
+sim = ListingProcess(GBM(mu=0.05, sigma=rng.uniform(0.15, 0.45, 80))).simulate(rng, 2519)
+closes, volumes = sim.prices, rng.lognormal(12, 1, sim.prices.shape)
+dates = np.busday_offset("2015-01-01", np.arange(2520), roll="forward")  # trading days
+tickers = [f"STK{i:02d}" for i in range(80)]
+
 data = MarketData(closes, timestamps=dates, assets=tickers, fields={"volume": volumes})
 train, test = data.split(0.8, embargo=5, history=20)  # chronological, no leakage
 
@@ -186,7 +196,7 @@ model.learn(total_timesteps=10_000)
 | `Market-v0` | Dict (MaskedBox) | Box(max_assets + 1) | Trade a universe that lists and delists, with features, costs and financing |
 | `MarketMaking-v0` | Box(2) | Box(2) | Quote bid/ask, manage inventory (Avellaneda–Stoikov) |
 | `OptimalExecution-v0` | Box(3) | Box(1) | Liquidate a large order (Almgren–Chriss) |
-| `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete(3) | Make markets in an event-driven limit order book |
+| `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete([6, 6, 3]) | Make markets in an event-driven limit order book |
 
 The classic control environments match gymnasium's dynamics exactly, verified step by step
 in the test suite. The finance environments simulate markets by default, and `Trading-v0`

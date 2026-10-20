@@ -592,11 +592,37 @@ class TestCheckCausal:
         check_causal(CAUSAL[name], np.abs(sparse), n_checks=8)
 
     def test_error_names_row_and_cut(self) -> None:
-        x = np.array([1.0, 2.0, 3.0])  # the only cut point is 1
-        with pytest.raises(LookAheadError, match=r"time index 1 changed .* after time index 1"):
-            check_causal(lambda v: np.roll(v, -1, axis=0), x)
-        with pytest.raises(LookAheadError, match=r"time index 0 changed .* after time index 1"):
+        x = np.array([1.0, 2.0, 3.0])  # the cut points are 0 and 1
+        with pytest.raises(LookAheadError, match=r"time index 0 changed .* after time index 0"):
             check_causal(lambda v: v - v[-1], x)
+        # Row 1 holds the last row's value: rows 0..0 are unaffected, rows 0..1 are not.
+        with pytest.raises(LookAheadError, match=r"time index 1 changed .* after time index 1"):
+            check_causal(lambda v: np.array([v[0], v[2], v[2]]), x)
+
+    def test_leaks_into_the_first_row_only_are_detected(self) -> None:
+        # Regression: cut point 0 was never tested, so a leak that changes only row 0
+        # passed at every n_checks.
+        prices = _prices(n_rows=2520)
+
+        def backfilled_returns(p: np.ndarray) -> np.ndarray:
+            r = simple_returns(p)
+            r[0] = r[1]  # "fill the leading NaN" from the next row
+            return r
+
+        for fn in (backfilled_returns, lambda p: p / p[1]):
+            with pytest.raises(LookAheadError, match=r"time index 0 changed .* time index 0"):
+                check_causal(fn, prices)
+
+    def test_a_shape_that_depends_on_the_future_is_a_leak(self) -> None:
+        # Regression: survivorship bias that drops columns changed the output's width,
+        # which raised a ValueError instead of LookAheadError.
+        prices = _prices()  # asset 2 delists halfway
+
+        def survivors(p: np.ndarray) -> np.ndarray:
+            return p[:, ~np.isnan(p[-1])]
+
+        with pytest.raises(LookAheadError, match=r"shape changed from \(\d+, \d\) to"):
+            check_causal(survivors, prices)
 
     def test_tolerance(self) -> None:
         x = _prices()
@@ -620,8 +646,8 @@ class TestCheckCausal:
         check_causal(spy, x, n_checks=100)
         # The baseline, then two perturbations per cut for positive data without NaNs
         # (rescaled, rows reordered); the rescaled copy always differs from row cut + 1 on.
-        assert cuts[0] == -1 and len(cuts) == 1 + 2 * 5
-        assert cuts[1::2] == [1, 2, 3, 4, 5]
+        assert cuts[0] == -1 and len(cuts) == 1 + 2 * 6
+        assert cuts[1::2] == [0, 1, 2, 3, 4, 5]  # cut point 0 included
 
     def test_validation(self) -> None:
         with pytest.raises(ValueError, match="at least 3 rows"):

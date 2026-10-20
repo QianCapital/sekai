@@ -8,6 +8,7 @@ from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import Wrapper
 from sekai.spaces.utils import batch_space, concatenate, zero_sample
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 class FrameStackObservation(Wrapper[Any, ActType, Any, ActType]):
@@ -48,6 +49,7 @@ class FrameStackObservation(Wrapper[Any, ActType, Any, ActType]):
                 f"FrameStackObservation cannot stack observations of {type(space).__name__}."
             ) from None
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "FrameStackObservation")
         self.num_stack = num_stack
         self.padding = padding
         self._inner_space = space

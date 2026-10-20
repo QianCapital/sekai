@@ -11,7 +11,12 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.envs._utils import flat_action
-from sekai.envs.finance._common import check_cost_inputs
+from sekai.envs.finance._common import (
+    check_cost_inputs,
+    check_number,
+    check_sources,
+    episode_over,
+)
 from sekai.error import InvalidAction, ResetRequired
 from sekai.finance.account import AccountConfig, project_weights, settle
 from sekai.finance.costs import CostModel, as_cost_model
@@ -60,10 +65,10 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     from step to step; the observation is a fixed-size padded set (`MaskedBox`)
     with a validity mask, and the action mask marks the tradable slots.
 
-    **Data.** Either a historical `MarketData` (episodes are windows of it,
+    **Data.** Either a historical `MarketData` as `data` (episodes are windows of it,
     chosen by `sampler` or `reset(options={"start": ...})`) or a `model` that
     simulates a fresh market each episode (default: `default_market()`, two
-    hidden regimes and listings/delistings).
+    hidden regimes and listings/delistings), not both.
 
     **Slots.** With `max_assets=None` each asset has its own slot. With a smaller
     `max_assets` (a large historical universe, few names alive at once) assets
@@ -107,6 +112,8 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     (the simulation's latent state at the new decision time) when
     `privileged_state=True`, for asymmetric actor-critic methods.
 
+    `step()` after the episode has ended raises `ResetRequired`.
+
     Args:
         data: Historical data (NaN prices = not listed).
         model: Market model for simulation when no data is given.
@@ -121,7 +128,8 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
             per-asset parameters follow the assets, whatever their slots). Impact and
             spread models read the `volume` (shares) and `spread` (fraction of the
             price) data fields when present.
-        reward: Reward function (default `LogReturn()`).
+        reward: Reward function (default `LogReturn()`). The env keeps a copy (as it
+            does of a `reward_fn` set later), so a stateful reward is never shared.
         allow_short: Long/short action space.
         max_leverage: Cap on gross exposure.
         cash_rate: Annual interest earned on positive cash.
@@ -158,10 +166,11 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         delisting_return: float = 0.0,
         privileged_state: bool = False,
     ) -> None:
+        check_sources("MarketEnv", data=data, model=model, takes_prices=False)
         if lookback < 1 or episode_length < 1:
             raise ValueError("lookback and episode_length must be >= 1.")
-        if data is not None and model is not None:
-            raise ValueError("Pass either data (historical) or model (simulated), not both.")
+        if dt is not None:
+            dt = check_number("dt", dt, ">0")
         if data is None and model is None:
             model = default_market()
         self.data = data
@@ -173,19 +182,21 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         self.exogenous = tuple(exogenous)
         self.sampler = as_sampler(sampler)
         self.cost_model = as_cost_model(transaction_cost)
-        # A copy: stateful rewards must not be shared between envs built from one kwargs dict.
-        self.reward_fn: RewardFunction = (
-            copy.deepcopy(reward) if reward is not None else LogReturn()
-        )
+        # A copy (the setter copies): stateful rewards must not be shared between envs.
+        self.reward_fn = reward if reward is not None else LogReturn()
         self.config = AccountConfig(
             allow_short=allow_short,
-            max_leverage=max_leverage,
-            cash_rate=cash_rate,
-            margin_rate=margin_rate,
-            borrow_rate=borrow_rate,
+            max_leverage=check_number("max_leverage", max_leverage, ">0"),
+            cash_rate=check_number("cash_rate", cash_rate),
+            margin_rate=None if margin_rate is None else check_number("margin_rate", margin_rate),
+            borrow_rate=check_number("borrow_rate", borrow_rate, ">=0"),
         )
-        self.capital = float(capital)
-        self.delisting_return = float(delisting_return)
+        self.capital = check_number("capital", capital, ">0")
+        self.delisting_return = check_number("delisting_return", delisting_return)
+        if self.delisting_return < -1.0:
+            raise ValueError(
+                f"delisting_return must be >= -1 (a total loss), got {delisting_return!r}."
+            )
         self.privileged_state = privileged_state
 
         exo_widths: list[int] = []
@@ -242,11 +253,22 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
             self.action_space = Box(0.0, 1.0, shape=(S + 1,), dtype=np.float32)
 
         self._started = False
+        self._over = False
         self._t = 0
         self._start = 0
         self.equity = 1.0
         self.weights = np.zeros(S)
         self._slot_cols = np.full(S, -1, dtype=np.intp)
+
+    @property
+    def reward_fn(self) -> RewardFunction:
+        """The reward function. Setting it stores a copy, as `reward=` does, so a stateful
+        reward set on several envs at once (e.g. with a vector env's `set_attr`) is not shared."""
+        return self._reward_fn
+
+    @reward_fn.setter
+    def reward_fn(self, value: RewardFunction) -> None:
+        self._reward_fn = copy.deepcopy(value)
 
     # ------------------------------------------------------------------
     # Episode data
@@ -386,6 +408,24 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     def elapsed_steps(self) -> int:
         return self._t
 
+    def _decision_row(self) -> int:
+        if not self._started:
+            raise ResetRequired()
+        return min(self.lookback + self._t, self._window - 1)
+
+    @property
+    def timestamp(self) -> Any:
+        """The time of the current decision, as in `info["timestamp"]` (the step when simulated)."""
+        row = self._decision_row()
+        return self._times[row]
+
+    @property
+    def latent_state(self) -> dict[str, NDArray[np.float64]]:
+        """The simulation's latent state at the current decision (e.g. `{"regime": ...}`), as
+        `info["state"]` carries it with `privileged_state=True`; empty for historical data."""
+        row = self._decision_row()
+        return {k: np.asarray(v[row]).copy() for k, v in self._state.items()}
+
     def reset(
         self,
         *,
@@ -397,6 +437,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         self._slots.reset()
         self._load_episode(options)
         self._started = True
+        self._over = False
         self._t = 0
         self.equity = 1.0
         self.weights = np.zeros(self.max_assets)
@@ -445,6 +486,8 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     def step(self, action: NDArray[np.float32]) -> StepResult[dict[str, Any]]:
         if not self._started:
             raise ResetRequired()
+        if self._over:
+            raise episode_over()
         row = self.lookback + self._t
         target = self.target_weights(action)
         trades = target - self.weights
@@ -469,6 +512,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         self._t += 1
         terminated = bool(s.wiped_out)
         truncated = not terminated and self._t >= self.episode_length
+        self._over = terminated or truncated
         if not (terminated or truncated):
             self._assign_slots(self.lookback + self._t)
         outcome = StepOutcome.from_growth(
@@ -507,7 +551,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         return obs
 
     def _info(self, *, turnover: float, cost: float, financing: float) -> dict[str, Any]:
-        row = min(self.lookback + self._t, self._window - 1)
+        row = self._decision_row()
         info: dict[str, Any] = {
             "equity": self.equity,
             "turnover": turnover,
@@ -516,11 +560,11 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
             "gross_exposure": float(np.abs(self.weights).sum()),
             "n_assets": int(self._tradable(row).sum()),
             "weights": self.weights.copy(),
-            "timestamp": self._times[row],
+            "timestamp": self.timestamp,
             "dt": self.dt,
         }
         if self.privileged_state:
-            info["state"] = {k: np.asarray(v[row]).copy() for k, v in self._state.items()}
+            info["state"] = self.latent_state
         return info
 
 

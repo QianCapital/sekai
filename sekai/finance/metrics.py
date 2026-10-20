@@ -97,6 +97,13 @@ def _check_finite(value: float, name: str) -> float:
     return v
 
 
+def _check_non_negative(value: float, name: str) -> float:
+    v = float(value)
+    if not (math.isfinite(v) and v >= 0.0):
+        raise ValueError(f"{name} must be a non-negative finite number, got {value!r}")
+    return v
+
+
 def _check_level(level: float) -> float:
     v = float(level)
     if not 0.0 < v < 1.0:
@@ -129,7 +136,9 @@ def _sample_std(x: NDArray[np.float64], *, offset: float = 1.0) -> float:
 
     Rounding is measured against `offset + max|x|`: simple returns are differences of
     growth factors near 1, so they carry rounding of order eps whatever their size
-    (`offset=1`); P&L in absolute units has only relative rounding (`offset=0`).
+    (`offset=1`); P&L increments carry rounding of order eps times the wealth level
+    they were differenced from (`offset` = that level), or only their own relative
+    rounding if they are exact (`offset=0`).
     """
     if x.size < 2 or bool(np.all(x == x[0])):
         return 0.0
@@ -255,25 +264,30 @@ def returns_from_equity(equity: ArrayLike) -> NDArray[np.float64]:
     """Simple returns between consecutive equity values (the inverse of `equity_curve`).
 
     Args:
-        equity: Equity path, shape (n + 1,) with n >= 1. Every value but the last
-            must be positive; a last value at or below zero is a wipe-out and gives
-            a return of exactly -1 (-100 %).
+        equity: Equity path, shape (n + 1,) with n >= 1, starting positive. The
+            first value at or below zero is a wipe-out, and every value after it
+            must be 0 (equity stays at zero, as `equity_curve` reports it).
 
     Returns:
-        Simple returns ``equity[t + 1] / equity[t] - 1``, shape (n,).
+        Simple returns ``equity[t + 1] / equity[t] - 1``, shape (n,); a wipe-out
+        gives a return of exactly -1 (-100 %) and the periods after it 0, as
+        `RecordPerformance` records them.
 
     Raises:
         ValueError: If `equity` has fewer than two values, is not 1-D or finite,
-            or has a non-positive value before the last.
+            does not start positive, or is not 0 after a wipe-out.
     """
     e = _as_series(equity, "equity")
     if e.size < 2:
         raise ValueError("equity needs at least two values to define a return")
-    if bool(np.any(e[:-1] <= 0.0)):
-        raise ValueError("equity must be positive; only the last value may be <= 0 (a wipe-out)")
-    r = e[1:] / e[:-1] - 1.0
-    if e[-1] <= 0.0:
-        r[-1] = -1.0
+    down = np.flatnonzero(e <= 0.0)
+    wipe = int(down[0]) if down.size else e.size  # index of the wipe-out, if any
+    if wipe == 0 or bool(np.any(e[wipe + 1 :] != 0.0)):
+        raise ValueError("equity must be positive until a wipe-out (a value <= 0) and 0 after it")
+    r = np.zeros(e.size - 1)
+    r[: wipe - 1] = e[1:wipe] / e[: wipe - 1] - 1.0
+    if wipe < e.size:
+        r[wipe - 1] = -1.0
     return r
 
 
@@ -672,23 +686,29 @@ class PnLSummary:
         )
 
 
-def pnl_summary(pnl: ArrayLike, periods_per_year: float = 252) -> PnLSummary:
+def pnl_summary(pnl: ArrayLike, periods_per_year: float = 252, *, scale: float = 0.0) -> PnLSummary:
     """Summarise a series of per-period P&L increments.
 
     Args:
         pnl: Per-period P&L increments in absolute units, shape (n,).
         periods_per_year: Number of periods in a year (annualises the Sharpe ratio).
+        scale: Size of the cumulative wealth or P&L that the increments are
+            differences of, such as its largest absolute value. A difference of
+            values near `scale` carries rounding of order ``eps * scale``, so a
+            standard deviation within that of zero counts as zero (and the Sharpe
+            ratio is 0), as for returns. 0 (the default) treats the increments as
+            exact; `RecordPerformance` passes the episode's largest absolute value.
 
     Returns:
         A `PnLSummary`.
 
     Raises:
-        ValueError: If `pnl` is empty, not 1-D or not finite, or
-            `periods_per_year` is not positive.
+        ValueError: If `pnl` is empty, not 1-D or not finite, `periods_per_year`
+            is not positive, or `scale` is negative or not finite.
     """
     x = _as_series(pnl, "pnl")
     ppy = _check_positive(periods_per_year, "periods_per_year")
-    sd = _sample_std(x, offset=0.0)
+    sd = _sample_std(x, offset=_check_non_negative(scale, "scale"))
     mean = float(np.mean(x))
     cumulative = np.concatenate(([0.0], np.cumsum(x)))
     drawdown = np.maximum.accumulate(cumulative) - cumulative
@@ -722,7 +742,9 @@ class RecordPerformance(Wrapper[ObsType, ActType, ObsType, ActType]):
     **P&L mode** (`pnl_key` given) reads cumulative wealth or P&L in absolute
     units from ``info[pnl_key]``; it may start at zero or be negative. Each
     step's P&L is the change since the previous value (from the reset info,
-    else 0.0), and episodes are summarised with `pnl_summary`.
+    else 0.0), and episodes are summarised with `pnl_summary`, with the
+    episode's largest absolute value as the rounding `scale` (a P&L that is
+    constant up to the rounding of the wealth level has zero volatility).
 
     In equity mode, ``info[turnover_key]`` and ``info[cost_key]`` are collected
     from the steps that report them and summarised as the mean turnover and the
@@ -786,6 +808,7 @@ class RecordPerformance(Wrapper[ObsType, ActType, ObsType, ActType]):
         self.last_summary: PerformanceSummary | PnLSummary | None = None
 
         self._prev: float = 0.0
+        self._level: float = 0.0  # largest |value| of the episode (P&L mode rounding)
         self._wiped: bool = False
         self._flows: list[float] = []
         self._turnover: list[float] = []
@@ -821,6 +844,7 @@ class RecordPerformance(Wrapper[ObsType, ActType, ObsType, ActType]):
             self._prev = self._read(info, key)
         else:
             self._prev = 0.0 if self.pnl_key is not None else 1.0
+        self._level = abs(self._prev)
         self._wiped = self.pnl_key is None and self._prev <= 0.0
         self._flows = []
         self._turnover = []
@@ -830,6 +854,7 @@ class RecordPerformance(Wrapper[ObsType, ActType, ObsType, ActType]):
         value = self._read(info, self._value_key)
         if self.pnl_key is not None:
             self._flows.append(value - self._prev)
+            self._level = max(self._level, abs(value))
         elif self._wiped:
             self._flows.append(0.0)
         elif value <= 0.0:
@@ -848,7 +873,7 @@ class RecordPerformance(Wrapper[ObsType, ActType, ObsType, ActType]):
     def _summarise(self) -> PerformanceSummary | PnLSummary:
         flows = np.asarray(self._flows, dtype=np.float64)
         if self.pnl_key is not None:
-            return pnl_summary(flows, self.periods_per_year)
+            return pnl_summary(flows, self.periods_per_year, scale=self._level)
         return performance_summary(
             flows,
             self.periods_per_year,

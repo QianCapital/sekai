@@ -8,8 +8,10 @@ import numpy as np
 
 from sekai.core.env import Env
 from sekai.spaces.box import Box
+from sekai.spaces.discrete import Discrete
+from sekai.spaces.multi_discrete import MultiDiscrete
 from sekai.spaces.space import Space
-from sekai.utils.masking import get_action_mask, supports_action_mask
+from sekai.utils.masking import flatten_action_mask, get_action_mask, supports_action_mask
 
 
 def _equal(a: Any, b: Any) -> bool:
@@ -56,6 +58,11 @@ def check_env(
     This is a testing utility — call it in your test suite, not in production.
     Unlike gymnasium's PassiveEnvChecker, it adds zero overhead to normal training.
 
+    Exceptions from reset(), step() and action_mask() are reported as ERROR lines,
+    not raised. Every reset() is checked, including those that start a new episode
+    during the rollout (which must not overwrite the previous episode's terminal
+    observation in place).
+
     Args:
         env: The environment to check. It is reset and stepped, so pass a fresh one.
         n_steps: Number of random-action steps to take.
@@ -92,8 +99,18 @@ def check_env(
     masked = supports_action_mask(env)
 
     def sample_action(space: Space[Any] = act_space) -> Any:
-        """A random action, respecting the env's action_mask() when it has one."""
-        return space.sample(mask=get_action_mask(env)) if masked else space.sample()
+        """A random action, respecting the env's action_mask() when it has one.
+
+        The mask is also checked with flatten_action_mask(), the layout that
+        ActionMaskObservation and to_gymnasium() give to learners.
+        """
+        if not masked:
+            return space.sample()
+        mask = get_action_mask(env)
+        action = space.sample(mask=mask)
+        if isinstance(space, (Discrete, MultiDiscrete, Box)):
+            flatten_action_mask(space, mask)
+        return action
 
     if check_action_space:
         sample_action_ = act_space.sample()
@@ -102,15 +119,15 @@ def check_env(
     if check_obs_space and not obs_space.contains(obs_space.sample()):
         error("observation_space.sample() returned a value not in observation_space.contains().")
 
-    # Per-step problems are reported once each, with how many steps showed them,
-    # instead of one line per step.
+    # Per-step problems are reported once each, with how many steps (or resets) showed
+    # them, instead of one line per step.
     step_problems: dict[str, list[Any]] = {}
 
-    def step_warn(kind: str, msg: str) -> None:
+    def step_warn(kind: str, msg: str, unit: str = "steps") -> None:
         if kind in step_problems:
             step_problems[kind][1] += 1
         else:
-            step_problems[kind] = [msg, 1]
+            step_problems[kind] = [msg, 1, unit]
 
     def obs_problem(obs: Any, where: str) -> tuple[str, str] | None:
         if not check_obs_space:
@@ -136,6 +153,17 @@ def check_env(
         if problem is not None:
             warn(problem[1])
 
+    def check_reset_obs(obs: Any, where: str) -> None:
+        """Like check_obs, but one line for all reset()s, with how many showed the problem."""
+        problem = obs_problem(obs, where)
+        if problem is not None:
+            step_warn(f"reset-{problem[0]}", problem[1], unit="resets")
+
+    def report_step_problems() -> None:
+        for msg, count, unit in step_problems.values():
+            warn(msg if count == 1 else f"{msg} (seen at {count} {unit}; first shown)")
+        step_problems.clear()
+
     # ------------------------------------------------------------------
     # reset()
     # ------------------------------------------------------------------
@@ -150,7 +178,7 @@ def check_env(
         return issues
     if not isinstance(reset_result.info, dict):
         error(f"reset() info is {type(reset_result.info).__name__}, expected dict.")
-    check_obs(reset_result.observation, "reset()")
+    check_reset_obs(reset_result.observation, "reset()")
 
     if masked:
         try:
@@ -161,6 +189,7 @@ def check_env(
                 f"{str(e).rstrip('.')}. "
                 "action_mask() must return a mask in the format action_space.sample() accepts."
             )
+            report_step_problems()
             return issues
         if not act_space.contains(masked_action):
             error("action_space.sample(mask=env.action_mask()) returned an invalid action.")
@@ -172,6 +201,8 @@ def check_env(
     prev_obs: Any = reset_result.observation
     prev_obs_copy: Any = copy.deepcopy(prev_obs)
     aliasing_reported = False
+    reset_clobber_reported = False
+    reset_failed = False
     for step_idx in range(n_steps):
         try:
             action = sample_action()
@@ -240,26 +271,57 @@ def check_env(
         prev_obs = result.observation
         prev_obs_copy = copy.deepcopy(prev_obs)
         if result.done:
-            prev_obs = env.reset().observation
+            where = f"reset() after the episode ended at step {step_idx}"
+            try:
+                next_reset = env.reset()
+            except Exception as e:
+                error(f"{where} raised {type(e).__name__}: {e}")
+                reset_failed = True
+                break
+            if not hasattr(next_reset, "observation") or not hasattr(next_reset, "info"):
+                error(f"{where} did not return a ResetResult with .observation and .info.")
+                reset_failed = True
+                break
+            if not reset_clobber_reported and not _equal(prev_obs, prev_obs_copy):
+                warn(
+                    "reset() overwrote, in place, the observation step() returned at the end "
+                    "of the episode. AutoReset and vector envs pass that terminal observation "
+                    'on in info["final_observation"], which would then hold the new episode\'s '
+                    "first observation. Return a copy (e.g. self._state.copy())."
+                )
+                reset_clobber_reported = True
+            check_reset_obs(next_reset.observation, where)
+            prev_obs = next_reset.observation
             prev_obs_copy = copy.deepcopy(prev_obs)
 
-    for msg, count in step_problems.values():
-        warn(msg if count == 1 else f"{msg} (seen at {count} steps; first shown)")
     if anomalous_rewards:
         warn(f"Encountered {anomalous_rewards} infinite reward(s) during {n_steps} steps.")
+    if reset_failed:
+        report_step_problems()
+        return issues  # every remaining check starts with reset()
 
     # ------------------------------------------------------------------
     # Seeding
     # ------------------------------------------------------------------
     if check_reset_seed:
-        r1 = env.reset(seed=0)
-        r2 = env.reset(seed=0)
-        if not _equal(r1.observation, r2.observation):
-            warn(
-                "reset(seed=0) returned different observations on two calls. "
-                "Call self._set_rng(seed) at the start of reset() and draw all "
-                "randomness from self.rng."
-            )
+        try:
+            r1 = env.reset(seed=0)
+            # A copy: a reset() that writes into the array it returned last time would
+            # make the two observations the same object, and so always equal.
+            first = copy.deepcopy(r1.observation)
+            check_reset_obs(first, "reset(seed=0)")
+            r2 = env.reset(seed=0)
+            second = r2.observation
+        except Exception as e:
+            error(f"reset(seed=0) raised {type(e).__name__}: {e}")
+        else:
+            if not _equal(first, second):
+                warn(
+                    "reset(seed=0) returned different observations on two calls. "
+                    "Call self._set_rng(seed) at the start of reset() and draw all "
+                    "randomness from self.rng."
+                )
+    report_step_problems()
 
     if check_determinism:
 
@@ -268,14 +330,16 @@ def check_env(
             # actions, while still respecting state-dependent action masks.
             actions = copy.deepcopy(act_space)
             actions.seed(123)
-            trace: list[Any] = [env.reset(seed=123).observation]
+            # Deep copies, so an env that reuses its observation arrays does not change
+            # entries already recorded.
+            trace: list[Any] = [copy.deepcopy(env.reset(seed=123).observation)]
             for _ in range(min(n_steps, 50)):
                 try:
                     action = sample_action(actions)
                 except Exception:  # no valid action: already reported by the step checks
                     break
                 r = env.step(action)
-                trace.append((r.observation, r.reward, r.terminated, r.truncated))
+                trace.append(copy.deepcopy((r.observation, r.reward, r.terminated, r.truncated)))
                 if r.done:
                     break
             return trace

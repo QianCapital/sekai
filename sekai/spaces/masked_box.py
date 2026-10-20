@@ -148,7 +148,10 @@ class MaskedBox(Dict):
             return False
         if not self.spaces["mask"].contains(x["mask"]):
             return False
-        values = np.asarray(x["values"])
+        try:
+            values = np.asarray(x["values"])
+        except ValueError:  # ragged nesting
+            return False
         if values.shape != (self.max_size, *self.element_shape) or not np.can_cast(
             values.dtype, self.value_dtype, casting="same_kind"
         ):

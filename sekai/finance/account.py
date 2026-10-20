@@ -19,6 +19,7 @@ single env or every sub-env of a native vector env at once.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,10 +35,17 @@ class AccountConfig:
 
     Args:
         allow_short: Allow negative weights.
-        max_leverage: Cap on gross exposure `sum(|w|)` (1.0 = no leverage).
-        cash_rate: Annual interest earned on positive cash.
-        margin_rate: Annual interest paid on borrowed cash (default: cash_rate).
-        borrow_rate: Annual fee on the value of short positions.
+        max_leverage: Cap on gross exposure `sum(|w|)` (1.0 = no leverage); finite
+            and positive.
+        cash_rate: Annual interest earned on positive cash; finite (negative rates
+            are allowed).
+        margin_rate: Annual interest paid on borrowed cash (default: cash_rate);
+            finite.
+        borrow_rate: Annual fee on the value of short positions; finite and
+            non-negative.
+
+    Raises:
+        ValueError: If a numeric field is NaN, infinite or out of its range.
     """
 
     allow_short: bool = False
@@ -47,6 +55,12 @@ class AccountConfig:
     borrow_rate: float = 0.0
 
     def __post_init__(self) -> None:
+        rates = {"cash_rate": self.cash_rate, "borrow_rate": self.borrow_rate}
+        if self.margin_rate is not None:
+            rates["margin_rate"] = self.margin_rate
+        for name, value in {"max_leverage": self.max_leverage, **rates}.items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value!r}.")
         if self.max_leverage <= 0:
             raise ValueError(f"max_leverage must be positive, got {self.max_leverage}.")
         if self.borrow_rate < 0:

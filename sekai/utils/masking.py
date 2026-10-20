@@ -11,6 +11,15 @@ implements a method `action_mask()` returning a mask in the format that its
 | `MultiDiscrete(nvec)` | tuple of int8 arrays (one per entry), or one array padded to `max(nvec)` |
 | `Box` | array broadcastable to the shape; 0 = this component must stay at zero |
 
+A MultiDiscrete mask entry with the wrong number of flags raises ValueError, in
+`sample(mask=...)` and in `flatten_action_mask()` alike (and `check_env` reports it).
+
+"Zero" in a Box mask is `action_space.zero()` (zero clipped into the bounds) of the
+space the mask is applied in. `RescaleAction` changes the space, so it sets the
+masked components of every action to the env's zero itself: a policy sampling in
+`[-1, 1]` with the env's mask sends 0 (not the midpoint of the env's range) for an
+asset that cannot be traded.
+
 Vector envs expose it with `vec.call("action_mask")`, `sekai.ActionMaskObservation`
 adds it to the observation, and `sekai.compat.to_gymnasium()` forwards it as
 `action_masks()` for learners such as sb3-contrib's MaskablePPO.
@@ -59,7 +68,8 @@ def flatten_action_mask(space: Space[Any], mask: Any) -> NDArray[np.bool_]:
     """Convert a mask to the flat boolean layout used by masked-policy learners.
 
     Discrete: `(n,)`. MultiDiscrete: the per-entry masks concatenated, length
-    `sum(nvec)`. Box: the mask broadcast to the shape and flattened.
+    `sum(nvec)`. Box: the mask broadcast to the shape and flattened. A mask of the
+    wrong shape raises ValueError.
     """
     if isinstance(space, Discrete):
         flat = np.asarray(mask).astype(bool).reshape(-1)
@@ -67,15 +77,8 @@ def flatten_action_mask(space: Space[Any], mask: Any) -> NDArray[np.bool_]:
             raise ValueError(f"Discrete({space.n}) mask must have shape ({space.n},).")
         return flat
     if isinstance(space, MultiDiscrete):
-        parts: list[NDArray[np.bool_]] = []
-        for idx in np.ndindex(space.nvec.shape):
-            if isinstance(mask, np.ndarray):
-                entry = mask[idx]
-            else:
-                entry = mask
-                for i in idx:
-                    entry = entry[i]
-            parts.append(np.asarray(entry).astype(bool).reshape(-1)[: int(space.nvec[idx])])
+        # Raises ValueError for an entry with the wrong number of flags, like sample(mask=...).
+        parts = [entry.astype(bool) for entry in space._mask_entries(mask)]
         return np.concatenate(parts) if parts else np.zeros(0, dtype=bool)
     if isinstance(space, Box):
         return np.broadcast_to(np.asarray(mask).astype(bool), space.shape).reshape(-1)

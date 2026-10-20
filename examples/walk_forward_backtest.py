@@ -54,7 +54,7 @@ for _train, test in data.walk_forward(4 * YEAR, YEAR, embargo=5, history=LOOKBAC
         env = RecordPerformance(
             sekai.make(
                 "Portfolio-v0",
-                prices=test,
+                data=test,
                 lookback=LOOKBACK,
                 episode_length=YEAR - 1,
                 sampler=SequentialStart(),

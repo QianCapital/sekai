@@ -13,6 +13,11 @@ class Space(abc.ABC, Generic[T]):
 
     Spaces define the valid range of values for observations and actions.
     Unlike gymnasium, T is invariant so contains() is correctly typed.
+
+    Equality: the built-in spaces compare by value (and, being mutable, are not
+    hashable). A subclass that does not define `__eq__` compares by identity, so
+    two instances are equal only if they are the same object; define `__eq__`
+    (and set `__hash__ = None`, or define it consistently) to compare by value.
     """
 
     def __init__(
@@ -78,6 +83,3 @@ class Space(abc.ABC, Generic[T]):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
-
-    def __eq__(self, other: object) -> bool:
-        return type(self) is type(other)

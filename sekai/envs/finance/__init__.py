@@ -1,6 +1,6 @@
 """Financial-market environments: trading, portfolios, dynamic universes, market making,
-execution, and their natively vectorised versions. The reusable parts they are built
-from live in `sekai.finance`."""
+execution, and their natively vectorised versions, with an RGB renderer for each. The
+reusable parts they are built from live in `sekai.finance`."""
 
 from sekai.envs.finance.lob_env import LimitOrderBookEnv, LimitOrderBookMarket
 from sekai.envs.finance.market import random_correlation, sample_window, simulate_gbm
@@ -9,6 +9,15 @@ from sekai.envs.finance.market_making import MarketMakingEnv
 from sekai.envs.finance.optimal_execution import OptimalExecutionEnv
 from sekai.envs.finance.portfolio import PortfolioEnv
 from sekai.envs.finance.trading import TradingEnv
+from sekai.envs.finance.rendering import (
+    LimitOrderBookMarketRenderer,
+    LimitOrderBookRenderer,
+    MarketMakingRenderer,
+    MarketRenderer,
+    OptimalExecutionRenderer,
+    PortfolioRenderer,
+    TradingRenderer,
+)
 from sekai.envs.finance.vector import (
     MarketMakingVecEnv,
     OptimalExecutionVecEnv,
@@ -28,6 +37,13 @@ __all__ = [
     "PortfolioVecEnv",
     "MarketMakingVecEnv",
     "OptimalExecutionVecEnv",
+    "TradingRenderer",
+    "PortfolioRenderer",
+    "MarketRenderer",
+    "MarketMakingRenderer",
+    "OptimalExecutionRenderer",
+    "LimitOrderBookRenderer",
+    "LimitOrderBookMarketRenderer",
     "default_market",
     "random_correlation",
     "sample_window",

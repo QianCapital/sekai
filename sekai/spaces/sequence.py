@@ -45,8 +45,15 @@ class Sequence(Space[Any]):
             raise ValueError(f"max_length must be >= 0, got {max_length}.")
         if stack:
             _empty_batch(feature_space)  # raises TypeError for spaces that cannot be stacked
+            from sekai.spaces.utils import _has_data
+
+            if not _has_data(feature_space):
+                raise TypeError(
+                    f"Sequence(stack=True) cannot stack elements of {feature_space!r}: it has no "
+                    "sub-space holding data, so a stacked sample could not record its length."
+                )
         self.feature_space = feature_space
-        self.max_length = max_length
+        self.max_length = None if max_length is None else int(max_length)
         self.stack = stack
         super().__init__(shape=None, dtype=None, seed=seed)
 
@@ -100,22 +107,22 @@ class Sequence(Space[Any]):
             return len(x) if isinstance(x, (tuple, list)) else None
         from sekai.spaces.dict import Dict
         from sekai.spaces.tuple import Tuple
+        from sekai.spaces.utils import _has_data
 
+        # Follow the first leaf of the structure, skipping empty sub-Dicts/Tuples (whose
+        # stacked form, {} or (), has no length); __init__ checks that a leaf exists.
         space, leaf = self.feature_space, x
-        while isinstance(space, (Dict, Tuple)):  # follow the first leaf of the structure
+        while isinstance(space, (Dict, Tuple)):
             if isinstance(space, Dict):
                 if not isinstance(leaf, dict):
                     return None
-                if not space.spaces:
-                    return 0
-                key = next(iter(space.keys()))
+                key = next(k for k, sub in space.items() if _has_data(sub))
                 space, leaf = space[key], leaf.get(key)
             else:
                 if not isinstance(leaf, tuple):
                     return None
-                if not space.spaces:
-                    return 0
-                space, leaf = space[0], leaf[0] if leaf else None
+                i = next(i for i, sub in enumerate(space.spaces) if _has_data(sub))
+                space, leaf = space[i], leaf[i] if len(leaf) > i else None
         if not isinstance(leaf, np.ndarray) or leaf.ndim == 0:
             return None
         return int(leaf.shape[0])

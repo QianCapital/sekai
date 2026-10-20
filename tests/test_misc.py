@@ -64,6 +64,61 @@ class TestRunningMeanStd:
         other.load_state_dict(rms.state_dict())
         assert other.count == rms.count and other.mean == rms.mean
 
+    def test_prior_does_not_bias_data_far_from_zero(self) -> None:
+        # The prior mean of 0 used to add about mean**2 * 1e-4 / n to the variance:
+        # 10.95 instead of 0.954 here.
+        data = 1e4 + np.random.default_rng(0).standard_normal(1000)
+        rms = sekai.RunningMeanStd()
+        for x in data:
+            rms.update(x[None])
+        np.testing.assert_allclose(rms.var, data.var(), rtol=1e-6)
+        np.testing.assert_allclose(rms.mean, data.mean(), rtol=1e-10)
+        assert rms.count == pytest.approx(1000 + 1e-4)  # the pseudo-count is still counted
+
+    def test_first_batch_sets_the_mean_and_keeps_a_variance_floor(self) -> None:
+        rms = sekai.RunningMeanStd()
+        rms.update(np.array([5.0]))
+        assert rms.mean == 5.0
+        # The prior's unit variance keeps its pseudo-count weight: one sample does not
+        # give a zero variance (NormalizeReward divides by its square root).
+        assert rms.var == pytest.approx(1e-4 / (1 + 1e-4))
+
+    def test_untouched_state_dict_still_starts_from_the_first_batch(self) -> None:
+        fresh = sekai.RunningMeanStd(shape=(2,)).state_dict()
+        rms = sekai.RunningMeanStd(shape=(2,))
+        rms.load_state_dict(fresh)
+        rms.update(np.array([[100.0, -100.0], [102.0, -98.0]]))
+        np.testing.assert_allclose(rms.mean, [101.0, -99.0])
+        np.testing.assert_allclose(rms.var, [1.0, 1.0], rtol=1e-3)
+
+    @pytest.mark.parametrize("cls", [sekai.RunningMeanStd, sekai.ExponentialMovingStats])
+    def test_empty_batches_are_ignored(self, cls: Any) -> None:
+        stats = cls(shape=(2,))
+        stats.update(np.ones((3, 2)))
+        before = stats.state_dict()
+        stats.update(np.empty((0, 2)))  # used to make RunningMeanStd NaN for good
+        stats.update_from_moments(np.zeros(2), np.zeros(2), 0)
+        after = stats.state_dict()
+        for key in before:
+            np.testing.assert_array_equal(after[key], before[key])
+        assert np.all(np.isfinite(stats.normalize(np.ones(2))))
+
+
+def test_backend_mismatch_is_deprecated() -> None:
+    import sekai.error
+
+    assert "BackendMismatch" not in sekai.__all__
+    with pytest.warns(DeprecationWarning, match="removed in sekai 0.3"):
+        cls = sekai.BackendMismatch
+    with pytest.warns(DeprecationWarning, match="sekai.error.BackendMismatch is deprecated"):
+        assert sekai.error.BackendMismatch is cls
+    err = cls("numpy", "torch")
+    assert isinstance(err, sekai.SekaiError) and "expected 'numpy'" in str(err)
+    with pytest.warns(DeprecationWarning):
+        assert type(pickle.loads(pickle.dumps(err))) is cls
+    with pytest.raises(AttributeError):
+        sekai.NoSuchName
+
 
 class TestStats:
     def test_in_memory_tracker_summary(self) -> None:

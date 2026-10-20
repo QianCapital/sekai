@@ -40,7 +40,7 @@ dates = dates[np.is_busday(dates)]  # weekdays only
 closes = 100 * np.exp(np.cumsum(np.random.default_rng(0).normal(0.0, 0.01, len(dates))))
 data = MarketData(closes, timestamps=dates)
 
-env = sekai.make("Trading-v0", prices=data, lookback=10, episode_length=20)
+env = sekai.make("Trading-v0", data=data, lookback=10, episode_length=20)
 result = env.reset(seed=0, options={"start": "2024-03-01"})  # a Friday
 print(result.info["timestamp"], env.step(1).info["timestamp"])  # 2024-03-01 2024-03-04
 ```
@@ -184,8 +184,8 @@ the decision reaches the market one step later.
 `NormalizeObservation` and `VecNormalizeObservation` default to `stats="running"`, which
 weights every observation ever seen equally. On data whose distribution changes (volatility
 regimes, trending prices) those statistics drift towards a long-run average that no longer
-describes the present. `stats="ewm"` uses exponentially weighted statistics instead: a sample's
-weight halves every `halflife` samples.
+describes the present. `stats="ewm"` uses exponentially weighted statistics instead: an
+observation's weight halves every `halflife` steps.
 
 ```python
 env = sekai.NormalizeObservation(sekai.make("Portfolio-v0"), stats="ewm", halflife=500, clip=5.0)
@@ -209,10 +209,13 @@ print(running.std.round(4), ewm.std.round(4))  # [0.016] [0.0281]
 ```
 
 `ExponentialMovingStats(shape, halflife)` has the same interface as `RunningMeanStd`
-(`update()`, `mean`, `var`, `std`, `normalize()`, `state_dict()`). A batch counts as
-`len(batch)` samples, so with `VecNormalizeObservation` every step adds `num_envs` samples:
-scale `halflife` with the number of sub-envs. `clip=` bounds the normalised values, which
-keeps a policy stable when a regime change produces values far outside the recent range.
+(`update()`, `mean`, `var`, `std`, `normalize()`, `state_dict()`). Called directly, a batch
+counts as `len(batch)` samples. The normalisation wrappers count steps instead: with
+`stats="ewm"`, each call of `NormalizeObservation` and each vector step of
+`VecNormalizeObservation` counts once, however many sub-envs (or occupied `MaskedBox` slots)
+it carries, so `halflife` is in steps whatever `num_envs` is and needs no scaling. `clip=`
+bounds the normalised values, which keeps a policy stable when a regime change produces
+values far outside the recent range.
 
 ## Point-in-time data
 

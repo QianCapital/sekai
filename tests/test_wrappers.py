@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -398,3 +399,124 @@ def test_reward_accumulators_use_python_floats() -> None:
     norm.reset(seed=0)
     norm.step(0)
     assert type(norm._returns) is float
+
+
+# ---------------------------------------------------------------------------
+# Regressions found in the 0.2.0 pre-release review
+# ---------------------------------------------------------------------------
+
+
+class MaskedBoxActionEnv(BoxEnv):
+    """BoxEnv with a [1, 3] action range on 3 components, the middle one masked."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.action_space = sekai.Box(1.0, 3.0, shape=(3,), dtype=np.float32)
+        self.observation_space = sekai.Box(-5.0, 5.0, shape=(3,), dtype=np.float32)
+
+    def reset(self, *, seed: Any = None, options: Any = None) -> sekai.ResetResult:
+        self._set_rng(seed)
+        return sekai.ResetResult(np.zeros(3, np.float32), {})
+
+    def action_mask(self) -> np.ndarray:
+        return np.array([1, 0, 1], np.int8)
+
+
+class TestRescaleActionMasks:
+    def test_masked_components_reach_the_env_as_its_zero(self) -> None:
+        env = sekai.RescaleAction(MaskedBoxActionEnv(), -1.0, 1.0)
+        env.reset(seed=0)
+        env.action_space.seed(0)
+        action = env.action_space.sample(mask=sekai.get_action_mask(env))
+        assert action[1] == 0.0  # the wrapper's zero, the middle of [1, 3] once rescaled
+        env.step(action)
+        inner = env.unwrapped
+        assert isinstance(inner, MaskedBoxActionEnv) and inner.last_action is not None
+        assert inner.last_action[1] == 1.0  # the env's zero(): 0 clipped into [1, 3]
+        np.testing.assert_allclose(inner.last_action[[0, 2]], 2.0 + action[[0, 2]], rtol=1e-6)
+        run(env.async_step(np.ones(3, np.float32)))  # same rule on the async path
+        assert inner.last_action.tolist() == [3.0, 1.0, 3.0]
+
+    def test_envs_without_a_mask_are_unchanged(self) -> None:
+        env = sekai.RescaleAction(BoxEnv(), -1.0, 1.0)
+        env.reset(seed=0)
+        env.step(np.zeros(2, np.float32))
+        assert env.unwrapped.last_action.tolist() == [0.0, 0.0]  # type: ignore[attr-defined]
+
+        class NoMaskNow(MaskedBoxActionEnv):
+            def action_mask(self) -> Any:
+                return None
+
+        env = sekai.RescaleAction(NoMaskNow(), -1.0, 1.0)
+        env.reset(seed=0)
+        env.step(np.ones(3, np.float32))
+        assert env.unwrapped.last_action.tolist() == [3.0, 3.0, 3.0]  # type: ignore[attr-defined]
+
+    def test_market_env_receives_zero_for_unlisted_assets(self) -> None:
+        env = sekai.RescaleAction(sekai.make("Market-v0"), -1.0, 1.0)
+        env.reset(seed=0)
+        mask = sekai.get_action_mask(env)
+        env.action_space.seed(0)
+        sent = env.action(env.action_space.sample(mask=mask))
+        assert np.all(sent[mask == 0] == 0.0)  # used to be 0.5, the middle of [0, 1]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda env: sekai.TimeLimit(env, 5),
+        lambda env: sekai.TimeAwareObservation(env, 5),
+        lambda env: sekai.FrameStackObservation(env, 2),
+        lambda env: sekai.DelayObservation(env, 1),
+        lambda env: sekai.DelayAction(env, 1, noop=0),
+        lambda env: sekai.StickyAction(env, 0.5),
+    ],
+)
+def test_stateful_wrappers_warn_outside_autoreset(build: Any) -> None:
+    with pytest.warns(UserWarning, match="Make AutoReset the outermost wrapper"):
+        build(sekai.AutoReset(CountingEnv(horizon=3)))
+    with pytest.warns(UserWarning, match="outermost"):  # found below other wrappers too
+        build(sekai.OrderEnforcing(sekai.AutoReset(CountingEnv(horizon=3))))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sekai.AutoReset(build(CountingEnv(horizon=3)))  # the right order: no warning
+        sekai.RecordEpisodeStatistics(sekai.AutoReset(CountingEnv(horizon=3)))
+
+
+def test_time_limit_inside_autoreset_restarts_each_episode() -> None:
+    env = sekai.AutoReset(sekai.TimeLimit(CountingEnv(horizon=100), 5))
+    env.reset(seed=0)
+    truncated = [env.step(0).truncated for _ in range(15)]
+    assert truncated == ([False] * 4 + [True]) * 3
+
+
+class TestCallableArgument:
+    def test_func_keyword_matches_gymnasium(self, counting_env: CountingEnv) -> None:
+        env = sekai.TransformReward(counting_env, func=lambda r: r * 10)
+        obs_env = sekai.TransformObservation(env, func=lambda o: o * 0, new_observation_space=None)
+        obs_env.reset(seed=0)
+        result = obs_env.step(2)
+        assert result.reward == 20.0 and not np.any(result.observation)
+
+    def test_fn_keyword_is_deprecated_but_works(self, counting_env: CountingEnv) -> None:
+        with pytest.warns(DeprecationWarning, match=r"TransformReward\(fn=...\) is deprecated"):
+            env = sekai.TransformReward(counting_env, fn=lambda r: r + 1)
+        with pytest.warns(DeprecationWarning, match="TransformObservation"):
+            env2 = sekai.TransformObservation(env, fn=lambda o: o)
+        env2.reset(seed=0)
+        assert env2.step(1).reward == 2.0
+
+    def test_func_is_required_once(self, counting_env: CountingEnv) -> None:
+        with pytest.raises(TypeError, match="missing required argument: 'func'"):
+            sekai.TransformReward(counting_env)
+        with pytest.raises(TypeError, match="both func and fn"):
+            sekai.TransformObservation(counting_env, lambda o: o, fn=lambda o: o)
+
+
+def test_clip_reward_accepts_none_for_a_side(counting_env: CountingEnv) -> None:
+    upper = sekai.ClipReward(counting_env, None, 0.5)  # used to raise TypeError
+    upper.reset(seed=0)
+    assert upper.step(2).reward == 0.5 and upper.min_reward == -np.inf
+    lower = sekai.ClipReward(CountingEnv(), min_reward=1.5, max_reward=None)
+    lower.reset(seed=0)
+    assert lower.step(0).reward == 1.5 and lower.max_reward == np.inf

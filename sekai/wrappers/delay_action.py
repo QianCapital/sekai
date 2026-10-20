@@ -9,6 +9,7 @@ from sekai.core.env import Env
 from sekai.core.result import ResetResult
 from sekai.core.wrapper import ActionWrapper
 from sekai.spaces.box import Box
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 class DelayAction(ActionWrapper[ObsType, ActType, ActType]):
@@ -41,6 +42,7 @@ class DelayAction(ActionWrapper[ObsType, ActType, ActType]):
         if not space.contains(noop):
             raise ValueError(f"noop {noop!r} is not in the action space {space!r}.")
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "DelayAction")
         self.delay = delay
         self.noop: ActType = noop
         self._pending: deque[ActType] = deque()

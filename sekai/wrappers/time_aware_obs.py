@@ -11,6 +11,7 @@ from sekai.core.wrapper import ObservationWrapper
 from sekai.spaces.box import Box, float_dtype
 from sekai.spaces.dict import Dict
 from sekai.spaces.masked_box import MaskedBox
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 def _find_time_limit(env: Env[Any, Any]) -> int | None:
@@ -47,6 +48,7 @@ class TimeAwareObservation(ObservationWrapper[Any, ActType, Any]):
         dict_key: str = "time",
     ) -> None:
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "TimeAwareObservation")
         self.normalize_time = normalize_time
         self.dict_key = dict_key
         self.max_episode_steps = max_episode_steps or _find_time_limit(env)

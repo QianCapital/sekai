@@ -11,8 +11,8 @@ top-level `sekai` package unless the page says otherwise.
 | [Vector](vector.md) | `SyncVecEnv`, `AsyncVecEnv`, `ProcVecEnv`, `NativeVecEnv`, results and vector wrappers |
 | [Registry](registry.md) | `register`, `make`, `make_vec`, `EnvSpec`, ... |
 | [Environments](envs.md) | built-in environment classes (and native vector versions), renderers and price simulators in `sekai.envs` |
-| [Finance](finance.md) | the `sekai.finance` toolkit: market data, samplers, simulators, features, costs, accounts, rewards, metrics, universe slots, order book |
-| [Rendering](rendering.md) | `sekai.rendering`: `Renderer`, `Canvas`, `RecordFrames`, `save_gif`, `save_video` |
+| [Finance](finance.md) | the `sekai.finance` toolkit: market data, samplers, simulators, features, costs, accounts, rewards, metrics, universe slots, order book, market charts |
+| [Rendering](rendering.md) | `sekai.rendering`: `Renderer`, `Canvas`, `RecordFrames`, `save_gif`, `save_video`, dashboards, charts and themes |
 | [Statistics](stats.md) | `EpisodeStats` and trackers |
 | [Utilities](utils.md) | `check_env`, `RunningMeanStd`, `ExponentialMovingStats`, action-mask helpers, seeding helpers |
 | [Compatibility](compat.md) | `sekai.compat`: the gymnasium and PettingZoo bridges |

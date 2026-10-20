@@ -10,6 +10,7 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.envs._utils import flat_action
+from sekai.envs.finance._common import check_number, episode_over
 from sekai.error import InvalidAction, ResetRequired
 from sekai.spaces.box import Box
 
@@ -39,7 +40,14 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
       (time since arrival, in units of `total_time`) and `dt` (the period `tau`).
 
     `almgren_chriss_actions()` returns the closed-form optimal schedule as a
-    sequence of actions; with `risk_aversion=0` it is TWAP.
+    sequence of actions; with `risk_aversion=0` it is TWAP. `step()` after the
+    episode has ended raises `ResetRequired`.
+
+    Raises:
+        ValueError: For a parameter out of range: `initial_inventory`, `s0`,
+            `total_time` and `temporary_impact` must be positive (the latter above
+            `permanent_impact * tau / 2`), `sigma`, `permanent_impact`, `fixed_cost`
+            and `risk_aversion` non-negative, and `n_steps` >= 1.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 5}
@@ -57,18 +65,18 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
         fixed_cost: float = 0.0625,
         risk_aversion: float = 1e-6,
     ) -> None:
-        if n_steps < 1 or initial_inventory <= 0 or total_time <= 0:
-            raise ValueError("n_steps, initial_inventory and total_time must be positive.")
-        self.X0 = float(initial_inventory)
-        self.s0 = s0
-        self.sigma = sigma
-        self.total_time = total_time
+        if n_steps < 1:
+            raise ValueError("n_steps must be >= 1.")
+        self.X0 = check_number("initial_inventory", initial_inventory, ">0")
+        self.s0 = check_number("s0", s0, ">0")
+        self.sigma = check_number("sigma", sigma, ">=0")
+        self.total_time = check_number("total_time", total_time, ">0")
         self.n_steps = n_steps
-        self.tau = total_time / n_steps
-        self.gamma = permanent_impact
-        self.eta = temporary_impact
-        self.epsilon = fixed_cost
-        self.risk_aversion = risk_aversion
+        self.tau = self.total_time / n_steps
+        self.gamma = check_number("permanent_impact", permanent_impact, ">=0")
+        self.eta = check_number("temporary_impact", temporary_impact, ">0")
+        self.epsilon = check_number("fixed_cost", fixed_cost, ">=0")
+        self.risk_aversion = check_number("risk_aversion", risk_aversion, ">=0")
         if self.eta - 0.5 * self.gamma * self.tau <= 0:
             raise ValueError("temporary_impact must exceed permanent_impact * tau / 2.")
 
@@ -79,6 +87,7 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
         self.action_space = Box(0.0, 1.0, shape=(1,), dtype=np.float32)
 
         self._started = False
+        self._over = False
         self._k = 0
         self.inventory = self.X0
         self.mid = s0
@@ -145,6 +154,7 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
     ) -> ResetResult[NDArray[np.float32]]:
         self._set_rng(seed)
         self._started = True
+        self._over = False
         self._k = 0
         self.inventory = self.X0
         self.mid = self.s0
@@ -154,6 +164,8 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
     def step(self, action: NDArray[np.float32]) -> StepResult[NDArray[np.float32]]:
         if not self._started:
             raise ResetRequired()
+        if self._over:
+            raise episode_over()
         a = flat_action(action).astype(np.float64)
         if a.shape != (1,) or not np.isfinite(a[0]):
             raise InvalidAction(action, self.action_space)
@@ -175,10 +187,11 @@ class OptimalExecutionEnv(Env[NDArray[np.float32], NDArray[np.float32]]):
 
         risk = self.risk_aversion * self.sigma**2 * self.tau * self.inventory**2
         reward = 1e4 * (shares * (exec_price - self.s0) - risk) / self._notional
+        self._over = self.inventory == 0.0 or self._k >= self.n_steps
         return StepResult(
             observation=self._get_obs(),
             reward=float(reward),
-            terminated=self.inventory == 0.0 or self._k >= self.n_steps,
+            terminated=self._over,
             truncated=False,
             info=self._info(shares, exec_price),
         )

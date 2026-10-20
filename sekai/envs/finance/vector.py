@@ -17,9 +17,11 @@ fixed start, or "sequential") they reproduce the single envs exactly.
 `max_episode_steps` adds the time limit `make()` would add.
 
 The parameters (`sigma`, `cost_model`, ...) are those of `template`, a single
-env built from the same keyword arguments, and are shared by every sub-env:
-`get_attr` / `set_attr` read and change them, which takes effect as it does for
-each sub-env of a SyncVecEnv.
+env built from the same keyword arguments (so a history is passed as `prices=`
+or, as a MarketData, `data=`, and the arguments are validated as the single env
+validates them), and are shared by every sub-env: `get_attr` / `set_attr` read and
+change them, which takes effect as it does for each sub-env of a SyncVecEnv
+(`set_attr("reward_fn", reward)` stores a copy of `reward`, as `reward=` does).
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from sekai.envs.finance.trading import TradingEnv
 from sekai.error import InvalidAction
 from sekai.finance.rewards import StepOutcome
 from sekai.finance.simulators import GBM
-from sekai.vector.native import InfoArrays, NativeVecEnv
+from sekai.vector.native import InfoArrays, NativeVecEnv, shared
 
 Array = NDArray[np.float64]
 
@@ -155,7 +157,7 @@ class _HistoryWindows:
         window = self.template._window
         if self.history is None:
             if any(opts and opts.get("start") is not None for opts in options):
-                raise ValueError("options['start'] needs a price history (prices=...).")
+                raise ValueError("options['start'] needs a price history (prices= or data=).")
             self.starts[indices] = 0
             paths: Array = simulate(len(indices))
             return paths
@@ -174,6 +176,14 @@ class _HistoryWindows:
             return steps
         rows = self.starts + self.template.lookback + t
         return np.asarray(self.history.data.timestamps[rows])
+
+
+def _price_histories(paths: Array, current_rows: NDArray[np.intp]) -> NDArray[np.object_]:
+    """Each sub-env's path up to and including its current row (lengths differ per sub-env)."""
+    out = np.empty(len(paths), dtype=object)
+    for i, row in enumerate(current_rows):
+        out[i] = paths[i, : int(row) + 1].copy()
+    return out
 
 
 class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
@@ -229,6 +239,17 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         """The current asset price of every sub-env."""
         out: Array = self._paths[np.arange(self.num_envs), self.lookback + self._t]
         return out
+
+    @property
+    def timestamp(self) -> NDArray[Any]:
+        """The time of every sub-env's current decision, as in `infos[i]["timestamp"]`."""
+        return self._windows.timestamps(self._t)
+
+    @property
+    def price_history(self) -> NDArray[np.object_]:
+        """Every sub-env's prices observed so far, lookback included (see
+        `TradingEnv.price_history`): an object array with one price array per sub-env."""
+        return _price_histories(self._paths, self.lookback + self._t)
 
     def _simulate(self, n: int) -> Array:
         t = self.template
@@ -302,7 +323,8 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         target = self.positions[a.astype(np.intp)]
         trade = target - self.position
         ar = np.arange(self.num_envs)
-        i = self.lookback + self._t
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        i = self.lookback + np.minimum(self._t, self.episode_length - 1)
         cost = np.asarray(self.cost_model(trade[:, None], **self._cost_context(i)), np.float64)
         asset_return = self._paths[ar, i + 1] / self._paths[ar, i] - 1.0
         growth = np.where(cost >= 1.0, 0.0, (1.0 - cost) * (1.0 + target * asset_return))
@@ -311,10 +333,12 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         value = held + (1.0 - target)
         with np.errstate(divide="ignore", invalid="ignore"):
             drifted = held / value
-        self.position = np.where((growth > 0.0) & (value > 0.0), drifted, 0.0)
-        self._t = self._t + 1
+        position = np.where((growth > 0.0) & (value > 0.0), drifted, 0.0)
+        self.position = np.where(active, position, self.position)
+        self._t = self._t + active
         terminated = growth <= 0.0
-        previous_equity, self.equity = self.equity, np.maximum(self.equity * growth, 0.0)
+        previous_equity = self.equity
+        self.equity = np.where(active, np.maximum(self.equity * growth, 0.0), self.equity)
         outcome = StepOutcome.from_growth(
             growth,
             equity=self.equity,
@@ -388,6 +412,17 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         self.weights = np.zeros((num_envs, n + 1))
         self.weights[:, -1] = 1.0
         self.portfolio_value = np.ones(num_envs)
+
+    @property
+    def timestamp(self) -> NDArray[Any]:
+        """The time of every sub-env's current decision, as in `infos[i]["timestamp"]`."""
+        return self._windows.timestamps(self._t)
+
+    @property
+    def price_history(self) -> NDArray[np.object_]:
+        """Every sub-env's prices observed so far, lookback included (see
+        `PortfolioEnv.price_history`): an object array with one (k, n_assets) array per sub-env."""
+        return _price_histories(self._paths, self.lookback + self._t)
 
     def _simulate(self, n_paths: int) -> Array:
         t = self.template
@@ -473,7 +508,8 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         trades = target[:, :-1] - self.weights[:, :-1]
         turnover = np.abs(trades).sum(axis=1)
         ar = np.arange(self.num_envs)
-        i = self.lookback + self._t
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        i = self.lookback + np.minimum(self._t, self.episode_length - 1)
         cost = np.asarray(self.cost_model(trades, **self._cost_context(i)), dtype=np.float64)
         asset_returns = self._paths[ar, i + 1] / self._paths[ar, i] - 1.0
         # A batched matmul reproduces the single env's `target @ returns` bit for bit.
@@ -485,14 +521,15 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         cash_only = np.zeros_like(drifted)
         cash_only[:, -1] = 1.0
         ok = (growth > 0)[:, None]
-        self.weights = np.where(
+        weights = np.where(
             ok, drifted / np.where(ok, drifted.sum(axis=1, keepdims=True), 1.0), cash_only
         )
-        previous_value, self.portfolio_value = (
-            self.portfolio_value,
-            np.maximum(self.portfolio_value * growth, 0.0),
+        self.weights = np.where(active[:, None], weights, self.weights)
+        previous_value = self.portfolio_value
+        self.portfolio_value = np.where(
+            active, np.maximum(self.portfolio_value * growth, 0.0), self.portfolio_value
         )
-        self._t = self._t + 1
+        self._t = self._t + active
         terminated = growth <= 0.0
         truncated = ~terminated & (self._t >= self.episode_length)
         outcome = StepOutcome.from_growth(
@@ -558,6 +595,11 @@ class MarketMakingVecEnv(_TemplateVecEnv[NDArray[np.float32], NDArray[np.float32
         self.inventory = np.zeros(num_envs, dtype=np.int64)
         self.cash = np.zeros(num_envs)
         self._t = np.zeros(num_envs, dtype=np.int64)
+        # The last step's quotes and fills (NaN / False until a sub-env's first step).
+        self.bid = np.full(num_envs, np.nan)
+        self.ask = np.full(num_envs, np.nan)
+        self.bid_filled = np.zeros(num_envs, dtype=bool)
+        self.ask_filled = np.zeros(num_envs, dtype=bool)
 
     @property
     def wealth(self) -> Array:
@@ -591,6 +633,8 @@ class MarketMakingVecEnv(_TemplateVecEnv[NDArray[np.float32], NDArray[np.float32
         self.inventory[indices] = 0
         self.cash[indices] = 0.0
         self._t[indices] = 0
+        self.bid[indices] = self.ask[indices] = np.nan
+        self.bid_filled[indices] = self.ask_filled[indices] = False
 
     def _observe(self) -> NDArray[np.float32]:
         t = self.template
@@ -625,12 +669,17 @@ class MarketMakingVecEnv(_TemplateVecEnv[NDArray[np.float32], NDArray[np.float32
         can_sell = self.inventory - t.order_size >= -t.max_inventory
         p_fill = 1.0 - np.exp(-t.A * np.exp(-t.k * a) * t.dt)
         u = self.rng.random((self.num_envs, 2))
-        bid_filled = can_buy & (u[:, 0] < p_fill[:, 0])
-        ask_filled = can_sell & (u[:, 1] < p_fill[:, 1])
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        bid_filled = active & can_buy & (u[:, 0] < p_fill[:, 0])
+        ask_filled = active & can_sell & (u[:, 1] < p_fill[:, 1])
         self.inventory = self.inventory + t.order_size * (bid_filled.astype(np.int64) - ask_filled)
         self.cash = self.cash - t.order_size * bid * bid_filled + t.order_size * ask * ask_filled
-        self.mid = self.mid + t.sigma * math.sqrt(t.dt) * self.rng.standard_normal(self.num_envs)
-        self._t = self._t + 1
+        moved = self.mid + t.sigma * math.sqrt(t.dt) * self.rng.standard_normal(self.num_envs)
+        self.mid = np.where(active, moved, self.mid)
+        self._t = self._t + active
+        self.bid, self.ask = np.where(active, bid, self.bid), np.where(active, ask, self.ask)
+        self.bid_filled = np.where(active, bid_filled, self.bid_filled)
+        self.ask_filled = np.where(active, ask_filled, self.ask_filled)
         penalty = 0.5 * t.risk_aversion * t.sigma**2 * t.dt * self.inventory**2
         rewards = self.wealth - wealth_before - penalty
         info = {
@@ -691,6 +740,7 @@ class OptimalExecutionVecEnv(_TemplateVecEnv[NDArray[np.float32], NDArray[np.flo
         self.shortfall = np.zeros(num_envs)
         self._k = np.zeros(num_envs, dtype=np.int64)
 
+    @shared  # one schedule for every sub-env: call() must not split its n_steps rows
     def almgren_chriss_actions(self) -> NDArray[np.float32]:
         """The optimal static schedule (identical for every sub-env), shape `(n_steps, 1)`."""
         return self.template.almgren_chriss_actions()
@@ -735,14 +785,15 @@ class OptimalExecutionVecEnv(_TemplateVecEnv[NDArray[np.float32], NDArray[np.flo
         a = _batch_action(actions, self.num_envs, (1,), self.action_space)[:, 0]
         fraction = np.clip(a, 0.0, 1.0)
         last = self._k == t.n_steps - 1
-        shares = np.where(last, self.inventory, fraction * self.inventory)
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        shares = np.where(active, np.where(last, self.inventory, fraction * self.inventory), 0.0)
         exec_price = np.where(shares > 0, self.mid - t.epsilon - t.eta * shares / t.tau, self.mid)
         self.inventory = self.inventory - shares
         self.inventory[self.inventory < 1e-9 * t.X0] = 0.0
         self.shortfall = self.shortfall + shares * (t.s0 - exec_price)
-        self.mid = self.mid + t.sigma * math.sqrt(t.tau) * self.rng.standard_normal(self.num_envs)
-        self.mid = self.mid - t.gamma * shares
-        self._k = self._k + 1
+        moved = self.mid + t.sigma * math.sqrt(t.tau) * self.rng.standard_normal(self.num_envs)
+        self.mid = np.where(active, moved - t.gamma * shares, self.mid)
+        self._k = self._k + active
         risk = t.risk_aversion * t.sigma**2 * t.tau * self.inventory**2
         rewards = 1e4 * (shares * (exec_price - t.s0) - risk) / (t.X0 * t.s0)
         terminated = (self.inventory == 0.0) | (self._k >= t.n_steps)

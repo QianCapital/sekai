@@ -41,7 +41,8 @@ vec.close()
 ```
 
 With the default `vectorization_mode=None`, `make_vec()` uses the env's native
-implementation when it has one and no `wrappers=` are given, and `SyncVecEnv` otherwise:
+implementation when it has one and no per-env wrappers apply (no `wrappers=`, and no
+`additional_wrappers` in the registry entry), and `SyncVecEnv` otherwise:
 
 ```python
 print(sekai.make_vec("Portfolio-v0", num_envs=64))                            # PortfolioVecEnv(num_envs=64)
@@ -97,8 +98,9 @@ print(sekai.stack_infos(result.infos))  # {'elapsed_steps': array([2, 2, 2, 2])}
 | `reset(seed=...)` | Effect |
 |---|---|
 | an `int` | derives `num_envs` independent seeds from it (`numpy.random.SeedSequence.spawn`) |
-| a `list` of `num_envs` seeds | one seed per sub-env |
+| a `list` of `num_envs` seeds | one seed per sub-env (a `None` entry: that sub-env continues its stream) |
 | `None` | each sub-env continues its own stream |
+| a `Generator` | `TypeError`: one generator cannot seed `num_envs` sub-envs independently |
 
 `options` is either one dict passed to every sub-env or a list with one per sub-env.
 
@@ -207,7 +209,27 @@ wrapped in `AutoReset` is not reset twice.
     truncation, use `infos[i]["final_observation"]`, not `observations[i]`.
 
 Pass `autoreset=False` (or `vector_kwargs={"autoreset": False}` to `make_vec`) to manage
-resets yourself, e.g. for evaluation that runs exactly one episode per sub-env.
+resets yourself, e.g. for evaluation that runs exactly one episode per sub-env. A sub-env
+that finishes is then **frozen** until the next `reset()`, on every backend: it is not stepped
+again and its action is ignored, and every later `step()` returns, for that sub-env, its final
+observation, reward `0`, the `terminated` / `truncated` flags it finished with (so `dones[i]`
+stays `True`) and an empty info. So you can keep stepping until every sub-env has finished,
+even with envs that refuse a step after their episode ends (the finance envs raise
+`ResetRequired`), and `VecRecordEpisodeStatistics` records each episode once. `reset()`
+unfreezes every sub-env. A sub-env that resets itself (one wrapped in `AutoReset`) never
+freezes.
+
+```python
+vec = sekai.make_vec("OptimalExecution-v0", 3, vector_kwargs={"autoreset": False})
+vec.reset(seed=0)
+sell = np.array([[1.0], [0.5], [0.5]], np.float32)  # sub-env 0 sells everything at once
+first = vec.step(sell)
+later = vec.step(sell)
+print(first.dones, later.dones)  # [ True False False] [ True False False]
+print(later.rewards[0], later.infos[0])  # 0.0 {}
+print(np.array_equal(later.observations[0], first.observations[0]))  # True
+vec.close()
+```
 
 ## Vector wrappers
 
@@ -215,11 +237,11 @@ Vector wrappers wrap a whole `VecEnv`. They are exported from `sekai` and `sekai
 
 | Wrapper | What it does |
 |---|---|
-| `VecRecordEpisodeStatistics(venv, tracker=None, deque_size=100)` | `infos[i]["episode"]` is an [`EpisodeStats`](statistics.md) (with `extra={"env_index": i}`) when sub-env `i` finishes an episode |
-| `VecNormalizeObservation(venv, epsilon=1e-8, *, stats="running", halflife=1000.0, clip=None)` | the options of [`NormalizeObservation`](wrappers.md#built-in-wrappers) (every `Box` part normalised, a `MaskedBox` over occupied slots only, `"ewm"` statistics, clipping), with statistics shared across sub-envs (`obs_rms`, `state_dict()`); `infos[i]["final_observation"]` is normalised with the current statistics, without updating them. With `"ewm"`, each step adds `num_envs` samples, so scale `halflife` accordingly |
+| `VecRecordEpisodeStatistics(venv, tracker=None, deque_size=100)` | `infos[i]["episode"]` is an [`EpisodeStats`](statistics.md) (with `extra={"env_index": i}`) when sub-env `i` finishes an episode; without autoreset, once per episode however long a [frozen](#autoreset) sub-env keeps being stepped |
+| `VecNormalizeObservation(venv, epsilon=1e-8, *, stats="running", halflife=1000.0, clip=None)` | the options of [`NormalizeObservation`](wrappers.md#built-in-wrappers) (every `Box` part normalised, a `MaskedBox` over occupied slots only, `"ewm"` statistics, clipping), with statistics shared across sub-envs (`obs_rms`, `state_dict()`); `infos[i]["final_observation"]` is normalised with the current statistics, without updating them. With `"ewm"`, `halflife` counts vector steps: one step updates the statistics once, however many sub-envs it carries, so it needs no scaling with `num_envs` |
 | `VecNormalizeReward(venv, gamma=0.99, epsilon=1e-8)` | divides rewards by the running std of each sub-env's discounted return (`return_rms`) |
-| `VecTransformObservation(venv, fn, new_observation_space=None)` | applies `fn` to every batch of observations |
-| `VecTransformReward(venv, fn)` | applies `fn` to every `(N,)` reward array |
+| `VecTransformObservation(venv, func, new_observation_space=None)` | applies `func` to every batch of observations |
+| `VecTransformReward(venv, func)` | applies `func` to every `(N,)` reward array |
 
 The base classes `VecWrapper`, `VecObservationWrapper` (implement `observation(batch)`),
 `VecRewardWrapper` (`reward(rewards)`) and `VecActionWrapper` (`action(actions)`) work like
@@ -315,12 +337,13 @@ models do) that is typically 10 to 100 times faster; see [Performance](#performa
 
 | `vectorization_mode` | `make_vec()` builds |
 |---|---|
-| `None` (default) | the native env if the registry entry has a `vector_entry_point` and no `wrappers=` are given, else a `SyncVecEnv` |
-| `"native"` (alias `"vector_entry_point"`) | the native env; `ValueError` if there is none, or if `wrappers=` is given |
+| `None` (default) | the native env if the registry entry has a `vector_entry_point`, no `additional_wrappers`, and no `wrappers=` are given, else a `SyncVecEnv` |
+| `"native"` (alias `"vector_entry_point"`) | the native env; `ValueError` if there is none, if `wrappers=` is given, or if the registry entry has `additional_wrappers` |
 | `"sync"`, `"async"`, `"proc"` | a `SyncVecEnv`, `AsyncVecEnv` or `ProcVecEnv` of `make()`d sub-envs |
 
-A native env has no per-env objects for `wrappers=` to wrap; use [vector
-wrappers](#vector-wrappers), which work on any `VecEnv`.
+A native env has no per-env objects for `wrappers=` (or a registry entry's
+`additional_wrappers`) to wrap; use [vector wrappers](#vector-wrappers), which work on any
+`VecEnv`.
 
 ### Writing one
 
@@ -334,8 +357,10 @@ and implement three hooks:
 | `_step(actions)` | advance every sub-env; return `(rewards, terminated, truncated, infos)`, the first three of shape `(num_envs,)` and `infos` a dict of arrays with a leading `num_envs` axis |
 | `_reset_infos(indices)` | optional: info arrays for the sub-envs just reset |
 
-The base class does the rest: seeding, per-env options, [same-step autoreset](#autoreset)
-with `final_observation` / `final_info` / `reset_info`, the split of info arrays into one dict
+The base class does the rest: seeding, per-env options, `ResetRequired` from a `step()`
+before the first `reset()`, [same-step autoreset](#autoreset)
+with `final_observation` / `final_info` / `reset_info` (or, with `autoreset=False`, frozen
+finished sub-envs), the split of info arrays into one dict
 per sub-env (1-D arrays become Python scalars), batched spaces, closing, and the time limit:
 pass `max_episode_steps=n` to `NativeVecEnv.__init__` and every sub-env is truncated after
 `n` steps with `infos[i]["elapsed_steps"]` set, exactly as the `TimeLimit` that `make()` adds
@@ -398,6 +423,13 @@ print(result.rewards.round(3), result.infos[0])  # [-0.572 -0.404 -0.271 -0.3  ]
     arrays from `_observe()` and `_step()`, not the env's own state arrays (or views of them),
     or the next step overwrites results the caller still holds.
 
+With `autoreset=False` the base class replaces whatever `_step()` returns for a frozen
+sub-env, but `_step()` still advances all of them (a frozen sub-env is passed its last action
+again when actions are a numeric array). If your simulation reads per-step data, such as a
+price window it would run past, or should keep a finished sub-env's state as `get_attr()`
+reports it, leave the sub-envs in `self.frozen` (a boolean array) as they are: in `Drift`,
+`self.x += np.where(self.frozen, 0.0, push + noise)`.
+
 ### Registering it
 
 Register the single env as usual and name the native class as its `vector_entry_point`;
@@ -424,11 +456,14 @@ entries `[native vec]`.
 
 !!! note "One generator for all sub-envs"
     A native env draws every sub-env's randomness from one generator, `self.rng`.
-    `reset(seed=s)` seeds it (an int, or a list of ints combined into one seed), and
-    `reset()` without a seed continues it. The results are therefore not draw-for-draw
-    identical to the same env under `SyncVecEnv`, which seeds each sub-env separately: they
-    are identical in distribution, and exactly identical when the dynamics are deterministic
-    given the options (historical data with fixed start dates, for example).
+    `reset()` takes the same seeds as any `VecEnv`: an int seeds the generator, and a list
+    of `num_envs` seeds is combined into one seed, where a `None` entry contributes a draw
+    from the current stream (so `[None] * num_envs` continues it, like `reset()` without a
+    seed) and a `Generator` entry a draw from that generator. The results are therefore not
+    draw-for-draw identical to the same env under `SyncVecEnv`, which seeds each sub-env
+    separately: they are identical in distribution, and exactly identical when the dynamics
+    are deterministic given the options (historical data with fixed start dates, for
+    example).
 
 ### Reaching sub-envs of a native env
 
@@ -443,6 +478,25 @@ change the simulation.
 print(vec.get_attr("max_episode_steps"))  # [100, 100, 100, 100]
 print([round(float(x), 3) for x in vec.get_attr("x")])  # [0.572, 0.404, 0.271, -0.3]
 vec.close()
+```
+
+A method or property whose value is the same for every sub-env, but may still be an array
+whose length happens to equal `num_envs` (a schedule of `n_steps` rows, say), should be
+marked with `sekai.vector.shared`, so that every sub-env gets the whole value rather than one
+row of it:
+
+```python
+from sekai.vector import shared
+
+
+class ScheduledDrift(DriftVecEnv):
+    @shared
+    def push_schedule(self):
+        """The push for each of the next 4 steps, the same for every sub-env."""
+        return np.array([1, 1, 0, 0])
+
+
+print(ScheduledDrift(4).call("push_schedule")[0])  # [1 1 0 0]
 ```
 
 The finance envs' native versions keep their parameters on `vec.template`, a single env
@@ -510,7 +564,7 @@ An exception inside a worker is raised in the parent as `VecEnvWorkerError`, car
 sub-env's index (`rank`), the exception type (`exc_type`) and the worker's traceback
 (`remote_traceback`). The other workers' replies are still collected and the workers stay
 alive, so the `VecEnv` can still be used or closed cleanly. A worker that has died also
-raises `VecEnvWorkerError`. Replies left unread by an interrupted call (e.g. Ctrl-C during
+raises `VecEnvWorkerError` (see [below](#which-sub-env-failed)). Replies left unread by an interrupted call (e.g. Ctrl-C during
 `step()`) are discarded before the next command, and every command is pickled before
 anything is sent, so an unpicklable action fails without leaving workers out of step.
 
@@ -564,8 +618,21 @@ if __name__ == "__main__":
     vec.close()
 ```
 
-`VecEnvWorkerError.rank` is always the index of the sub-env that failed, also when a worker
-runs several.
+### Which sub-env failed
+
+When a sub-env raises, `VecEnvWorkerError.rank` is its index, also when its worker runs
+several sub-envs. When a worker process dies (killed, out of memory, or `os._exit()` in env
+code), there is no traceback, and which of its sub-envs was running is known only if it runs
+one: then `rank` is that sub-env, as above. A worker running several reports itself and all
+of them, with `rank` set to the first:
+
+```text
+VecEnvWorkerError: Sub-env 1 raised EOFError: worker process exited unexpectedly
+VecEnvWorkerError: Worker 0 (sub-envs 0-1) raised EOFError: worker process exited unexpectedly
+```
+
+Every later call that needs the dead worker raises `VecEnvWorkerError` too; `close()` still
+releases the others.
 
 ## Closing
 
@@ -578,6 +645,10 @@ If a sub-env's own `close()` raises, the other sub-envs are still closed and eve
 released first (`AsyncVecEnv`'s event loop, `ProcVecEnv`'s workers and shared memory); then
 the first error is raised, as a `VecEnvWorkerError` for `ProcVecEnv`. A `ProcVecEnv` worker
 that does not exit within `close_timeout` is terminated, and killed if it ignores that.
+
+Building a `VecEnv` cleans up after itself the same way: if an env factory raises (or, for
+`ProcVecEnv`, a worker cannot be started, or the constructor fails later), the sub-envs
+already built are closed, and any workers stopped, before the error propagates.
 
 ```python
 vec = sekai.make_vec("CartPole-v1", num_envs=2)

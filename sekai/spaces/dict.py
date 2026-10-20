@@ -30,17 +30,29 @@ class Dict(Space[dict[str, Any]]):
 
         super().__init__(shape=None, dtype=None)
 
-        if isinstance(seed, dict):
-            for key, s in seed.items():
-                if key in self.spaces:
-                    self.spaces[key].seed(s)
-        elif seed is not None:
+        if seed is not None:
             self.seed(seed)
 
-    def seed(self, seed: SeedType = None) -> int:
-        """Seed this space and, deterministically, every sub-space."""
+    def seed(self, seed: SeedType | Mapping[str, SeedType] = None) -> int:
+        """Seed this space and, deterministically, every sub-space.
+
+        A dict of seeds (`{"prices": 1, "cash": 2}`) seeds the named sub-spaces
+        individually instead, leaving the others as they are, and returns -1 (there is
+        no single seed). A key that is not a sub-space raises ValueError.
+        """
         from sekai.utils.seeding import child_seeds, np_random
 
+        if isinstance(seed, Mapping):
+            unknown = [key for key in seed if key not in self.spaces]
+            if unknown:
+                raise ValueError(
+                    f"Seeds given for {unknown}, which are not keys of this Dict "
+                    f"({list(self.spaces)})."
+                )
+            for key, s in seed.items():
+                if s is not None:
+                    self.spaces[key].seed(s)
+            return -1
         self._rng, actual_seed = np_random(seed)
         for space, s in zip(self.spaces.values(), child_seeds(self._rng, actual_seed, len(self))):
             space.seed(s)

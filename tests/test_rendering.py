@@ -147,9 +147,45 @@ def test_record_frames_rejects_text_frames(tmp_path: Path) -> None:
 @pytest.mark.parametrize("save", [save_gif, save_video])
 def test_save_rejects_non_image_frames(save: Any, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"Frame 1 has shape \(4, 4, 2\)"):
-        save([np.zeros((4, 4, 3)), np.zeros((4, 4, 2))], tmp_path / "out.gif")
+        save([np.zeros((4, 4, 3), np.uint8), np.zeros((4, 4, 2), np.uint8)], tmp_path / "out.gif")
     with pytest.raises(ValueError, match="No frames"):
         save([], tmp_path / "out.gif")
+
+
+@pytest.mark.parametrize("save", [save_gif, save_video])
+@pytest.mark.parametrize(
+    ("frames", "message"),
+    [
+        # A cast to uint8 would turn [0, 1] floats black and wrap 300 to 44.
+        ([np.full((4, 4, 3), 0.5)], r"Frame 0 has dtype float64.*\(frame \* 255\)"),
+        ([np.zeros((4, 4, 3), np.uint8), np.full((4, 4, 3), 300)], r"Frame 1 has values in \[300"),
+        ([np.full((4, 4, 3), -1, np.int16)], r"Frame 0 has values in \[-1"),
+        # Pillow would crop or pad frames of another size into the first one's.
+        (
+            [np.zeros((4, 4, 3), np.uint8), np.zeros((6, 4, 3), np.uint8)],
+            r"Frame 1 has shape \(6, 4, 3\) but frame 0 has \(4, 4, 3\)",
+        ),
+        ([np.zeros((4, 4, 3), np.uint8), np.zeros((4, 4, 4), np.uint8)], "frames of one size"),
+    ],
+)
+def test_save_rejects_bad_pixels_and_mixed_sizes_before_writing(
+    save: Any, frames: list[np.ndarray], message: str, tmp_path: Path
+) -> None:
+    out = tmp_path / "out.gif"
+    with pytest.raises(ValueError, match=message):
+        save(frames, out)
+    assert not out.exists()
+
+
+def test_save_gif_accepts_integer_frames_in_range(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    frames = [np.full((4, 5, 3), v, np.int64) for v in (0, 128, 255)]  # not uint8, but in range
+    with Image.open(save_gif(frames, tmp_path / "ints.gif")) as gif:
+        assert gif.n_frames == 3
+        gif.seek(2)
+        assert np.asarray(gif.convert("RGB"))[0, 0].tolist() == [255, 255, 255]
 
 
 @pytest.mark.parametrize("save", [save_gif, save_video])

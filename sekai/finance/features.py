@@ -626,7 +626,8 @@ def asof_join(
             if not isinstance(lag, np.timedelta64 | _dt.timedelta):
                 raise TypeError(f"lag must be a np.timedelta64 for datetime64 times, got {lag!r}.")
             lag_td = np.timedelta64(lag)
-            if np.isnat(lag_td) or lag_td < np.timedelta64(0):
+            # Compare the count in lag's own unit: a unitless 0 is deprecated in numpy 2.5.
+            if np.isnat(lag_td) or lag_td.astype(np.int64) < 0:
                 raise ValueError(f"lag must be a non-negative timedelta, got {lag!r}.")
             effective = events + lag_td
         common = np.promote_types(effective.dtype, targets.dtype)
@@ -687,9 +688,12 @@ def check_causal(
 ) -> None:
     """Empirically check that a transform has no look-ahead bias.
 
-    For each of `n_checks` random cut points c in [1, T-2] (every such point when
-    n_checks >= T - 2), x is copied with the rows after c perturbed in several ways, and a
-    causal `fn` must give the same output for rows 0..c on every copy:
+    For cut point 0 and `n_checks` random cut points c in [1, T-2] (every such point
+    when n_checks >= T - 2), x is copied with the rows after c perturbed in several ways,
+    and a causal `fn` must give the same output, of the same shape, for rows 0..c on
+    every copy. Cut point 0 is always tested: a leak into the first row only (a
+    backward fill of the leading NaN of returns, a normalisation by row 1) shows
+    nowhere else. The perturbations are:
 
     - rescaled: valid entries multiplied by exp(Normal(0, 0.1));
     - reordered: the rows after c permuted;
@@ -708,7 +712,7 @@ def check_causal(
         fn: Transform mapping an array shaped like x to an array whose axis 0 is aligned
             with x's time axis. It must be deterministic.
         x: Representative input data shaped (T, ...) with T >= 3.
-        n_checks: Number of cut points to test (>= 1).
+        n_checks: Number of random cut points to test besides 0 (>= 1).
         rng: Source of randomness for the cut points and perturbations
             (default: np.random.default_rng(0)).
         rtol: Relative tolerance for the comparison (as in np.allclose).
@@ -716,7 +720,8 @@ def check_causal(
 
     Raises:
         LookAheadError: If an output at or before a cut point changed, naming the first
-            time index that differs and the cut point.
+            time index that differs and the cut point, or if the output's shape changed
+            (e.g. a column per asset that is still listed at the end).
         ValueError: If T < 3, n_checks < 1, a tolerance is negative, or fn's output is
             not aligned with x's time axis.
     """
@@ -732,17 +737,19 @@ def check_causal(
     if n < candidates.size:
         candidates = np.sort(gen.choice(candidates, size=n, replace=False))
     baseline = _call_aligned(fn, arr)
-    for cut in candidates.tolist():
+    for cut in [0, *candidates.tolist()]:
         for kind, tail in _perturbed_tails(arr, cut, gen):
             perturbed = arr.copy()
             perturbed[cut + 1 :] = tail
             with np.errstate(all="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
                 result = _call_aligned(fn, perturbed)
-            if result.shape != baseline.shape:
-                raise ValueError(
-                    f"fn returned shape {result.shape} for the perturbed input but "
-                    f"{baseline.shape} for the original."
+            if result.shape != baseline.shape:  # axis 0 matches: the future set the width
+                raise LookAheadError(
+                    f"Look-ahead bias detected: the output's shape changed from "
+                    f"{baseline.shape} to {result.shape} when only inputs after time index "
+                    f"{cut} (the cut point) were perturbed ({kind}), so it depends on the "
+                    "future (e.g. it keeps only assets that are still listed at the end)."
                 )
             same = np.isclose(
                 baseline[: cut + 1], result[: cut + 1], rtol=rtol, atol=atol, equal_nan=True

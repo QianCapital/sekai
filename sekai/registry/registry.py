@@ -231,12 +231,15 @@ def make_vec(
             registered vector_entry_point; "vector_entry_point" is an alias),
             "sync" (SyncVecEnv), "async" (AsyncVecEnv, asyncio) or "proc"
             (ProcVecEnv, worker processes). None (the default) picks "native"
-            when the env has one, else "sync".
+            when the env has one and no per-env wrappers apply (neither
+            `wrappers` nor the spec's additional_wrappers), else "sync".
         vector_kwargs: Extra keyword arguments for the VecEnv constructor
             (e.g. autoreset, or num_workers / shared_memory for "proc").
         wrappers: Callables applied in order to each sub-env, e.g.
             [lambda env: sekai.FlattenObservation(env)]. Not available with
-            "native", which has no per-env objects; use Vec* wrappers instead.
+            "native", which has no per-env objects (nor are the spec's
+            additional_wrappers: "native" raises ValueError for either); use
+            Vec* wrappers instead.
         **env_kwargs: Forwarded to make() for every sub-env (or to the native
             implementation, which is called as `factory(num_envs=..., **kwargs)` and
             also receives `max_episode_steps` when there is a time limit). Each
@@ -253,9 +256,11 @@ def make_vec(
     else:
         steps = None if steps_override == -1 else int(steps_override)
 
+    # Registered wrappers, like wrappers=, wrap individual sub-envs, which a native env lacks.
+    per_env_wrappers = bool(wrappers) or bool(spec_.additional_wrappers)
     mode = vectorization_mode
     if mode is None:
-        mode = "native" if spec_.vector_entry_point is not None and not wrappers else "sync"
+        mode = "native" if spec_.vector_entry_point is not None and not per_env_wrappers else "sync"
     if mode == "vector_entry_point":
         mode = "native"
 
@@ -269,6 +274,14 @@ def make_vec(
             raise ValueError(
                 "wrappers= applies to individual sub-envs, which a native vector env does not "
                 "have. Wrap the VecEnv with Vec* wrappers, or use vectorization_mode='sync'."
+            )
+        if spec_.additional_wrappers:
+            names = ", ".join(w.name for w in spec_.additional_wrappers)
+            raise ValueError(
+                f"{spec_.id} is registered with additional_wrappers ({names}), which wrap "
+                "individual sub-envs; a native vector env has none, so it would run without "
+                "them. Use vectorization_mode='sync' (or 'async', 'proc'), or register the "
+                "native implementation under an ID without additional_wrappers."
             )
         kwargs = {**spec_.kwargs, **env_kwargs}
         limit = {} if steps is None else {"max_episode_steps": steps}

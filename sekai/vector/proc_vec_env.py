@@ -20,6 +20,7 @@ from numpy.typing import NDArray
 
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
+from sekai.core.result import StepResult
 from sekai.error import VecEnvClosed, VecEnvWorkerError
 from sekai.spaces.box import Box
 from sekai.spaces.dict import Dict
@@ -32,9 +33,11 @@ from sekai.utils.pickle import CloudpickleWrapper
 from sekai.vector.result import VecResetResult, VecStepResult
 from sekai.vector.vec_env import (
     VecEnv,
+    close_envs,
     env_call,
     env_get_attr,
     env_set_attr,
+    frozen_step,
     merge_autoreset,
     needs_autoreset,
 )
@@ -187,6 +190,16 @@ def _identity(x: Any) -> Any:
     return x
 
 
+def _dumps(command: Any) -> bytes:
+    """Pickle a command for the pipe.
+
+    As bytes, not the memoryview ForkingPickler returns: a memoryview kept alive by a
+    traceback (e.g. of a VecEnvWorkerError) pins its BytesIO, which then reports
+    "BufferError: Existing exports of data" when the two are garbage-collected.
+    """
+    return bytes(ForkingPickler.dumps(command))
+
+
 # Seconds a terminated (then killed) worker gets to exit before close() moves on.
 _TERMINATE_GRACE = 1.0
 
@@ -217,10 +230,14 @@ def _worker(
     except Exception as e:
         index = env_indices[len(envs)]
         pipe.send((False, (index, type(e).__name__, str(e), traceback.format_exc())))
+        with contextlib.suppress(Exception):  # the construction error is the one reported
+            close_envs(envs)
         pipe.close()
         return
     pipe.send((True, None))
     shared: _SharedObservations | None = None
+    # The step that ended each frozen sub-env's episode (autoreset off; see VecEnv).
+    finals: list[StepResult[Any] | None] = [None] * len(envs)
 
     while True:
         try:
@@ -232,16 +249,24 @@ def _worker(
             payload: Any
             if cmd is _Cmd.STEP:
                 payload = []
-                for index, env, action in zip(env_indices, envs, data):
+                for k, (index, env, action) in enumerate(zip(env_indices, envs, data)):
                     current = index
-                    result = env.step(action)
-                    if autoreset and needs_autoreset(result):
-                        result = merge_autoreset(result, env.reset())
+                    final = finals[k]
+                    if final is not None:
+                        result = frozen_step(final)
+                    else:
+                        result = env.step(action)
+                        if needs_autoreset(result):
+                            if autoreset:
+                                result = merge_autoreset(result, env.reset())
+                            else:
+                                finals[k] = result
                     if shared is not None:
                         shared.write(index, result.observation)
                         result = dataclasses.replace(result, observation=None)
                     payload.append(result)
             elif cmd is _Cmd.RESET:
+                finals = [None] * len(envs)
                 payload = []
                 for index, env, (seed, options) in zip(env_indices, envs, data):
                     current = index
@@ -333,10 +358,16 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
     afterwards (the step results of that call are discarded, including those of
     sub-envs that did advance); replies left unread by an interrupted call (e.g.
     Ctrl-C, which workers ignore and leave to the parent) are discarded before
-    the next command.
+    the next command. A worker that dies also raises VecEnvWorkerError: its
+    `rank` is the sub-env it ran, or, for a worker that ran several (so which one
+    failed is unknown), the first of them, and the message names the worker and
+    all its sub-envs.
 
     Args:
-        env_fns: Callables that each build one sub-environment (in its worker).
+        env_fns: Callables that each build one sub-environment (in its worker). If
+            one raises (or anything else in the constructor fails), the sub-envs
+            already built are closed and the workers stopped before the error
+            propagates.
         autoreset: Reset sub-envs automatically when their episode ends (see VecEnv).
         context: multiprocessing start method; defaults to "forkserver" ("spawn" on Windows).
         close_timeout: Seconds close() waits for workers before terminating them.
@@ -386,30 +417,33 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
         # never be read as the answer to a later command.
         self._pending: list[int] = []
 
-        for worker, group in enumerate(self._groups):
-            parent_pipe, child_pipe = ctx.Pipe()
-            fns = [env_fns[i] for i in group]
-            proc = ctx.Process(
-                target=_worker,
-                args=(
-                    group,
-                    CloudpickleWrapper(functools.partial(_identity, fns)),
-                    child_pipe,
-                    parent_pipe,
-                    autoreset,
-                ),
-                daemon=True,
-                name=f"sekai-ProcVecEnv-worker-{worker}",
-            )
-            proc.start()
-            child_pipe.close()
-            self._pipes.append(parent_pipe)
-            self._processes.append(proc)
-            self._pending.append(1)  # the worker's "env_fns succeeded" handshake
-
         try:
+            for worker, group in enumerate(self._groups):
+                parent_pipe, child_pipe = ctx.Pipe()
+                self._pipes.append(parent_pipe)
+                self._pending.append(0)
+                fns = [env_fns[i] for i in group]
+                proc = ctx.Process(
+                    target=_worker,
+                    args=(
+                        group,
+                        CloudpickleWrapper(functools.partial(_identity, fns)),
+                        child_pipe,
+                        parent_pipe,
+                        autoreset,
+                    ),
+                    daemon=True,
+                    name=f"sekai-ProcVecEnv-worker-{worker}",
+                )
+                try:
+                    proc.start()  # e.g. env_fns that cloudpickle cannot pickle
+                finally:
+                    child_pipe.close()
+                self._processes.append(proc)
+                self._pending[worker] = 1  # the worker's "env_fns succeeded" handshake
+
             self._gather()
-            self._send(0, ForkingPickler.dumps((_Cmd.SPACES, None)))
+            self._send(0, _dumps((_Cmd.SPACES, None)))
             self.observation_space, self.action_space = self._recv(0)
             if shared_memory is not False:
                 self._shared = _SharedObservations.create(self.observation_space, self.num_envs)
@@ -423,7 +457,13 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
                     self._send_all(_Cmd.SHARE, [self._shared.handle()] * self.num_workers)
                     self._gather()
         except BaseException:
-            self._terminate()
+            # Close the sub-envs the healthy workers built (a worker whose env_fn failed
+            # closes its own), then make sure every worker has stopped.
+            try:
+                with contextlib.suppress(Exception):  # the original error is the one to report
+                    self.close()
+            finally:
+                self._terminate()
             raise
 
     @property
@@ -435,27 +475,38 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
     # Pipe protocol
     # ------------------------------------------------------------------
 
+    def _worker_lost(self, worker: int, error: BaseException, message: str) -> VecEnvWorkerError:
+        """The error for a worker that died (or whose pipe broke).
+
+        It names the sub-env when the worker ran only one. Otherwise which of its
+        sub-envs failed is unknown, so the message names the worker and all of them,
+        and `rank` is the first.
+        """
+        group = self._groups[worker]
+        exc_type = type(error).__name__
+        lost = VecEnvWorkerError(group[0], exc_type, message, "")
+        if len(group) > 1:
+            span = f"{group[0]}-{group[-1]}"  # the groups are contiguous
+            lost.args = (f"Worker {worker} (sub-envs {span}) raised {exc_type}: {message}",)
+        return lost
+
     def _recv(self, worker: int) -> Any:
         try:
             ok, payload = self._pipes[worker].recv()
         except (EOFError, OSError) as e:
             self._pending[worker] = 0
-            raise VecEnvWorkerError(
-                self._groups[worker][0], type(e).__name__, "worker process exited unexpectedly", ""
-            ) from e
+            raise self._worker_lost(worker, e, "worker process exited unexpectedly") from e
         self._pending[worker] -= 1
         if not ok:
             raise VecEnvWorkerError(*payload)
         return payload
 
-    def _send(self, worker: int, message: Any) -> None:
+    def _send(self, worker: int, message: bytes) -> None:
         """Send one pre-pickled command; count the reply it will produce."""
         try:
             self._pipes[worker].send_bytes(message)
         except OSError as e:
-            raise VecEnvWorkerError(
-                self._groups[worker][0], type(e).__name__, "worker process is not running", ""
-            ) from e
+            raise self._worker_lost(worker, e, "worker process is not running") from e
         self._pending[worker] += 1
 
     def _drain(self) -> None:
@@ -493,7 +544,7 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
             raise VecEnvClosed()
         self._drain()
         # Pickle everything first: if any payload is unpicklable, nothing is sent.
-        messages = [ForkingPickler.dumps((cmd, payload)) for payload in payloads]
+        messages = [_dumps((cmd, payload)) for payload in payloads]
         for worker, message in enumerate(messages):
             self._send(worker, message)
 
@@ -548,9 +599,10 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
         if self.closed:
             return
         self.closed = True
-        close_msg = ForkingPickler.dumps((_Cmd.CLOSE, None))
-        close_sent = [False] * self.num_workers
-        for worker in range(self.num_workers):
+        close_msg = _dumps((_Cmd.CLOSE, None))
+        # Every pipe, not range(num_workers): a failed __init__ may not have started them all.
+        close_sent = [False] * len(self._pipes)
+        for worker in range(len(self._pipes)):
             with contextlib.suppress(VecEnvWorkerError):
                 self._send(worker, close_msg)
                 close_sent[worker] = True

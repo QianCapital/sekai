@@ -25,7 +25,10 @@ class VecRecordEpisodeStatistics(VecWrapper[ObsType, ActType, ObsType, ActType])
 
     When sub-env i finishes an episode, `infos[i]["episode"]` is an EpisodeStats,
     exactly as with the single-env RecordEpisodeStatistics, and the stats are
-    reported to the tracker. Works with autoreset on or off.
+    reported to the tracker. Works with autoreset on or off: without autoreset,
+    a finished sub-env is frozen (see VecEnv) and keeps reporting done, so it is
+    ignored until the next reset() and stepping the others on (e.g.
+    `while not finished.all()`) records each episode once.
     """
 
     def __init__(
@@ -39,19 +42,29 @@ class VecRecordEpisodeStatistics(VecWrapper[ObsType, ActType, ObsType, ActType])
         self._returns = np.zeros(self.num_envs, dtype=np.float64)
         self._lengths = np.zeros(self.num_envs, dtype=np.int64)
         self._start_times = np.full(self.num_envs, time.monotonic())
+        # Sub-envs whose episode has ended and that nothing has reset yet (autoreset off).
+        self._finished = np.zeros(self.num_envs, dtype=np.bool_)
 
     def _on_reset(self, result: VecResetResult[ObsType]) -> VecResetResult[ObsType]:
         self._returns[:] = 0.0
         self._lengths[:] = 0
         self._start_times[:] = time.monotonic()
+        self._finished[:] = False
         return result
 
     def _on_step(self, result: VecStepResult[ObsType]) -> VecStepResult[ObsType]:
-        self._returns += result.rewards
-        self._lengths += 1
-        dones = result.dones
+        active = ~self._finished
+        self._returns[active] += result.rewards[active]
+        self._lengths[active] += 1
+        dones = result.dones & active
         if not dones.any():
             return result
+        if not self.venv.autoreset:
+            # A sub-env that resets itself (e.g. wrapped in AutoReset) reports
+            # final_observation and plays on; any other stays finished until reset().
+            self._finished |= dones & np.array(
+                ["final_observation" not in info for info in result.infos], dtype=np.bool_
+            )
 
         now = time.monotonic()
         infos: list[InfoDict] = list(result.infos)
@@ -217,7 +230,7 @@ class VecNormalizeReward(VecWrapper[ObsType, ActType, ObsType, ActType]):
 
 
 class VecTransformObservation(VecObservationWrapper[Any, ActType, Any]):
-    """Applies fn to every batch of observations.
+    """Applies func to every batch of observations.
 
     Example:
         ```python
@@ -228,20 +241,20 @@ class VecTransformObservation(VecObservationWrapper[Any, ActType, Any]):
     def __init__(
         self,
         venv: VecEnv[Any, ActType],
-        fn: Callable[[Any], Any],
+        func: Callable[[Any], Any],
         new_observation_space: Space[Any] | None = None,
     ) -> None:
         super().__init__(venv)
-        self._fn = fn
+        self.func = func
         if new_observation_space is not None:
             self.observation_space = new_observation_space
 
     def observation(self, obs: Any) -> Any:
-        return self._fn(obs)
+        return self.func(obs)
 
 
 class VecTransformReward(VecRewardWrapper[ObsType, ActType]):
-    """Applies fn to every batch of rewards (an (N,) float64 array).
+    """Applies func to every batch of rewards (an (N,) float64 array).
 
     Example:
         ```python
@@ -252,10 +265,10 @@ class VecTransformReward(VecRewardWrapper[ObsType, ActType]):
     def __init__(
         self,
         venv: VecEnv[ObsType, ActType],
-        fn: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+        func: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     ) -> None:
         super().__init__(venv)
-        self._fn = fn
+        self.func = func
 
     def reward(self, rewards: NDArray[np.float64]) -> NDArray[np.float64]:
-        return np.asarray(self._fn(rewards), dtype=np.float64)
+        return np.asarray(self.func(rewards), dtype=np.float64)

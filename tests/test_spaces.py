@@ -276,3 +276,145 @@ def test_box_repr_is_readable() -> None:
         "Box([-1.0, -inf], [1.0, inf], (2,), float32)"
     )
     assert "..." in repr(Box(np.zeros(100), np.arange(1, 101)))
+
+
+# ---------------------------------------------------------------------------
+# Regressions found in the 0.2.0 pre-release review
+# ---------------------------------------------------------------------------
+
+
+def test_numpy_ints_in_shapes_become_python_ints() -> None:
+    from sekai.spaces import MaskedBox, Sequence
+
+    box = Box(0, 1, shape=(np.int64(3),))
+    assert repr(box) == "Box(0.0, 1.0, (3,), float32)"
+    assert all(type(d) is int for d in box.shape)
+    masked = MaskedBox(0, 1, shape=(np.int64(2),), max_size=np.int64(4))
+    assert all(type(d) is int for d in masked.element_shape)
+    seq = Sequence(box, max_length=np.int64(5))
+    for space in (box, masked, seq):  # json.dumps used to raise on np.int64
+        assert space_from_jsonable(json.loads(json.dumps(space.to_jsonable()))) == space
+
+
+class TestPerSubspaceSeeds:
+    def test_dict_seed_accepts_a_dict(self) -> None:
+        a = Dict(x=Discrete(100), y=Box(0, 1, shape=(2,)))
+        b = Dict(x=Discrete(100), y=Box(0, 1, shape=(2,)), seed={"x": 5})
+        assert a.seed({"x": 5}) == -1  # used to raise TypeError
+        assert [a["x"].sample() for _ in range(5)] == [b["x"].sample() for _ in range(5)]
+        with pytest.raises(ValueError, match="not keys"):
+            a.seed({"z": 1})
+
+    def test_tuple_seed_accepts_a_list(self) -> None:
+        a = Tuple([Discrete(100), Discrete(100)])
+        b = Tuple([Discrete(100), Discrete(100)], seed=[1, 2])
+        assert a.seed([1, 2]) == -1  # used to raise TypeError
+        assert a.sample() == b.sample()
+        a.seed([3, None])  # None leaves sub-space 1's generator where it is
+        b[0].seed(3)
+        assert a.sample() == b.sample()
+        with pytest.raises(ValueError, match="3 seeds"):
+            a.seed([1, 2, 3])
+
+    def test_int_seed_still_seeds_everything(self) -> None:
+        a, b = Dict(x=Discrete(100)), Dict(x=Discrete(100))
+        assert a.seed(7) == b.seed(7) == 7
+        assert a.sample() == b.sample()
+
+
+class TestEquality:
+    def test_custom_spaces_compare_by_identity(self) -> None:
+        from sekai.spaces import Sequence, Space
+
+        class Level(Space[int]):
+            def __init__(self, n: int) -> None:
+                self.n = n
+                super().__init__()
+
+            def sample(self, mask: object = None) -> int:
+                return self.n
+
+            def contains(self, x: object) -> bool:
+                return x == self.n
+
+            @property
+            def is_flattenable(self) -> bool:
+                return False
+
+        one = Level(1)
+        assert one == one and Level(1) != Level(2)  # used to be equal (same type)
+        assert Sequence(Level(1)) != Sequence(Level(2))
+        assert Sequence(one) == Sequence(one)
+        assert len({one, one}) == 1  # identity-hashable, consistent with ==
+
+    def test_builtin_spaces_compare_by_value_and_are_unhashable(self) -> None:
+        from sekai.spaces import MaskedBox, Sequence
+
+        def make() -> list[object]:
+            return [
+                Box(0, 1, shape=(2,)),
+                Discrete(3),
+                MultiDiscrete([2, 3]),
+                MultiBinary(4),
+                Dict(a=Discrete(2)),
+                Tuple([Discrete(2)]),
+                Sequence(Discrete(2), max_length=3),
+                MaskedBox(0, 1, shape=(2,), max_size=3),
+            ]
+
+        for a, b in zip(make(), make()):
+            assert a == b and a is not b
+            assert type(a).__hash__ is None, type(a).__name__
+
+    def test_multi_discrete_compares_dtype(self) -> None:
+        assert MultiDiscrete([2, 3], dtype=np.int32) != MultiDiscrete([2, 3])
+        assert MultiDiscrete([2, 3], dtype=np.int32) == MultiDiscrete([2, 3], dtype=np.int32)
+
+
+@pytest.mark.parametrize(
+    ("space", "x"),
+    [
+        (MultiBinary(2), [[0, 1], [1]]),
+        (MultiDiscrete([3, 3]), [[1, 2], [1]]),
+        (MultiDiscrete([3, 3]), ([0], [1, 2])),
+    ],
+)
+def test_contains_is_false_for_ragged_input(space: object, x: object) -> None:
+    assert space.contains(x) is False  # type: ignore[attr-defined]
+
+
+def test_masked_box_contains_ragged_values_is_false() -> None:
+    from sekai.spaces import MaskedBox
+
+    space = MaskedBox(0, 1, shape=(2,), max_size=2)
+    assert not space.contains({"values": [[0, 0], [0]], "mask": np.array([1, 0])})
+
+
+class TestMultiDiscreteMasks:
+    def test_wrong_length_entries_raise(self) -> None:
+        space = MultiDiscrete([6, 6, 3], seed=0)
+        ok = (np.ones(6, np.int8), np.ones(6, np.int8), np.ones(3, np.int8))
+        assert space.sample(mask=ok) in space
+        for bad in (
+            (np.ones(6, np.int8), np.ones(6, np.int8), np.ones(2, np.int8)),  # too short
+            (np.ones(6, np.int8), np.ones(6, np.int8), np.ones(4, np.int8)),  # too long
+            ok[:2],  # an entry missing
+            (*ok, np.ones(3, np.int8)),  # an extra entry
+        ):
+            with pytest.raises(ValueError):
+                space.sample(mask=bad)
+
+    def test_padded_array_masks(self) -> None:
+        space = MultiDiscrete([2, 3], seed=0)
+        padded = np.array([[0, 1, 1], [1, 0, 0]], np.int8)  # the 1 past nvec[0] is padding
+        for _ in range(10):
+            assert space.sample(mask=padded).tolist() == [1, 0]
+        with pytest.raises(ValueError, match=r"shape \(2, 3\)"):
+            space.sample(mask=np.ones((2, 2), np.int8))  # narrower than max(nvec)
+
+    def test_nested_masks_for_2d_nvec(self) -> None:
+        space = MultiDiscrete([[2, 3], [2, 2]], seed=0)
+        mask = ((np.array([1, 0]), np.array([0, 0, 1])), (np.array([0, 1]), np.array([1, 0])))
+        assert space.sample(mask=mask).tolist() == [[0, 2], [1, 0]]
+        with pytest.raises(ValueError, match=r"dimension \(0, 1\)"):
+            space.sample(mask=((np.array([1, 0]), np.array([0, 1])), mask[1]))

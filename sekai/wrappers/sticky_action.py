@@ -10,6 +10,7 @@ from sekai.core.env import Env
 from sekai.core.result import ResetResult
 from sekai.core.wrapper import ActionWrapper
 from sekai.utils.seeding import make_seed_sequence, np_random
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 def _child_generator(gen: np.random.Generator) -> np.random.Generator:
@@ -38,6 +39,7 @@ class StickyAction(ActionWrapper[ObsType, ActType, ActType]):
                 f"repeat_action_probability must be in [0, 1), got {repeat_action_probability}."
             )
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "StickyAction")
         self.repeat_action_probability = repeat_action_probability
         self._last_action: Any = None
         self._sticky_rng: np.random.Generator = np_random()[0]

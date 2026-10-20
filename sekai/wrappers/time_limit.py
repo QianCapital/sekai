@@ -6,6 +6,7 @@ from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import Wrapper
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 class TimeLimit(Wrapper[ObsType, ActType, ObsType, ActType]):
@@ -18,6 +19,7 @@ class TimeLimit(Wrapper[ObsType, ActType, ObsType, ActType]):
         if max_episode_steps < 1:
             raise ValueError(f"max_episode_steps must be >= 1, got {max_episode_steps}.")
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "TimeLimit")
         self.max_episode_steps = max_episode_steps
         self._elapsed: int = 0
 

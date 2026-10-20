@@ -87,8 +87,21 @@ class TestEquityAndReturns:
             returns_from_equity([1.0, 0.0, 1.0])
         with pytest.raises(ValueError, match="positive"):
             returns_from_equity([-1.0, 1.0])
+        with pytest.raises(ValueError, match="0 after it"):
+            returns_from_equity([1.0, -1.0, -2.0])
         with pytest.raises(ValueError, match="two values"):
             returns_from_equity([1.0])
+
+    def test_round_trip_through_a_wipe_out(self) -> None:
+        # Regression: equity_curve keeps equity at zero after a wipe-out, and
+        # returns_from_equity refused that ("only the last value may be <= 0").
+        np.testing.assert_allclose(
+            returns_from_equity(equity_curve([0.1, -1.0, 0.2])), [0.1, -1.0, 0.0]
+        )
+        np.testing.assert_allclose(returns_from_equity([2.0, -1.0, 0.0, 0.0]), [-1.0, 0.0, 0.0])
+        for r in ([0.5, -1.0, 0.3, 0.1], [-1.0, 0.2], [0.2, -3.0, 0.0]):
+            equity = equity_curve(r)
+            np.testing.assert_allclose(equity_curve(returns_from_equity(equity)), equity)
 
     def test_total_return(self) -> None:
         assert total_return([0.1, -0.5, 0.2]) == pytest.approx(-0.34)
@@ -385,6 +398,22 @@ class TestPnLSummary:
         assert s.pnl_volatility == 0.0 and s.sharpe_ratio == 0.0
         assert pnl_summary([0.5, 0.5, 0.5]).sharpe_ratio == 0.0
 
+    def test_rounding_is_measured_against_the_wealth_level(self) -> None:
+        # Regression: increments of a cumulative wealth carry rounding of eps times the
+        # wealth, which counted as volatility: a constant 0.1 a step on a wealth of 1000
+        # had a Sharpe ratio of 3e13.
+        wealth = 1000.0 + np.cumsum(np.full(200, 0.1))
+        pnl = np.diff(wealth, prepend=1000.0)
+        s = pnl_summary(pnl, scale=float(np.max(np.abs(wealth))))
+        assert s.pnl_volatility == 0.0 and s.sharpe_ratio == 0.0
+        assert s.total_pnl == pytest.approx(20.0) and s.hit_rate == 1.0
+        noisy = pnl + np.random.default_rng(0).normal(0.0, 1e-6, size=200)  # still genuine
+        sd = pnl_summary(noisy, scale=1000.0).pnl_volatility
+        assert sd == pytest.approx(np.std(noisy, ddof=1))
+        for bad in (-1.0, math.nan, math.inf):
+            with pytest.raises(ValueError, match="scale"):
+                pnl_summary(pnl, scale=bad)
+
     def test_str_and_as_dict(self) -> None:
         s = pnl_summary([1.0, 2.0, -4.0, 1.0, 3.0])
         assert s.as_dict()["max_drawdown"] == pytest.approx(4.0)
@@ -604,6 +633,13 @@ class TestRecordPerformance:
         assert perf.max_drawdown == pytest.approx(4.0)
         assert perf.hit_rate == pytest.approx(0.8)
         assert env.summary()["total_pnl"] == pytest.approx(3.0)
+
+    def test_pnl_mode_rounding_scales_with_the_wealth(self) -> None:
+        path = list(1000.0 + np.cumsum(np.full(200, 0.1)))
+        env = RecordPerformance(WealthEnv(path, start=1000.0), pnl_key="wealth")
+        perf = run_episode(env, seed=0).info["performance"]
+        assert perf.pnl_volatility == 0.0 and perf.sharpe_ratio == 0.0
+        assert perf.mean_pnl == pytest.approx(0.1)
 
     def test_pnl_mode_start_from_reset_info(self) -> None:
         env = RecordPerformance(WealthEnv([12.0, 9.0], start=10.0), pnl_key="wealth")

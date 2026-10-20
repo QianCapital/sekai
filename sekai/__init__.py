@@ -39,6 +39,8 @@ Writing an environment:
             return sekai.StepResult(obs, reward, False, False, {})
 """
 
+from typing import Any as _Any
+
 from sekai._version import __version__
 
 # Core API
@@ -131,7 +133,6 @@ from sekai import wrappers, spaces, vector, rendering, stats, utils, error, comp
 # Errors
 from sekai.error import (
     AsyncCallPending,
-    BackendMismatch,
     EnvAlreadyRegistered,
     EnvNotFound,
     InvalidAction,
@@ -149,6 +150,18 @@ from sekai.utils.seeding import np_random, make_seed_sequence
 from sekai.utils.checker import check_env
 from sekai.utils.running_stats import ExponentialMovingStats, RunningMeanStd
 from sekai.utils.masking import get_action_mask
+
+
+def __getattr__(name: str) -> _Any:
+    # Deprecated names: still importable, with a DeprecationWarning, until sekai 0.3.
+    if name == "BackendMismatch":
+        import warnings
+
+        from sekai.error import _BACKEND_MISMATCH_DEPRECATION, _BackendMismatch
+
+        warnings.warn(f"sekai.{_BACKEND_MISMATCH_DEPRECATION}", DeprecationWarning, stacklevel=2)
+        return _BackendMismatch
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -252,7 +265,6 @@ __all__ = [
     "InvalidObservation",
     "ResetRequired",
     "AsyncCallPending",
-    "BackendMismatch",
     "SpaceMismatch",
     "VecEnvWorkerError",
     "VecEnvClosed",

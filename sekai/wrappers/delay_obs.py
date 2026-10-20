@@ -8,6 +8,7 @@ from sekai.core.env import Env
 from sekai.core.result import ResetResult
 from sekai.core.wrapper import ObservationWrapper
 from sekai.spaces.utils import zero_sample
+from sekai.wrappers.autoreset import _warn_if_outside_autoreset
 
 
 class DelayObservation(ObservationWrapper[Any, ActType, Any]):
@@ -30,6 +31,7 @@ class DelayObservation(ObservationWrapper[Any, ActType, Any]):
         if padding not in ("zeros", "reset"):
             raise ValueError(f"padding must be 'zeros' or 'reset', got {padding!r}.")
         super().__init__(env)
+        _warn_if_outside_autoreset(env, "DelayObservation")
         self.delay = delay
         self.padding = padding
         self._queue: deque[Any] = deque()

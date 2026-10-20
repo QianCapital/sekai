@@ -1,7 +1,8 @@
 """Building blocks for financial-market environments.
 
 - `data`: `MarketData`, point-in-time panels with listings and delistings,
-  chronological splits and walk-forward folds.
+  chronological splits and walk-forward folds; `Time`, a timestamp to look up
+  by value where an integer would be a row position.
 - `sampling`: episode samplers (random, sequential and fixed windows).
 - `simulators`: market models (GBM, Heston, jumps, regime switching, GARCH, mean
   reversion, cointegration, block bootstrap), dynamic universes and domain
@@ -15,12 +16,14 @@
 - `metrics`: performance metrics and the `RecordPerformance` wrapper.
 - `universe`: `SlotMap`, stable slots for a changing set of instruments.
 - `lob`: a limit order book matching engine and zero-intelligence order flow.
+- `rendering`: charts for dashboards of market environments (prices with positions
+  and trades, order-book depth, changing universes).
 
 The built-in finance environments (`sekai.envs.finance`) are assembled from these
 parts, and so can yours.
 """
 
-from sekai.finance.data import MarketData
+from sekai.finance.data import MarketData, Time
 from sekai.finance.sampling import (
     EpisodeSampler,
     FixedStart,
@@ -50,7 +53,7 @@ from sekai.finance.costs import (
     SpreadCost,
     SquareRootImpact,
 )
-from sekai.finance.account import AccountConfig
+from sekai.finance.account import AccountConfig, Settlement
 from sekai.finance.rewards import (
     DifferentialSharpe,
     DrawdownPenalty,
@@ -71,12 +74,14 @@ from sekai.finance.metrics import (
 )
 from sekai.finance.universe import SlotMap
 from sekai.finance.lob import BACKGROUND, Fill, Order, OrderBook, Side, ZeroIntelligenceFlow
+from sekai.finance.rendering import OrderBookChart, PriceChart, UniverseChart
 from sekai.finance import account, costs, data, features, lob, metrics, rewards, sampling
-from sekai.finance import simulators, universe
+from sekai.finance import rendering, simulators, universe
 
 __all__ = [
     # Data
     "MarketData",
+    "Time",
     "EpisodeSampler",
     "RandomStart",
     "SequentialStart",
@@ -103,6 +108,7 @@ __all__ = [
     "SquareRootImpact",
     "CompositeCost",
     "AccountConfig",
+    "Settlement",
     # Rewards
     "RewardFunction",
     "StepOutcome",
@@ -127,6 +133,10 @@ __all__ = [
     "Side",
     "BACKGROUND",
     "ZeroIntelligenceFlow",
+    # Rendering
+    "PriceChart",
+    "OrderBookChart",
+    "UniverseChart",
     # Submodules
     "account",
     "costs",
@@ -134,6 +144,7 @@ __all__ = [
     "features",
     "lob",
     "metrics",
+    "rendering",
     "rewards",
     "sampling",
     "simulators",

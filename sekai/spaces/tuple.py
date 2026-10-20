@@ -23,17 +23,27 @@ class Tuple(Space[tuple[Any, ...]]):
         self.spaces = tuple(spaces)
         super().__init__(shape=None, dtype=None)
 
-        if isinstance(seed, list):
+        if seed is not None:
+            self.seed(seed)
+
+    def seed(self, seed: SeedType | list[SeedType] | tuple[SeedType, ...] = None) -> int:
+        """Seed this space and, deterministically, every sub-space.
+
+        A list of seeds (`[1, None, 3]`) seeds the sub-spaces individually instead, in
+        order (`None` leaves one as it is), and returns -1 (there is no single seed).
+        More seeds than sub-spaces raise ValueError.
+        """
+        from sekai.utils.seeding import child_seeds, np_random
+
+        if isinstance(seed, (list, tuple)):
+            if len(seed) > len(self.spaces):
+                raise ValueError(
+                    f"Got {len(seed)} seeds for a Tuple of {len(self.spaces)} sub-spaces."
+                )
             for space, s in zip(self.spaces, seed):
                 if s is not None:
                     space.seed(s)
-        elif seed is not None:
-            self.seed(seed)
-
-    def seed(self, seed: SeedType = None) -> int:
-        """Seed this space and, deterministically, every sub-space."""
-        from sekai.utils.seeding import child_seeds, np_random
-
+            return -1
         self._rng, actual_seed = np_random(seed)
         for space, s in zip(self.spaces, child_seeds(self._rng, actual_seed, len(self))):
             space.seed(s)

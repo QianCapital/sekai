@@ -10,25 +10,41 @@ class RunningMeanStd:
     """Running mean and variance over batches, using the parallel-variance update.
 
     Shared by the observation/reward normalisation wrappers (single-env and
-    vectorised). Starts at mean 0, var 1 with a tiny pseudo-count so the
-    first update dominates.
+    vectorised). Starts at mean 0, var 1 with a tiny pseudo-count (`epsilon`) so the
+    first update dominates: the first batch sets the mean outright, and the prior's
+    unit variance keeps only its pseudo-count's weight (so a single first sample does
+    not give a zero variance). Pooling the first batch with the prior mean of 0
+    instead would add about `mean**2 * epsilon / count` to the variance for good, a
+    large error for data far from zero, such as prices. Empty batches are ignored.
     """
 
     def __init__(self, shape: tuple[int, ...] = (), epsilon: float = 1e-4) -> None:
         self.mean: NDArray[np.float64] = np.zeros(shape, dtype=np.float64)
         self.var: NDArray[np.float64] = np.ones(shape, dtype=np.float64)
         self.count: float = epsilon
+        self.epsilon = epsilon
 
     def update(self, batch: ArrayLike) -> None:
         """Update with a batch of samples stacked along axis 0."""
         x = np.asarray(batch, dtype=np.float64)
+        if x.shape[0] == 0:
+            return
         self.update_from_moments(x.mean(axis=0), x.var(axis=0), x.shape[0])
 
     def update_from_moments(
         self, batch_mean: ArrayLike, batch_var: ArrayLike, batch_count: int
     ) -> None:
+        if batch_count <= 0:
+            return
         batch_mean = np.asarray(batch_mean, dtype=np.float64)
         batch_var = np.asarray(batch_var, dtype=np.float64)
+        if self.count <= self.epsilon:  # only the prior so far: take the first batch's mean
+            self.var = (self.var * self.count + batch_var * batch_count) / (
+                self.count + batch_count
+            )
+            self.mean = batch_mean + np.zeros_like(self.mean)
+            self.count += batch_count
+            return
         delta = batch_mean - self.mean
         total = self.count + batch_count
         m2 = (
@@ -98,6 +114,8 @@ class ExponentialMovingStats:
     def update_from_moments(
         self, batch_mean: ArrayLike, batch_var: ArrayLike, batch_count: int
     ) -> None:
+        if batch_count <= 0:
+            return
         batch_mean = np.asarray(batch_mean, dtype=np.float64)
         batch_var = np.asarray(batch_var, dtype=np.float64)
         self.weight = self.weight * self.decay**batch_count + batch_count

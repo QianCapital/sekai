@@ -11,10 +11,12 @@ from sekai.error import VecEnvClosed
 from sekai.vector.result import VecResetResult, VecStepResult
 from sekai.vector.vec_env import (
     VecEnv,
+    build_envs,
     close_envs,
     env_call,
     env_get_attr,
     env_set_attr,
+    frozen_step,
     merge_autoreset,
     needs_autoreset,
 )
@@ -35,6 +37,9 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
     From async code, use `await vec.async_step(...)` / `await vec.async_reset(...)`.
     The sync step()/reset() run those coroutines on a private event loop owned
     by this VecEnv, so they must not be called from inside a running loop.
+
+    If an env_fn raises, the sub-envs already built are closed before the error
+    propagates.
     """
 
     def __init__(
@@ -45,21 +50,30 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
     ) -> None:
         if len(env_fns) == 0:
             raise ValueError("AsyncVecEnv needs at least one env_fn.")
-        self.envs: list[Env[ObsType, ActType]] = [fn() for fn in env_fns]
+        self.envs: list[Env[ObsType, ActType]] = build_envs(env_fns)
         self.num_envs = len(self.envs)
         self.autoreset = autoreset
         self.observation_space = self.envs[0].observation_space
         self.action_space = self.envs[0].action_space
         self._loop: asyncio.AbstractEventLoop | None = None
+        # The step that ended each frozen sub-env's episode (autoreset off; see VecEnv).
+        self._finals: list[StepResult[Any] | None] = [None] * self.num_envs
 
     # ------------------------------------------------------------------
     # Async API
     # ------------------------------------------------------------------
 
-    async def _step_one(self, env: Env[ObsType, ActType], action: Any) -> StepResult[Any]:
+    async def _step_one(self, index: int, action: Any) -> StepResult[Any]:
+        final = self._finals[index]
+        if final is not None:
+            return frozen_step(final)
+        env = self.envs[index]
         result = await env.async_step(action)
-        if self.autoreset and needs_autoreset(result):
-            result = merge_autoreset(result, await env.async_reset())
+        if needs_autoreset(result):
+            if self.autoreset:
+                result = merge_autoreset(result, await env.async_reset())
+            else:
+                self._finals[index] = result
         return result
 
     @staticmethod
@@ -78,7 +92,7 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
     async def async_step(self, actions: Any) -> VecStepResult[Any]:
         self._check_open()
         results = await self._gather_all(
-            self._step_one(env, a) for env, a in zip(self.envs, self._split_actions(actions))
+            self._step_one(i, a) for i, a in enumerate(self._split_actions(actions))
         )
         return self._batch_step(results)
 
@@ -91,6 +105,7 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
         self._check_open()
         seeds = self._expand_seeds(seed)
         opts = self._expand_options(options)
+        self._finals = [None] * self.num_envs
         results = await self._gather_all(
             env.async_reset(seed=s, options=o) for env, s, o in zip(self.envs, seeds, opts)
         )

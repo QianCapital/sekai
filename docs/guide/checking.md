@@ -36,25 +36,31 @@ The env is reset and stepped, so pass a fresh instance.
 | Spaces | `observation_space` and `action_space` exist and are `sekai.Space` instances | ERROR (stops) |
 | | `action_space.sample()` is contained in `action_space` | ERROR |
 | | `observation_space.sample()` is contained in `observation_space` | ERROR |
-| Action masks | if the env or a wrapper defines `action_mask()`: `action_space.sample(mask=env.action_mask())` does not raise after `reset()` | ERROR (stops) |
+| Action masks | if the env or a wrapper defines `action_mask()`: `action_space.sample(mask=env.action_mask())` does not raise after `reset()`, and for a `Discrete`, `MultiDiscrete` or `Box` action space neither does `flatten_action_mask()` (used by `ActionMaskObservation` and `to_gymnasium()`) | ERROR (stops) |
 | | and returns an action contained in `action_space` | ERROR |
 | | and does not raise in any state the random-action rollout reaches (e.g. every action masked) | ERROR (ends the rollout) |
 | `reset()` | `reset(seed=42)` does not raise | ERROR (stops) |
 | | it returns an object with `.observation` and `.info` | ERROR (stops) |
 | | `info` is a `dict` | ERROR |
-| Observations | every observation (from `reset`, `step` and the async methods) is in `observation_space` | WARNING |
+| Observations | every observation (from every `reset`, `step` and the async methods) is in `observation_space` | WARNING |
 | | for a `Box` space, the observation's dtype equals the space's | WARNING |
 | `step()` | `step()` does not raise | ERROR (stops stepping) |
 | | it returns an object with all five `StepResult` fields | ERROR (stops stepping) |
 | | a previously returned observation was not mutated in place (reported once) | WARNING |
 | | `reward` is a real number (not a `bool`), `terminated` / `truncated` are `bool`, `info` is a `dict` | WARNING |
 | | no NaN rewards; a count of infinite rewards | WARNING |
-| Seeding | `reset(seed=0)` twice returns equal observations | WARNING |
+| Later `reset()`s | the `reset()` that follows each episode in the rollout does not raise and returns a `ResetResult` | ERROR (stops) |
+| | it does not overwrite the episode's terminal observation in place, which `AutoReset` and vector envs hand on as `info["final_observation"]` (reported once) | WARNING |
+| Seeding | `reset(seed=0)` does not raise | ERROR |
+| | called twice, it returns equal observations (compared with a copy of the first, so an env reusing its array is not let off) | WARNING |
 | Determinism | two rollouts from `reset(seed=123)` with the same (up to 50) actions match exactly | WARNING |
 | Async | `async_reset(seed=7)` and one `async_step()` return valid results and do not raise | ERROR / WARNING |
 
 Per-step problems are reported once each: the first occurrence, plus how many steps showed
 it, e.g. `... has dtype float64, space has float32. (seen at 500 steps; first shown)`.
+Observation problems from `reset()` are counted the same way over every reset (the first, those
+between episodes and `reset(seed=0)`). The determinism check records deep copies, so an env that
+reuses its observation arrays is not mistaken for a nondeterministic one.
 
 ## Examples
 

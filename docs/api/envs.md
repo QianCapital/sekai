@@ -51,6 +51,25 @@ See [Finance](../environments/finance.md).
 
 ::: sekai.envs.finance.LimitOrderBookMarket
 
+### Finance renderers
+
+Exported from `sekai.envs.finance`. Each is a `sekai.rendering.Dashboard`; `render(env)`
+returns an `(H, W, 3)` `uint8` frame of the episode so far.
+
+::: sekai.envs.finance.TradingRenderer
+
+::: sekai.envs.finance.PortfolioRenderer
+
+::: sekai.envs.finance.MarketRenderer
+
+::: sekai.envs.finance.MarketMakingRenderer
+
+::: sekai.envs.finance.OptimalExecutionRenderer
+
+::: sekai.envs.finance.LimitOrderBookRenderer
+
+::: sekai.envs.finance.LimitOrderBookMarketRenderer
+
 ### Native vector environments
 
 Registered as the `vector_entry_point` of their environments, so `sekai.make_vec(id, n)`
