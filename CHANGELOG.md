@@ -4,7 +4,9 @@ All notable changes to sekai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0, minor versions may change behaviour).
 
-## [0.2.0] - Unreleased
+## [Unreleased]
+
+## [0.2.0] - 2026-10-20
 
 The first release with built-in environments, a finance toolkit, a test suite, CI and a
 documentation site.
@@ -376,6 +378,7 @@ These change behaviour for code written against 0.1.x:
   core wrappers, typed `EpisodeStats` with pluggable trackers, `Renderer` protocol,
   and `check_env`.
 
-[0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/QianCapital/sekai/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/QianCapital/sekai/releases/tag/v0.1.1
