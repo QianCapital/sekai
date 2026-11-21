@@ -218,25 +218,30 @@ All notable changes to sekai are documented here. The format follows
 
 **Qian Capital-branded dashboards**
 
-- Every finance renderer and `Dashboard` takes `branding=True`: the gold Q mark beside the
-  header, the QIAN CAPITAL wordmark over a Hedvig Letters Serif title, and the episode's
-  progress as a gold-metal rule. `branding=False` draws a plain header and makes
-  `theme="light"` / `"dark"` the new unbranded palettes `sekai.rendering.PLAIN_LIGHT` /
-  `PLAIN_DARK` (neutral surface and ink, blue accent, a brand-neutral categorical palette
-  checked for colour-vision deficiency); a `Theme` you pass is used as given either way.
-  `get_theme(name, branding=...)` resolves the names.
-- `sekai.rendering.brand`: `draw_mark`, `draw_wordmark` and `draw_rule`, for branded frames
-  of your own.
+- The finance renderers draw their header in the Qian Capital house style by default
+  (`branding=True`): the gold Q mark beside the QIAN CAPITAL wordmark over a Hedvig
+  Letters Serif title, and the episode's progress as a gold-metal rule. `branding=False`
+  draws 0.2's plain header, and the frames are identical to 0.2's. A `Dashboard` you build
+  is unbranded by default and draws exactly as in 0.2. Frames too small to read the
+  wordmark (under 515 x 322), and headers whose title and stats would not fit beside the
+  mark, get the plain header with the gold rule.
+- `sekai.rendering.PLAIN_LIGHT` / `PLAIN_DARK`: unbranded palettes (neutral surface and
+  ink, blue accent, a brand-neutral categorical palette checked for colour-vision
+  deficiency), by name `theme="plain-light"` / `"plain-dark"`.
+- `sekai.rendering.brand`: the mark, wordmark and gold rule that branded dashboards draw.
+  The Qian Capital name and logo are trademarks, not licensed under Apache-2.0 or the
+  OFL: see `TRADEMARKS`.
+- `TRADEMARKS`, shipped with the wheel and sdist; the package's license expression is now
+  `Apache-2.0 AND OFL-1.1 AND LicenseRef-Qian-Capital-Trademarks`.
 - `Canvas.text(..., serif=True)` and `text_width(..., serif=True)` set text in Hedvig
   Letters Serif (one weight, 9 to 32 px), shipped as a second glyph atlas under the SIL Open
   Font License (`tools/build_font_atlas.py` builds both).
 
 ### Changed
 
-- Dashboards are branded by default, so their header is 12 px taller at 720 x 450 and the
-  charts slightly shorter; pass `branding=False` for the previous plain header (in the
-  unbranded palettes; `theme=sekai.rendering.LIGHT` keeps the house colours).
-
+- The finance renderers are branded by default, so from 515 x 322 up their header is
+  12 px taller (at 720 x 450) and the charts slightly shorter. Pass `branding=False` for
+  0.2's frames, pixel for pixel. Dashboards you build are unchanged.
 - `split_infos` (and so every native vector env) splits nested info mappings per env
   (they raised `ValueError` in 0.2).
 - `Market-v0` refuses a `features=` field with several values per asset with a clear

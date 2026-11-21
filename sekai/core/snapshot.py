@@ -5,7 +5,8 @@
 references to the environment and its wrappers stay valid. Stepping a restored env
 with the same actions reproduces the same results. Uses: tree search and other
 planning from a state, "what if" analysis of a decision, and checkpoints of a training
-run (a snapshot pickles).
+run (a snapshot pickles whenever the environment's state does: a dashboard renderer
+recording frames doesn't).
 
 Data that does not change is shared between the environment and its snapshots rather
 than copied: spaces, specs, `MarketData` (memory-mapped data pickles as its location),

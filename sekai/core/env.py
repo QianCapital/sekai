@@ -90,7 +90,8 @@ class Env(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
         """A copy of the environment's state (and its wrappers', random generators included).
 
         `restore(snapshot)` puts it back, so the same actions then give the same results:
-        for planning from a state, "what if" analysis, or checkpoints (a snapshot pickles).
+        for planning from a state, "what if" analysis, or checkpoints (a snapshot pickles
+        when the environment's state does; a dashboard renderer's doesn't).
         Data that never changes (spaces, `MarketData`, market models, read-only arrays) is
         shared with the snapshot, not copied. See `sekai.core.snapshot`.
         """

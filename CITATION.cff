@@ -6,7 +6,9 @@ authors:
   - name: "Qian Capital"
     email: opensource@qiancapital.com
 version: 0.2.0
-license: Apache-2.0
+license:
+  - Apache-2.0
+  - OFL-1.1
 repository-code: "https://github.com/QianCapital/sekai"
 url: "https://sekai.qiancapital.com/"
 keywords:

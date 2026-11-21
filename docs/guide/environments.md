@@ -237,7 +237,9 @@ involved (each wrapper, a vector env's sub-envs, the batch env behind `Market-v1
 restored where it is, so references to any of them stay valid, as do arrays an env hands
 out as views of its state. A snapshot can be restored any number of times, and the
 same actions then give the same results. Use it to plan from a state (tree search, "what
-if" analysis of a decision), or to checkpoint a training run: a snapshot pickles.
+if" analysis of a decision), or to checkpoint a training run: a snapshot pickles whenever
+the environment's state does (a dashboard renderer recording frames, with its chart
+history, doesn't: checkpoint the env without the recorder).
 
 ```python
 import pickle
