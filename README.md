@@ -47,6 +47,7 @@ while not result.done:
 - **Dynamic dimensionality.** `MaskedBox` padded sets and `Sequence` spaces for observations whose size changes (a universe that gains and loses assets, the trades since the last decision), plus a standard action-mask convention that `check_env`, wrappers and MaskablePPO understand.
 - **Time-aware.** Frame stacking and normalisation over any (nested) space, exponentially weighted statistics for non-stationary data, observation and order latency wrappers, and `timestamp` / `dt` in every finance env's info.
 - **Fast vectorisation.** Native vector environments that step thousands of sub-envs with array operations (over a million env-steps per second), plus sync, asyncio and multiprocessing backends with shared-memory observations and autoreset.
+- **Batched and differentiable markets.** `Market-v1` is one implementation that runs as a single env, a native vector env, or a batch of torch tensors on a GPU whose rewards are differentiable in the actions, so policies can be trained by backpropagating through the market. Explicit execution timing (no fills at the close the agent just observed), hard constraints by projection (gross and per-name caps, dollar and factor neutrality), holding costs, factor risk models, and scenarios from your own generative models.
 - **A finance toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
 - **Built-in environments.** Classic control with dynamics bit-for-bit identical to gymnasium; trading, portfolio, dynamic-universe, market-making, optimal-execution and order-book environments (single- and multi-agent), with closed-form baselines.
 - **Renderers for every environment, in NumPy alone.** The finance ones draw each episode as a dashboard: prices with positions and trades, equity, allocations, order-book depth with your orders in the queue. They are built from charts (`sekai.rendering.Dashboard`, `sekai.finance.rendering`) that render your own environments as well.
@@ -66,9 +67,10 @@ pip install sekai
 | `pip install "sekai[pettingzoo]"` | PettingZoo interop for multi-agent envs |
 | `pip install "sekai[pandas]"` | building `MarketData` from pandas DataFrames |
 | `pip install "sekai[render]"` | saving frames as GIF / MP4 |
+| `pip install "sekai[torch]"` | the torch backend: batched environments on tensors, with autograd |
 | `pip install "sekai[all]"` | all of the above |
 
-sekai itself needs only NumPy and cloudpickle.
+sekai itself needs only NumPy and cloudpickle; `import sekai` never imports PyTorch.
 
 ## Quick start
 
@@ -171,6 +173,27 @@ batch = vec.reset(seed=0)
 batch = vec.step(vec.batch_action_space.sample())
 ```
 
+### Train through the market
+
+```python
+import torch
+from sekai.envs.finance import BatchMarketEnv
+from sekai.finance import Constraints, ScoresLeverage, SpreadCost, SquareRootImpact
+
+env = BatchMarketEnv(
+    1024, data=train, max_assets=50,   # orders fill at the next close by default
+    action=ScoresLeverage(Constraints(max_gross=2.0, max_position=0.05, dollar_neutral=True)),
+    transaction_cost=SpreadCost() + SquareRootImpact(0.3),
+    backend="torch", device="cuda", autoreset=False,
+)
+env.differentiable = True            # rewards are differentiable in the actions
+result, loss = env.reset(seed=0), 0.0
+while not bool(result.dones.all()):
+    result = env.step(policy(result.observations))  # policy: your torch module
+    loss = loss - result.rewards.mean()
+loss.backward()                      # the exact (pathwise) policy gradient
+```
+
 ### Train with Stable-Baselines3
 
 ```python
@@ -194,6 +217,7 @@ model.learn(total_timesteps=10_000)
 | `Trading-v0` | Box(lookback + 1) | Discrete(3) | Go short / flat / long on one asset |
 | `Portfolio-v0` | Dict | Box(n + 1) | Allocate across correlated assets and cash |
 | `Market-v0` | Dict (MaskedBox) | Box(max_assets + 1) | Trade a universe that lists and delists, with features, costs and financing |
+| `Market-v1` | Dict (MaskedBox) | any `ActionMap` | `Market-v0` batched on NumPy or torch: execution timing, constraints, holding costs, risk models |
 | `MarketMaking-v0` | Box(2) | Box(2) | Quote bid/ask, manage inventory (Avellaneda–Stoikov) |
 | `OptimalExecution-v0` | Box(3) | Box(1) | Liquidate a large order (Almgren–Chriss) |
 | `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete([6, 6, 3]) | Make markets in an event-driven limit order book |

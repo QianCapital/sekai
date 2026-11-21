@@ -4,6 +4,7 @@ from sekai.vector.sync_vec_env import SyncVecEnv
 from sekai.vector.async_vec_env import AsyncVecEnv
 from sekai.vector.proc_vec_env import ProcVecEnv
 from sekai.vector.native import NativeVecEnv, shared
+from sekai.vector.batch import BatchEnv, BatchReset, BatchStep, BatchVecEnv, UnbatchedEnv
 from sekai.vector.vec_wrapper import (
     VecWrapper,
     VecObservationWrapper,
@@ -28,6 +29,11 @@ __all__ = [
     "ProcVecEnv",
     "NativeVecEnv",
     "shared",
+    "BatchEnv",
+    "BatchReset",
+    "BatchStep",
+    "BatchVecEnv",
+    "UnbatchedEnv",
     "VecWrapper",
     "VecObservationWrapper",
     "VecRewardWrapper",

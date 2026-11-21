@@ -47,6 +47,10 @@ See [Finance](../environments/finance.md).
 
 ::: sekai.envs.finance.default_market
 
+::: sekai.envs.finance.BatchMarketEnv
+
+::: sekai.envs.finance.make_market
+
 ::: sekai.envs.finance.LimitOrderBookEnv
 
 ::: sekai.envs.finance.LimitOrderBookMarket
@@ -78,6 +82,8 @@ returns them; see [Native vector environments](../environments/finance.md#native
 ::: sekai.envs.finance.TradingVecEnv
 
 ::: sekai.envs.finance.PortfolioVecEnv
+
+::: sekai.envs.finance.MarketVecEnv
 
 ::: sekai.envs.finance.MarketMakingVecEnv
 

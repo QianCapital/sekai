@@ -26,6 +26,34 @@ Exported from `sekai` and `sekai.vector` (`shared` from `sekai.vector` only). Se
 
 ::: sekai.vector.shared
 
+## Batched environments
+
+`sekai.vector.batch` (also exported from `sekai.vector`). See
+[Batched and differentiable environments](../finance/batched.md#the-batched-api).
+
+::: sekai.vector.BatchEnv
+    options:
+      members:
+        - reset
+        - step
+        - observe
+        - detach_state
+        - frozen
+        - _reset_lanes
+        - _observe
+        - _step
+        - _detach
+      filters: []
+      show_if_no_docstring: true
+
+::: sekai.vector.BatchReset
+
+::: sekai.vector.BatchStep
+
+::: sekai.vector.BatchVecEnv
+
+::: sekai.vector.UnbatchedEnv
+
 ## Results
 
 ::: sekai.VecStepResult

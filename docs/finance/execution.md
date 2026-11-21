@@ -14,7 +14,10 @@ modules:
 4. `sekai.finance.rewards`: a reward function turns the step's outcome into the reward.
 
 Everything here broadcasts over leading batch dimensions, so the same objects serve a
-single environment and every sub-env of a native vector env at once.
+single environment and every sub-env of a native vector env at once. It also runs on any
+[`sekai.backend`](../api/backend.md): on NumPy arrays (in float64), or on torch tensors on
+any device, differentiable, which is how a [batched environment](batched.md) trains a
+policy by backpropagating through the costs, constraints, accounting and reward.
 
 ## Cost models
 
@@ -162,8 +165,11 @@ SpreadCost(half_spread=from data) needs a 'spread' data field (fraction of the p
 ### Writing a cost model
 
 Subclass `CostModel`, implement `__call__(trades, *, equity=None, volatility=None,
-volume=None, spread=None)` returning an array of the batch shape, and set `requires` to the
-inputs you read. A broker commission of 1 bp with a minimum ticket of 10 currency units:
+volume=None, spread=None, assets=None)` returning an array of the batch shape (accepting
+`**context` covers inputs you do not read), and set `requires` to the inputs you read.
+`assets`, when given, is the asset behind each entry of `trades` (batched environments price
+trades per slot of a changing universe): a model with per-asset parameters looks them up
+with it, as `ProportionalCost` and `SpreadCost` do. A broker commission of 1 bp with a minimum ticket of 10 currency units:
 
 ```python
 from sekai.finance import CostModel
@@ -184,6 +190,76 @@ class MinimumCommission(CostModel):
 print(f"{float(MinimumCommission()(trades, equity=1e6)) * 1e4:.2f} bp")  # 0.20 bp
 print(f"{float(MinimumCommission()(trades, equity=1e5)) * 1e4:.2f} bp")  # 2.00 bp
 ```
+
+## Holding costs
+
+Trading costs price a rebalance; a `HoldingCost` prices holding the resulting book for one
+period, as a fraction of equity, on top of the account's financing (below). Holding costs
+compose with `+` and are charged by `BatchMarketEnv(holding_cost=...)`:
+
+| Model | Per period, as a fraction of equity | `requires` |
+|---|---|---|
+| `BorrowFee(rate)` | $\Delta t \sum_i b_i \max(-w_i, 0)$: an annual fee on each short, one rate or one per asset | |
+| `BorrowFee()` | the same with $b_i$ from the data's `borrow_rate` field (the median where missing), so hard-to-borrow names cost more | `borrow_rate` |
+| `GrossFinancing(rate)` | $\Delta t \cdot \text{rate} \sum_i \lvert w_i\rvert$: a prime-broker charge on the gross book | |
+
+```python
+from sekai.finance import BorrowFee, GrossFinancing
+
+book = np.array([[0.6, 0.4, -0.5, -0.5]])
+fees = BorrowFee() + GrossFinancing(0.01)
+daily = fees(book, dt=1 / 252, borrow_rate=np.array([[0.0, 0.0, 0.003, 0.25]]))
+print(f"{float(daily[0]) * 1e4:.2f} bp a day")  # 5.81 bp a day
+```
+
+## Constraints
+
+`sekai.finance.constraints.project(scores, constraints, *, gross=None, tradable=None,
+shortable=None, exposures=None)` turns raw scores into the book closest in direction that
+satisfies hard `Constraints`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `long_only` | `False` | no short positions |
+| `max_gross` | `1.0` | cap on gross exposure; `gross=` requests a gross up to it |
+| `max_position` | `None` | cap on each $\lvert w_i\rvert$ |
+| `dollar_neutral` | `False` | $\sum_i w_i = 0$ |
+| `neutral_to` | `()` | per-asset data fields to be neutral to, e.g. `("beta",)` or a risk model's `("loadings",)` |
+| `n_iter` | `20` | rounds of clip / neutralise / rescale |
+
+Untradable assets get 0 and unshortable ones are never negative. The scores are made
+orthogonal to every neutrality column at once (a column of ones for dollar neutrality and
+each exposure) by one least-squares projection, scaled to the requested gross, then for
+`n_iter` rounds clipped to the per-name caps, re-neutralised and rescaled. The final clip
+makes the caps and the gross cap exact; neutrality holds to the residual that clip leaves,
+basis points unless the requested gross is close to `n * max_position`. The requested
+gross is reached whenever it is feasible. The projection is differentiable in the scores
+and the gross, so it can sit inside a policy trained by backpropagation:
+
+```python
+from sekai.finance import Constraints, project
+
+rng = np.random.default_rng(0)
+scores, betas = rng.normal(size=500), rng.normal(1.0, 0.3, size=500)
+rules = Constraints(max_gross=2.0, max_position=0.01, dollar_neutral=True, neutral_to=("beta",))
+w = project(scores, rules, gross=1.5, exposures=betas)
+print(f"gross {np.abs(w).sum():.3f}, net {w.sum():+.1e}, beta {w @ betas:+.1e}, largest {np.abs(w).max():.4f}")
+# gross 1.500, net -1.0e-17, beta +6.3e-17, largest 0.0100
+```
+
+Batched environments apply constraints through their [action maps](batched.md#what-the-agent-controls).
+
+## Risk models
+
+A factor model writes the covariance of returns as $\Sigma = L F L^\top + \operatorname{diag}(d)$
+(loadings $L$ on $k$ factors, factor covariance $F$, idiosyncratic variances $d$), so a
+portfolio's variance is $x^\top F x + \sum_i w_i^2 d_i$ with exposures $x = L^\top w$,
+at a cost of $O(nk + k^2)$. `portfolio_variance(w, loadings=, factor_cov=, idio_var=)` and
+`factor_exposures(w, loadings)` compute them on any backend. `FactorRiskModel(loadings=
+"loadings", factor_cov="factor_cov", idio_var="idio_var")` tells a batched environment
+where to find the model in its data (the loadings and idiosyncratic variances as per-asset
+fields, the factor covariance as a market-wide series); the environment then reports each
+step's ex-ante `variance` and `exposures`, and passes the variance to the reward.
 
 ## Account rules
 
@@ -299,6 +375,7 @@ on a wipe-out (equity 0), so it raises there instead of rewarding the loss with 
 | `TurnoverPenalty()` | $\tau_t$ (subtract it) | total turnover |
 | `DrawdownPenalty()` | how much the drawdown deepened (subtract it) | total deepening of drawdowns |
 | `DifferentialSharpe(eta=0.01)` | the differential Sharpe ratio | approximately maximises the Sharpe ratio |
+| `PortfolioVariance()` | the ex-ante variance of the step's book under the env's risk model (subtract it) | |
 
 **Drawdown penalty.** With running peak $P_t = \max(1, \max_{s \le t} E_s)$ and drawdown
 $D_t = 1 - E_t / P_t$, the penalty is $\max(D_t - D_{t-1}, 0)$: zero while equity is at a
@@ -406,6 +483,8 @@ print(round(float(reward(outcome)), 5))  # -0.0303
 
 ## See also
 
+- [Batched and differentiable environments](batched.md): `BatchMarketEnv`, action maps,
+  observation builders and training through the environment.
 - [Finance environments](../environments/finance.md) for `transaction_cost=`, `reward=`
   and the account options in each environment.
 - [Performance metrics](metrics.md) to compare policies whatever they were trained on.

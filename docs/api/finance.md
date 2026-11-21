@@ -12,6 +12,16 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 
 ::: sekai.finance.data.Time
 
+## Panels and scenarios
+
+`sekai.finance.panel`. See [Where the data comes from](../finance/batched.md#where-the-data-comes-from).
+
+::: sekai.finance.panel.MarketPanel
+
+::: sekai.finance.panel.ScenarioGenerator
+
+::: sekai.finance.panel.ModelScenarios
+
 ## Sampling
 
 `sekai.finance.sampling`. See [Episode samplers](../finance/data.md#episode-samplers).
@@ -104,6 +114,18 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 
 ::: sekai.finance.costs.as_cost_model
 
+### Holding costs
+
+See [Holding costs](../finance/execution.md#holding-costs).
+
+::: sekai.finance.costs.HoldingCost
+
+::: sekai.finance.costs.BorrowFee
+
+::: sekai.finance.costs.GrossFinancing
+
+::: sekai.finance.costs.CompositeHoldingCost
+
 ## Account
 
 `sekai.finance.account`. See [Account rules](../finance/execution.md#account-rules).
@@ -117,6 +139,56 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 ::: sekai.finance.account.settle
 
 ::: sekai.finance.account.turnover
+
+## Constraints
+
+`sekai.finance.constraints`. See [Constraints](../finance/execution.md#constraints).
+
+::: sekai.finance.constraints.Constraints
+
+::: sekai.finance.constraints.project
+
+::: sekai.finance.constraints.neutralize
+
+::: sekai.finance.constraints.constraint_columns
+
+## Risk models
+
+`sekai.finance.risk`. See [Risk models](../finance/execution.md#risk-models).
+
+::: sekai.finance.risk.FactorRiskModel
+
+::: sekai.finance.risk.portfolio_variance
+
+::: sekai.finance.risk.factor_exposures
+
+## Action maps
+
+`sekai.finance.actions`. See [What the agent controls](../finance/batched.md#what-the-agent-controls).
+
+::: sekai.finance.actions.ActionMap
+
+::: sekai.finance.actions.ActionContext
+
+::: sekai.finance.actions.LongOnlyScores
+
+::: sekai.finance.actions.TargetWeights
+
+::: sekai.finance.actions.ScoresLeverage
+
+::: sekai.finance.actions.TanhWeights
+
+::: sekai.finance.actions.TradeDelta
+
+## Observations
+
+`sekai.finance.observations`. See [What the agent observes](../finance/batched.md#what-the-agent-observes).
+
+::: sekai.finance.observations.ObservationBuilder
+
+::: sekai.finance.observations.MarketObservation
+
+::: sekai.finance.observations.MarketView
 
 ## Rewards
 
@@ -139,6 +211,8 @@ their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
 ::: sekai.finance.rewards.DrawdownPenalty
 
 ::: sekai.finance.rewards.DifferentialSharpe
+
+::: sekai.finance.rewards.PortfolioVariance
 
 ## Metrics
 

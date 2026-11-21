@@ -20,9 +20,8 @@ built-in `ValueError` / `TypeError` instead.
 | `LookAheadError` | a feature transform used information from the future (raised by `sekai.finance.features.check_causal`) |
 | `InvalidObservation`, `SpaceMismatch`, `AsyncCallPending` | not raised by sekai itself; available for your environments and tools |
 
-`BackendMismatch` is deprecated together with `sekai.backend` and will be removed in sekai 0.3.
-Nothing in sekai raises it; `sekai.BackendMismatch` and `sekai.error.BackendMismatch` still
-work but emit a `DeprecationWarning`, and it is no longer in `sekai.__all__`.
+`BackendMismatch`, deprecated in 0.2 together with the old `sekai.backend` protocol, was
+removed in 0.3.
 
 ::: sekai.error
     options:

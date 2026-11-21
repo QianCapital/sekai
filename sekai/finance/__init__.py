@@ -9,10 +9,18 @@
   randomisation.
 - `features`: causal feature transforms, point-in-time `asof_join`, and the
   `check_causal` look-ahead detector.
-- `costs`: transaction-cost and market-impact models.
+- `costs`: transaction-cost and market-impact models, and holding costs (per-name
+  borrow fees, financing on gross exposure).
 - `account`: weight-space accounting (constraints, leverage, financing, drift).
+- `constraints`: hard portfolio constraints by projection (gross and per-name caps,
+  dollar and factor neutrality, unshortable names).
+- `risk`: factor risk models (ex-ante variance, factor exposures).
+- `actions`: action maps, from a policy's raw action to target weights.
+- `observations`: observation builders for batched market environments.
+- `panel`: `MarketPanel`, batched market data on NumPy or torch, and scenario
+  generators (`ScenarioGenerator`, `ModelScenarios`).
 - `rewards`: reward functions (log return, P&L, mean-variance, differential
-  Sharpe, drawdown and turnover penalties).
+  Sharpe, drawdown and turnover penalties, ex-ante variance).
 - `metrics`: performance metrics and the `RecordPerformance` wrapper.
 - `universe`: `SlotMap`, stable slots for a changing set of instruments.
 - `lob`: a limit order book matching engine and zero-intelligence order flow.
@@ -20,7 +28,8 @@
   and trades, order-book depth, changing universes).
 
 The built-in finance environments (`sekai.envs.finance`) are assembled from these
-parts, and so can yours.
+parts, and so can yours. The accounting, costs, constraints, risk model, action maps
+and rewards run on any `sekai.backend` (NumPy, or torch with autograd on any device).
 """
 
 from sekai.finance.data import MarketData, Time
@@ -52,8 +61,25 @@ from sekai.finance.costs import (
     ProportionalCost,
     SpreadCost,
     SquareRootImpact,
+    HoldingCost,
+    BorrowFee,
+    GrossFinancing,
+    CompositeHoldingCost,
 )
 from sekai.finance.account import AccountConfig, Settlement
+from sekai.finance.constraints import Constraints, project
+from sekai.finance.risk import FactorRiskModel, factor_exposures, portfolio_variance
+from sekai.finance.actions import (
+    ActionContext,
+    ActionMap,
+    LongOnlyScores,
+    ScoresLeverage,
+    TanhWeights,
+    TargetWeights,
+    TradeDelta,
+)
+from sekai.finance.observations import MarketObservation, MarketView, ObservationBuilder
+from sekai.finance.panel import MarketPanel, ModelScenarios, ScenarioGenerator
 from sekai.finance.rewards import (
     DifferentialSharpe,
     DrawdownPenalty,
@@ -64,6 +90,7 @@ from sekai.finance.rewards import (
     SimpleReturn,
     StepOutcome,
     TurnoverPenalty,
+    PortfolioVariance,
 )
 from sekai.finance.metrics import (
     PerformanceSummary,
@@ -77,11 +104,15 @@ from sekai.finance.lob import BACKGROUND, Fill, Order, OrderBook, Side, ZeroInte
 from sekai.finance.rendering import OrderBookChart, PriceChart, UniverseChart
 from sekai.finance import account, costs, data, features, lob, metrics, rewards, sampling
 from sekai.finance import rendering, simulators, universe
+from sekai.finance import actions, constraints, observations, panel, risk
 
 __all__ = [
     # Data
     "MarketData",
     "Time",
+    "MarketPanel",
+    "ScenarioGenerator",
+    "ModelScenarios",
     "EpisodeSampler",
     "RandomStart",
     "SequentialStart",
@@ -107,8 +138,28 @@ __all__ = [
     "FixedCost",
     "SquareRootImpact",
     "CompositeCost",
+    "HoldingCost",
+    "BorrowFee",
+    "GrossFinancing",
+    "CompositeHoldingCost",
     "AccountConfig",
     "Settlement",
+    # Constraints, risk, actions and observations
+    "Constraints",
+    "project",
+    "FactorRiskModel",
+    "factor_exposures",
+    "portfolio_variance",
+    "ActionMap",
+    "ActionContext",
+    "LongOnlyScores",
+    "TargetWeights",
+    "ScoresLeverage",
+    "TanhWeights",
+    "TradeDelta",
+    "ObservationBuilder",
+    "MarketObservation",
+    "MarketView",
     # Rewards
     "RewardFunction",
     "StepOutcome",
@@ -119,6 +170,7 @@ __all__ = [
     "TurnoverPenalty",
     "DrawdownPenalty",
     "DifferentialSharpe",
+    "PortfolioVariance",
     # Metrics
     "PerformanceSummary",
     "PnLSummary",
@@ -149,4 +201,9 @@ __all__ = [
     "sampling",
     "simulators",
     "universe",
+    "actions",
+    "constraints",
+    "observations",
+    "panel",
+    "risk",
 ]

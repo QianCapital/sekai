@@ -141,6 +141,7 @@ nav:
       - Market data and backtesting: finance/data.md
       - Market simulators: finance/simulators.md
       - Costs, accounts and rewards: finance/execution.md
+      - Batched and differentiable environments: finance/batched.md
       - Performance metrics: finance/metrics.md
       - Order books: finance/order-book.md
   - Environments:
@@ -156,6 +157,7 @@ nav:
       - Registry: api/registry.md
       - Environments: api/envs.md
       - Finance: api/finance.md
+      - Backend: api/backend.md
       - Rendering: api/rendering.md
       - Statistics: api/stats.md
       - Utilities: api/utils.md

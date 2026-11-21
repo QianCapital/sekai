@@ -6,6 +6,80 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+**Batched and differentiable market environments**
+
+- `Market-v1`, the general finance environment, implemented once as
+  `sekai.envs.finance.BatchMarketEnv`: `sekai.make("Market-v1")` is one lane of it,
+  `sekai.make_vec("Market-v1", num_envs=n)` a native vector env of `n` lanes
+  (`MarketVecEnv`, about 10x the throughput of `Market-v0` under `SyncVecEnv`), and
+  `BatchMarketEnv(n, ..., backend="torch", device="cuda")` a batch of tensors on a device
+  whose rewards are differentiable in the actions (`env.differentiable = True`), for
+  training policies by backpropagating through the market. With `execution="close"` it
+  reproduces `Market-v0` step for step.
+- Explicit execution timing, `execution=`: `"next_close"` (the default of `Market-v1`: an
+  order placed on the close of t fills at the close of t + 1, and the observation includes
+  the pending order), `"next_open"` / `"next_vwap"` (fills at the next open or VWAP, from
+  `"open"` / `"vwap"` data fields; the old book earns the overnight move), or `"close"`
+  (the close just observed: `Market-v0`'s convention, optimistic on real data).
+  `examples/execution_timing.py` shows a strategy that only works with same-close fills.
+- Data from a `MarketData`, a `MarketModel`, or any `scenarios=` generator (an object with
+  `sample(n_paths, *, seed) -> MarketPanel`, e.g. a generative model of markets).
+  `sekai.finance.MarketPanel` holds batches of paths on NumPy or torch (`from_returns`,
+  `from_market_data`, `from_simulation`, `to`); `ModelScenarios` wraps a `MarketModel`.
+- Action maps (`sekai.finance.actions`): `LongOnlyScores` and `TargetWeights` (Market-v0's
+  actions), and `ScoresLeverage`, `TanhWeights`, `TradeDelta`, which project onto hard
+  constraints and have inverses (`from_target`) for writing baselines once.
+- Constraints by projection (`sekai.finance.constraints`): `Constraints(long_only,
+  max_gross, max_position, dollar_neutral, neutral_to)` and `project()`, which enforces
+  gross and per-name caps, joint dollar and factor neutrality, untradable and unshortable
+  names, differentiably.
+- Factor risk models (`sekai.finance.risk`): `portfolio_variance`, `factor_exposures`, and
+  `FactorRiskModel`, which tells an environment where its loadings, factor covariance and
+  idiosyncratic variances are in the data; the env reports each step's ex-ante `variance`
+  and `exposures`. New reward `PortfolioVariance()`; `StepOutcome` gains `weights` and
+  `variance`.
+- Holding costs: `HoldingCost`, `BorrowFee` (a rate per asset, or each name's fee from a
+  `"borrow_rate"` data field) and `GrossFinancing`, composable with `+`; `settle()` takes
+  `holding=`. `BatchMarketEnv` also takes `shortable=` (a data field naming the shortable
+  names), `risk=` and `max_drawdown=` (a drawdown stop).
+- Observation builders (`sekai.finance.observations`): `ObservationBuilder`, the default
+  `MarketObservation`, and `MarketView`, the windowed per-slot view of the data and the
+  accounts that builders read.
+- `sekai.vector.BatchEnv`, a base class for environments that keep `num_envs` lanes in
+  arrays on one backend (seeding, same-step autoreset with `final_observations`, frozen
+  lanes, partial resets, `differentiable`, `detach_state()`), with the adapters
+  `BatchVecEnv` (a `NativeVecEnv`) and `UnbatchedEnv` (a single `Env`); `BatchReset` and
+  `BatchStep` results.
+- `sekai.backend`, the array layer the finance core is written in: `NumpyBackend`, a torch
+  backend, `backend_of`, `get_backend`, `to_numpy`. The accounting (`project_weights`,
+  `settle`), cost models and reward functions accept torch tensors (keeping their dtype and
+  device, with finite gradients, e.g. at zero trades), with NumPy results unchanged bit for
+  bit. `RewardFunction.detach_state()` truncates a stateful reward's graph.
+- A `torch` extra (`pip install "sekai[torch]"`); `import sekai` never imports PyTorch.
+- `MarketData` fields may have several values per asset and time (`(T, N, ...)`, e.g.
+  factor loadings) and exogenous series several per time (`(T, ...)`, e.g. a factor
+  covariance).
+- Cost models receive `assets=` from batched environments (the asset behind each slot's
+  trade) and look per-asset parameters up with it (`ProportionalCost`, `SpreadCost`).
+- `MarketRenderer` draws `Market-v1` too.
+- Docs: "Batched and differentiable environments"; holding costs, constraints and risk
+  models in "Costs, accounts and rewards"; `Market-v1` in the environment catalogue; an
+  API page for `sekai.backend`. Example `examples/integrations/direct_policy_torch.py`:
+  pathwise policy training.
+
+### Changed
+
+- `split_infos` (and so every native vector env) splits nested info mappings per env.
+- `Market-v0` refuses a `features=` field with several values per asset with a clear
+  `ValueError` (such fields are new).
+
+### Removed
+
+- The `BackendOps` protocol, `default_backend` and `sekai.BackendMismatch`, deprecated in
+  0.2 with an announced removal in 0.3. `sekai.backend` is now the array layer above.
+
 ## [0.2.0] - 2026-10-20
 
 The first release with built-in environments, a finance toolkit, a test suite, CI and a

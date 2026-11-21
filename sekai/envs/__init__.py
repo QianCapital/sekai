@@ -86,6 +86,11 @@ register(
     vector_entry_point="sekai.envs.finance.vector:OptimalExecutionVecEnv",
 )
 register(id="Market-v0", entry_point="sekai.envs.finance.market_env:MarketEnv")
+register(
+    id="Market-v1",
+    entry_point="sekai.envs.finance.batch_market:make_market",
+    vector_entry_point="sekai.envs.finance.batch_market:MarketVecEnv",
+)
 register(id="LimitOrderBook-v0", entry_point="sekai.envs.finance.lob_env:LimitOrderBookEnv")
 
 __all__ = [

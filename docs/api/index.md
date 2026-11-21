@@ -8,10 +8,11 @@ top-level `sekai` package unless the page says otherwise.
 | [Core](core.md) | `Env`, `Wrapper` and its semantic subclasses, `MultiAgentEnv`, result dataclasses |
 | [Spaces](spaces.md) | `Box`, `Discrete`, `MultiDiscrete`, `MultiBinary`, `Dict`, `Tuple`, `Sequence`, `MaskedBox` and `sekai.spaces` utilities |
 | [Wrappers](wrappers.md) | every single-env wrapper in `sekai.wrappers` |
-| [Vector](vector.md) | `SyncVecEnv`, `AsyncVecEnv`, `ProcVecEnv`, `NativeVecEnv`, results and vector wrappers |
+| [Vector](vector.md) | `SyncVecEnv`, `AsyncVecEnv`, `ProcVecEnv`, `NativeVecEnv`, batched environments (`BatchEnv` and its adapters), results and vector wrappers |
 | [Registry](registry.md) | `register`, `make`, `make_vec`, `EnvSpec`, ... |
 | [Environments](envs.md) | built-in environment classes (and native vector versions), renderers and price simulators in `sekai.envs` |
-| [Finance](finance.md) | the `sekai.finance` toolkit: market data, samplers, simulators, features, costs, accounts, rewards, metrics, universe slots, order book, market charts |
+| [Finance](finance.md) | the `sekai.finance` toolkit: market data and panels, samplers, simulators, features, costs, accounts, constraints, risk models, action maps, observation builders, rewards, metrics, universe slots, order book, market charts |
+| [Backend](backend.md) | `sekai.backend`: the NumPy and torch array backends |
 | [Rendering](rendering.md) | `sekai.rendering`: `Renderer`, `Canvas`, `RecordFrames`, `save_gif`, `save_video`, dashboards, charts and themes |
 | [Statistics](stats.md) | `EpisodeStats` and trackers |
 | [Utilities](utils.md) | `check_env`, `RunningMeanStd`, `ExponentialMovingStats`, action-mask helpers, seeding helpers |

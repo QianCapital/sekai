@@ -182,15 +182,17 @@ class MarketData:
         prices: Prices shaped `(T, N)` (or `(T,)` for one asset); stored as the
             field `price_field`. NaN marks an asset that is not listed at that
             time. Finite prices must be positive.
-        fields: More per-asset data, each `(T, N)`: volumes, spreads, features.
-            NaN is allowed; infinities are not.
+        fields: More per-asset data, each `(T, N)` or `(T, N, ...)`: volumes, spreads,
+            features, or several values per asset and time such as a risk model's
+            factor loadings `(T, N, k)`. NaN is allowed; infinities are not.
         timestamps: `(T,)` strictly increasing `numpy.datetime64` values (or
             anything numpy converts to them, such as date strings) or numbers.
             Defaults to `0, 1, ..., T-1`. Timezone-aware values are refused (see
             the module docstring for the explicit conversion).
         assets: `N` unique asset identifiers. Defaults to `"asset_0", ...`.
-        exogenous: Market-wide series, each `(T,)` or `(T, k)`: interest rates,
-            an index, macro data aligned with `sekai.finance.features.asof_join`.
+        exogenous: Market-wide series, each `(T,)` or `(T, ...)`: interest rates,
+            an index, macro data aligned with `sekai.finance.features.asof_join`, or
+            matrices such as a factor covariance `(T, k, k)`.
         price_field: Name of the field that holds the prices.
         warmup: Number of leading rows that are lookback-only history (`split` and
             `walk_forward` set it): environments may observe them, but never make a
@@ -227,16 +229,19 @@ class MarketData:
             arr = np.array(value, dtype=np.float64)
             if arr.ndim == 1:
                 arr = arr[:, None]
-            if arr.ndim != 2:
-                raise ValueError(f"field {name!r} must be 2-D (T, N), got shape {arr.shape}.")
+            if arr.ndim < 2:
+                raise ValueError(f"field {name!r} must be (T, N) or (T, N, ...), got {arr.shape}.")
             if np.isinf(arr).any():
                 raise ValueError(f"field {name!r} contains infinite values; use NaN for missing.")
             arrays[name] = arr
         shape = arrays[price_field].shape
+        if len(shape) != 2:
+            raise ValueError(f"prices ({price_field!r}) must be 2-D (T, N), got shape {shape}.")
         for name, arr in arrays.items():
-            if arr.shape != shape:
+            if arr.shape[:2] != shape:
                 raise ValueError(
-                    f"field {name!r} has shape {arr.shape} but {price_field!r} has {shape}."
+                    f"field {name!r} has shape {arr.shape} but {price_field!r} has {shape}; "
+                    "a field's first two dimensions are (T, N)."
                 )
         n_steps, n_assets = shape
         if n_steps < 2 or n_assets < 1:
@@ -271,9 +276,9 @@ class MarketData:
         exo: dict[str, NDArray[np.float64]] = {}
         for name, value in (exogenous or {}).items():
             arr = np.array(value, dtype=np.float64)
-            if arr.ndim not in (1, 2) or arr.shape[0] != n_steps:
+            if arr.ndim < 1 or arr.shape[0] != n_steps:
                 raise ValueError(
-                    f"exogenous {name!r} must have shape ({n_steps},) or ({n_steps}, k), "
+                    f"exogenous {name!r} must have shape ({n_steps},) or ({n_steps}, ...), "
                     f"got {arr.shape}."
                 )
             if np.isinf(arr).any():
@@ -375,12 +380,12 @@ class MarketData:
 
     @property
     def fields(self) -> Mapping[str, NDArray[np.float64]]:
-        """Every per-asset field, including prices."""
+        """Every per-asset field, including prices: `(T, N)` or `(T, N, ...)` each."""
         return dict(self._fields)
 
     @property
     def exogenous(self) -> Mapping[str, NDArray[np.float64]]:
-        """Market-wide series, each `(T,)` or `(T, k)`."""
+        """Market-wide series, each `(T,)` or `(T, ...)`."""
         return dict(self._exogenous)
 
     @property
@@ -414,7 +419,7 @@ class MarketData:
         return self._warmup
 
     def field(self, name: str) -> NDArray[np.float64]:
-        """One per-asset field `(T, N)`."""
+        """One per-asset field, `(T, N)` or `(T, N, ...)`."""
         try:
             return self._fields[name]
         except KeyError:
@@ -430,9 +435,10 @@ class MarketData:
             ) from None
 
     def exogenous_width(self, name: str) -> int:
-        """Number of columns of an exogenous series (1 for a 1-D series)."""
+        """Number of values per row of an exogenous series (1 for a 1-D series; the
+        product of the trailing dimensions otherwise)."""
         arr = self.exogenous_series(name)
-        return 1 if arr.ndim == 1 else int(arr.shape[1])
+        return int(np.prod(arr.shape[1:], dtype=np.int64))
 
     @property
     def periods_per_year(self) -> float | None:
@@ -525,7 +531,7 @@ class MarketData:
         return self._replace(cols=np.array([lookup[a] for a in assets], dtype=np.intp))
 
     def with_fields(self, **arrays: ArrayLike) -> MarketData:
-        """A copy with fields added or replaced (each `(T, N)`)."""
+        """A copy with fields added or replaced (each `(T, N)` or `(T, N, ...)`)."""
         return MarketData(
             fields={**self._fields, **arrays},
             timestamps=self._timestamps,
@@ -536,7 +542,7 @@ class MarketData:
         )
 
     def with_exogenous(self, **arrays: ArrayLike) -> MarketData:
-        """A copy with exogenous series added or replaced (each `(T,)` or `(T, k)`)."""
+        """A copy with exogenous series added or replaced (each `(T,)` or `(T, ...)`)."""
         return MarketData(
             fields=self._fields,
             timestamps=self._timestamps,

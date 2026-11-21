@@ -9,7 +9,9 @@ costs = SpreadCost(half_spread=2e-4) + SquareRootImpact(0.1) + FixedCost(1.0)
 ```
 
 Everything is vectorised: trades may carry leading batch dimensions (one row
-per sub-env of a native vector env), and the result has those dimensions.
+per sub-env of a vector env), and the result has those dimensions. Models run on
+any `sekai.backend` (NumPy arrays, or torch tensors on any device, differentiable in
+the trades), so a batched environment trains through them.
 Context that some models need (account equity in currency, per-asset
 volatility, traded volume, quoted spread) is passed as keyword arguments;
 environments supply what their data has, and a model that is missing an input
@@ -29,9 +31,9 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
-Array = NDArray[np.float64]
+from sekai.backend import Array, backend_and_like
 
 
 class CostModel(abc.ABC):
@@ -52,6 +54,7 @@ class CostModel(abc.ABC):
         volatility: ArrayLike | None = None,
         volume: ArrayLike | None = None,
         spread: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
     ) -> Array:
         """Cost of a rebalance.
 
@@ -61,6 +64,10 @@ class CostModel(abc.ABC):
             volatility: `(..., n)` per-step return volatility of each asset.
             volume: `(..., n)` traded value per step of each asset, in currency.
             spread: `(..., n)` quoted bid-ask spread as a fraction of the price.
+            assets: `(..., n)` the asset (data column) behind each entry of `trades`,
+                when trades are given per slot of a changing universe rather than per
+                asset; models with per-asset parameters look them up with it. None
+                means entry i is asset i.
 
         Returns:
             `(...)` cost as a fraction of equity.
@@ -74,7 +81,7 @@ class CostModel(abc.ABC):
 
 def _fill_from_median(
     values: Array,
-    traded: NDArray[np.bool_],
+    traded: Array,
     *,
     fallback: float | None,
     name: str,
@@ -97,22 +104,24 @@ def _fill_from_median(
         model: Name of the model, for the error message.
         option: Name of the model's fallback argument, for the error message.
     """
-    ok = np.isfinite(values) & (values >= 0)
-    if ok.all():
+    B, like = backend_and_like(values, traded)
+    with B.errstate():
+        ok = B.isfinite(values) & (values >= 0)
+    if B.item(B.all(ok)):
         return values
-    any_ok = np.asarray(ok.any(axis=-1))
-    if fallback is None and np.any(~any_ok & traded.any(axis=-1)):
+    any_ok = B.any(ok, axis=-1)
+    if fallback is None and B.item(B.any(~any_ok & B.any(traded, axis=-1))):
         raise ValueError(
             f"{model} has no valid {name!r} (finite and >= 0) for any asset in a row with "
             f"trades, so it cannot price them (they would be free). Supply the input, or "
             f"set an explicit fallback value with {model}(..., {option}=...)."
         )
-    with np.errstate(invalid="ignore"):
-        filled = np.where(ok, values, np.nan)
-        median = np.nanmedian(np.where(any_ok[..., None], filled, 0.0), axis=-1)
+    with B.errstate():
+        filled = B.where(ok, values, float("nan"))
+        median = B.nanmedian(B.where(any_ok[..., None], filled, 0.0), axis=-1)
     # Rows without a valid entry take the fallback (or, untraded, any placeholder).
-    median = np.where(any_ok, median, 0.0 if fallback is None else fallback)
-    return np.where(ok, values, np.asarray(median, dtype=np.float64)[..., None])
+    median = B.where(any_ok, median, 0.0 if fallback is None else fallback)
+    return B.where(ok, values, B.asfloat(median, like)[..., None])
 
 
 def _non_negative(value: ArrayLike, name: str) -> Array:
@@ -133,21 +142,32 @@ def _check_fallback(value: float | None, name: str) -> float | None:
     return None if value is None else _non_negative_scalar(value, name)
 
 
-def _require(name: str, value: ArrayLike | None, model: str) -> Array:
+def _require(name: str, value: ArrayLike | None, model: str, like: Array) -> Array:
     if value is None:
         raise ValueError(
             f"{model} needs {name!r}; this environment does not provide it. Add a "
             f"{name!r} field to the market data or choose another cost model."
         )
-    return np.asarray(value, dtype=np.float64)
+    return backend_and_like(like)[0].asfloat(value, like)
+
+
+def _per_asset(param: np.ndarray, assets: ArrayLike | None, like: Array) -> Array:
+    """A model parameter on the backend of `like`, looked up per slot when `assets` is given."""
+    B = backend_and_like(like)[0]
+    out = B.asfloat(param, like)
+    if param.ndim == 0 or assets is None:
+        return out
+    # Empty slots (index -1) trade nothing, so the value looked up for them is irrelevant.
+    return out[B.asint(assets, like)]
 
 
 class NoCost(CostModel):
     """Frictionless trading."""
 
     def __call__(self, trades: ArrayLike, **context: Any) -> Array:
-        t = np.asarray(trades, dtype=np.float64)
-        return np.zeros(t.shape[:-1])
+        B, like = backend_and_like(trades)
+        t = B.asfloat(trades, like)
+        return B.zeros(tuple(t.shape[:-1]), like=t)
 
     def __repr__(self) -> str:
         return "NoCost()"
@@ -164,12 +184,16 @@ class ProportionalCost(CostModel):
     def __init__(self, rate: ArrayLike) -> None:
         self.rate = _non_negative(rate, "rate")
 
-    def __call__(self, trades: ArrayLike, **context: Any) -> Array:
-        t = np.abs(np.asarray(trades, dtype=np.float64))
+    def __call__(
+        self, trades: ArrayLike, *, assets: ArrayLike | None = None, **context: Any
+    ) -> Array:
+        B, like = backend_and_like(trades)
+        t = B.abs(B.asfloat(trades, like))
+        rate = _per_asset(self.rate, assets, t)
         if self.rate.ndim == 0:
-            out: Array = self.rate * t.sum(axis=-1)
+            out: Array = rate * B.sum(t, axis=-1)
             return out
-        return np.asarray((self.rate * t).sum(axis=-1), dtype=np.float64)
+        return B.asfloat(B.sum(rate * t, axis=-1), t)
 
     def __repr__(self) -> str:
         return f"ProportionalCost({self.rate.tolist()})"
@@ -202,22 +226,28 @@ class SpreadCost(CostModel):
         self.fallbacks = frozenset() if self.fallback_spread is None else frozenset({"spread"})
 
     def __call__(
-        self, trades: ArrayLike, *, spread: ArrayLike | None = None, **context: Any
+        self,
+        trades: ArrayLike,
+        *,
+        spread: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
+        **context: Any,
     ) -> Array:
-        t = np.abs(np.asarray(trades, dtype=np.float64))
+        B, like = backend_and_like(trades, spread)
+        t = B.abs(B.asfloat(trades, like))
         if self.half_spread is not None:
-            half = self.half_spread
+            half = _per_asset(self.half_spread, assets, t)
         else:
-            quoted = np.broadcast_to(_require("spread", spread, "SpreadCost()"), t.shape)
+            quoted = B.broadcast_to(_require("spread", spread, "SpreadCost()", t), t.shape)
             half = 0.5 * _fill_from_median(
-                quoted.astype(np.float64),
+                B.asfloat(quoted, t),
                 t > 0,
                 fallback=self.fallback_spread,
                 name="spread",
                 model="SpreadCost",
                 option="fallback_spread",
             )
-        return np.asarray((half * t).sum(axis=-1), dtype=np.float64)
+        return B.asfloat(B.sum(half * t, axis=-1), t)
 
     def __repr__(self) -> str:
         hs = "from data" if self.half_spread is None else self.half_spread.tolist()
@@ -244,12 +274,14 @@ class FixedCost(CostModel):
     def __call__(
         self, trades: ArrayLike, *, equity: ArrayLike | None = None, **context: Any
     ) -> Array:
-        t = np.abs(np.asarray(trades, dtype=np.float64))
-        value = _require("equity", equity, "FixedCost")
-        n_trades = (t > self.threshold).sum(axis=-1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            out = np.where(value > 0, self.amount * n_trades / np.maximum(value, 1e-300), 0.0)
-        return np.asarray(out, dtype=np.float64)
+        B, like = backend_and_like(trades, equity)
+        t = B.abs(B.asfloat(trades, like))
+        value = _require("equity", equity, "FixedCost", t)
+        n_trades = B.sum(t > self.threshold, axis=-1)
+        positive = value > 0
+        with B.errstate():
+            out = B.where(positive, self.amount * n_trades / B.where(positive, value, 1.0), 0.0)
+        return B.asfloat(out, t)
 
     def __repr__(self) -> str:
         return f"FixedCost({self.amount})"
@@ -299,25 +331,33 @@ class SquareRootImpact(CostModel):
         volume: ArrayLike | None = None,
         **context: Any,
     ) -> Array:
-        t = np.abs(np.asarray(trades, dtype=np.float64))
-        value = _require("equity", equity, "SquareRootImpact")
-        vol = _require("volatility", volatility, "SquareRootImpact")
-        traded = _require("volume", volume, "SquareRootImpact")
-        notional = t * np.asarray(value, dtype=np.float64)[..., None]
+        B, like = backend_and_like(trades, equity, volatility, volume)
+        t = B.abs(B.asfloat(trades, like))
+        value = _require("equity", equity, "SquareRootImpact", t)
+        vol = _require("volatility", volatility, "SquareRootImpact", t)
+        traded = _require("volume", volume, "SquareRootImpact", t)
+        notional = t * value[..., None]
         sigma = _fill_from_median(
-            np.broadcast_to(vol, t.shape).astype(np.float64),
+            B.asfloat(B.broadcast_to(vol, t.shape), t),
             t > 0,
             fallback=self.fallback_volatility,
             name="volatility",
             model="SquareRootImpact",
             option="fallback_volatility",
         )
-        liquid = np.isfinite(traded) & (traded > 0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            participation = np.where(liquid, notional / np.where(liquid, traded, 1.0), 0.0)
-            unit = np.where(liquid, self.coefficient * sigma * np.sqrt(participation), 1.0)
-        per_asset = np.where(t > 0, np.minimum(unit, 1.0) * t, 0.0)
-        return np.asarray(per_asset.sum(axis=-1), dtype=np.float64)
+        with B.errstate():
+            liquid = B.isfinite(traded) & (traded > 0)
+            participation = B.where(liquid, notional / B.where(liquid, traded, 1.0), 0.0)
+            # The square root of 0 has an infinite derivative, so entries that are not
+            # used (untraded or illiquid) take a harmless 1: gradients stay finite.
+            priced = liquid & (t > 0)
+            unit = B.where(
+                liquid,
+                self.coefficient * sigma * B.sqrt(B.where(priced, participation, 1.0)),
+                1.0,
+            )
+        per_asset = B.where(t > 0, B.minimum(unit, 1.0) * t, 0.0)
+        return B.asfloat(B.sum(per_asset, axis=-1), t)
 
     def __repr__(self) -> str:
         if self.fallback_volatility is None:
@@ -345,9 +385,166 @@ class CompositeCost(CostModel):
         )
 
     def __call__(self, trades: ArrayLike, **context: Any) -> Array:
-        total: Array = np.asarray(self.models[0](trades, **context), dtype=np.float64)
+        B, like = backend_and_like(trades)
+        total: Array = B.asfloat(self.models[0](trades, **context), like)
         for model in self.models[1:]:
             total = total + model(trades, **context)
+        return total
+
+    def __repr__(self) -> str:
+        return " + ".join(repr(m) for m in self.models)
+
+
+# ---------------------------------------------------------------------------
+# Holding costs
+# ---------------------------------------------------------------------------
+
+
+class HoldingCost(abc.ABC):
+    """Cost of holding positions for one period, as a fraction of equity.
+
+    Trading costs (`CostModel`) price a rebalance; holding costs price the positions
+    held afterwards: per-name borrow fees on shorts, a financing charge on the gross
+    book. An environment charges them each period alongside its account's financing
+    (cash interest, margin interest, a uniform borrow rate). They compose with `+`
+    and, like cost models, broadcast over batch dimensions and run on any backend.
+    """
+
+    #: Context inputs the model reads (environments compute only these).
+    requires: frozenset[str] = frozenset()
+
+    @abc.abstractmethod
+    def __call__(
+        self,
+        weights: ArrayLike,
+        *,
+        dt: float,
+        borrow_rate: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
+    ) -> Array:
+        """Cost of holding `weights` for one period.
+
+        Args:
+            weights: `(..., n)` weights held over the period.
+            dt: Period length in years.
+            borrow_rate: `(..., n)` annual borrow fee of each asset (the `borrow_rate`
+                data field), for models that read it.
+            assets: `(..., n)` the asset behind each entry, as for `CostModel`.
+
+        Returns:
+            `(...)` cost as a fraction of equity.
+        """
+
+    def __add__(self, other: HoldingCost) -> CompositeHoldingCost:
+        if not isinstance(other, HoldingCost):
+            return NotImplemented
+        return CompositeHoldingCost([self, other])
+
+
+class BorrowFee(HoldingCost):
+    """An annual fee on the value of each short position.
+
+    Args:
+        rate: Annual fee as a fraction of the short's value, a scalar or one per asset
+            (finite, >= 0). If None, the env's `borrow_rate` data field gives each
+            asset's fee at each time (so hard-to-borrow names can cost more as they
+            become crowded); a missing (NaN) or negative fee is charged the
+            cross-sectional median, as cost models treat missing inputs.
+        fallback_rate: Fee used when no asset has a valid `borrow_rate`; without it,
+            holding a short on such a row raises `ValueError`.
+    """
+
+    def __init__(
+        self, rate: ArrayLike | None = None, *, fallback_rate: float | None = None
+    ) -> None:
+        self.rate = None if rate is None else _non_negative(rate, "rate")
+        if self.rate is not None and fallback_rate is not None:
+            raise ValueError("fallback_rate only applies to data rates (rate=None).")
+        self.fallback_rate = _check_fallback(fallback_rate, "fallback_rate")
+        self.requires = frozenset() if self.rate is not None else frozenset({"borrow_rate"})
+
+    def __call__(
+        self,
+        weights: ArrayLike,
+        *,
+        dt: float,
+        borrow_rate: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
+    ) -> Array:
+        B, like = backend_and_like(weights, borrow_rate)
+        w = B.asfloat(weights, like)
+        short = B.clip(-w, 0.0, None)
+        if self.rate is not None:
+            rate = _per_asset(self.rate, assets, w)
+        else:
+            quoted = B.broadcast_to(_require("borrow_rate", borrow_rate, "BorrowFee()", w), w.shape)
+            rate = _fill_from_median(
+                B.asfloat(quoted, w),
+                short > 0,
+                fallback=self.fallback_rate,
+                name="borrow_rate",
+                model="BorrowFee",
+                option="fallback_rate",
+            )
+        return B.asfloat(dt * B.sum(rate * short, axis=-1), w)
+
+    def __repr__(self) -> str:
+        rate = "from data" if self.rate is None else self.rate.tolist()
+        return f"BorrowFee(rate={rate})"
+
+
+class GrossFinancing(HoldingCost):
+    """An annual financing charge on gross exposure, `rate * dt * sum(|w|)`.
+
+    A prime-brokerage style charge on the whole book, longs and shorts alike, as
+    long/short equity simulations often model the cost of running leverage.
+
+    Args:
+        rate: Annual charge as a fraction of gross exposure (finite, >= 0).
+    """
+
+    def __init__(self, rate: float) -> None:
+        self.rate = _non_negative_scalar(rate, "rate")
+
+    def __call__(
+        self,
+        weights: ArrayLike,
+        *,
+        dt: float,
+        borrow_rate: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
+    ) -> Array:
+        B, like = backend_and_like(weights)
+        w = B.asfloat(weights, like)
+        return self.rate * dt * B.sum(B.abs(w), axis=-1)
+
+    def __repr__(self) -> str:
+        return f"GrossFinancing({self.rate})"
+
+
+class CompositeHoldingCost(HoldingCost):
+    """The sum of several holding costs (build it with `+`)."""
+
+    models: list[HoldingCost]
+
+    def __init__(self, models: Sequence[HoldingCost]) -> None:
+        flat: list[HoldingCost] = []
+        for model in models:
+            flat.extend(model.models if isinstance(model, CompositeHoldingCost) else [model])
+        self.models = flat
+        self.requires = frozenset().union(*(m.requires for m in flat))
+
+    def __call__(
+        self,
+        weights: ArrayLike,
+        *,
+        dt: float,
+        borrow_rate: ArrayLike | None = None,
+        assets: ArrayLike | None = None,
+    ) -> Array:
+        total: Array = 0.0
+        for model in self.models:
+            total = total + model(weights, dt=dt, borrow_rate=borrow_rate, assets=assets)
         return total
 
     def __repr__(self) -> str:
@@ -372,4 +569,8 @@ __all__ = [
     "SquareRootImpact",
     "CompositeCost",
     "as_cost_model",
+    "HoldingCost",
+    "BorrowFee",
+    "GrossFinancing",
+    "CompositeHoldingCost",
 ]

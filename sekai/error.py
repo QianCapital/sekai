@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from typing import Any
 
@@ -71,33 +70,6 @@ class AsyncCallPending(SekaiError):
             "A previous async call is still pending. "
             "Await the previous result before making another call."
         )
-
-
-class BackendMismatch(SekaiError):
-    """Deprecated with `sekai.backend`; removed in sekai 0.3. Nothing in sekai raises it."""
-
-    def __init__(self, expected: str, got: str) -> None:
-        super().__init__(f"Backend mismatch: expected '{expected}', got '{got}'.")
-
-
-# Reached only through the module __getattr__ below, which warns. (Pickling looks the
-# class up by name, so it goes through __getattr__ too.)
-_BackendMismatch = BackendMismatch
-del BackendMismatch
-
-_BACKEND_MISMATCH_DEPRECATION = (
-    "BackendMismatch is deprecated and will be removed in sekai 0.3, with sekai.backend; "
-    "nothing in sekai raises it."
-)
-
-
-def __getattr__(name: str) -> Any:
-    if name == "BackendMismatch":
-        warnings.warn(
-            f"sekai.error.{_BACKEND_MISMATCH_DEPRECATION}", DeprecationWarning, stacklevel=2
-        )
-        return _BackendMismatch
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class SpaceMismatch(SekaiError):

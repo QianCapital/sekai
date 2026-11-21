@@ -207,7 +207,12 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
                     "(lookback + episode_length + 1)."
                 )
             for name in self.features:
-                data.field(name)  # KeyError for unknown fields
+                if data.field(name).ndim != 2:  # KeyError for unknown fields
+                    raise ValueError(
+                        f"feature {name!r} has shape {data.field(name).shape}; Market-v0 "
+                        "observes (T, N) fields, one value per asset and time. Market-v1 "
+                        "(BatchMarketEnv) observes multi-column fields."
+                    )
             exo_widths = [data.exogenous_width(name) for name in self.exogenous]
             n_total = data.n_assets
             ppy = data.periods_per_year
@@ -480,8 +485,10 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
             raise InvalidAction(action, self.action_space)
         tradable = self._tradable(self.lookback + self._t)
         if self.config.allow_short:
-            return project_weights(a, tradable, self.config)
-        return project_weights(a[:-1], tradable, self.config, cash_score=a[-1])
+            weights = project_weights(a, tradable, self.config)
+        else:
+            weights = project_weights(a[:-1], tradable, self.config, cash_score=a[-1])
+        return np.asarray(weights, dtype=np.float64)
 
     def step(self, action: NDArray[np.float32]) -> StepResult[dict[str, Any]]:
         if not self._started:

@@ -104,20 +104,16 @@ class TestRunningMeanStd:
         assert np.all(np.isfinite(stats.normalize(np.ones(2))))
 
 
-def test_backend_mismatch_is_deprecated() -> None:
+def test_deprecated_backend_names_are_removed() -> None:
     import sekai.error
 
-    assert "BackendMismatch" not in sekai.__all__
-    with pytest.warns(DeprecationWarning, match="removed in sekai 0.3"):
-        cls = sekai.BackendMismatch
-    with pytest.warns(DeprecationWarning, match="sekai.error.BackendMismatch is deprecated"):
-        assert sekai.error.BackendMismatch is cls
-    err = cls("numpy", "torch")
-    assert isinstance(err, sekai.SekaiError) and "expected 'numpy'" in str(err)
-    with pytest.warns(DeprecationWarning):
-        assert type(pickle.loads(pickle.dumps(err))) is cls
+    for module in (sekai, sekai.error):
+        with pytest.raises(AttributeError):
+            module.BackendMismatch  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
-        sekai.NoSuchName
+        sekai.NoSuchName  # type: ignore[attr-defined]
+    with pytest.raises(ImportError):
+        from sekai.backend import BackendOps  # type: ignore[attr-defined]  # noqa: F401
 
 
 class TestStats:

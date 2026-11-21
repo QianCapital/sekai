@@ -12,8 +12,11 @@ reward = LogReturn() - 0.5 * DrawdownPenalty() - 1e-3 * TurnoverPenalty()
 ```
 
 They are vectorised: an outcome's fields may be arrays with one entry per
-sub-env (native vector envs), and stateful rewards (DifferentialSharpe,
+sub-env (vector envs), and stateful rewards (DifferentialSharpe,
 DrawdownPenalty) keep per-env state, reset selectively with `reset(mask)`.
+They run on any `sekai.backend`: with torch tensors the reward is differentiable,
+and `detach_state()` cuts a stateful reward's history from the autograd graph (for
+truncated backpropagation through time).
 """
 
 from __future__ import annotations
@@ -24,9 +27,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
-Array = NDArray[np.float64]
+from sekai.backend import Array, backend_and_like, is_tensor
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,9 @@ class StepOutcome:
         pnl: Change in equity over the step, in units of the initial equity (exact, also
             on a wipe-out), or None if the environment did not supply the equity before
             the step.
+        weights: The weights held over the step (after trading), `(..., n)`, or None.
+        variance: The ex-ante variance of the step's return under the environment's
+            risk model (`w' Σ w` for a factor model), or None without one.
     """
 
     log_return: Any
@@ -52,6 +58,8 @@ class StepOutcome:
     turnover: Any
     cost: Any
     pnl: Any = None
+    weights: Any = None
+    variance: Any = None
 
     @classmethod
     def from_growth(
@@ -62,6 +70,8 @@ class StepOutcome:
         turnover: ArrayLike,
         cost: ArrayLike,
         previous_equity: ArrayLike | None = None,
+        weights: Any = None,
+        variance: Any = None,
     ) -> StepOutcome:
         """Build from the equity multiplier of the step (floored, so a wipe-out is finite).
 
@@ -73,18 +83,21 @@ class StepOutcome:
             previous_equity: Equity before the step. When given, `pnl` is
                 `equity - previous_equity`; environments should always pass it, since
                 the equity lost on a wipe-out cannot be recovered from `equity` alone.
+            weights: The weights held over the step, passed through.
+            variance: The step's ex-ante variance, passed through.
         """
-        g = np.maximum(np.asarray(growth, dtype=np.float64), 1e-12)
-        after = np.asarray(equity, dtype=np.float64)
+        B, like = backend_and_like(growth, equity, turnover, cost, previous_equity)
+        g = B.maximum(B.asfloat(growth, like), 1e-12)
+        after = B.asfloat(equity, like)
         return cls(
-            log_return=np.log(g),
+            log_return=B.log(g),
             simple_return=g - 1.0,
             equity=after,
-            turnover=np.asarray(turnover, dtype=np.float64),
-            cost=np.asarray(cost, dtype=np.float64),
-            pnl=None
-            if previous_equity is None
-            else after - np.asarray(previous_equity, dtype=np.float64),
+            turnover=B.asfloat(turnover, like),
+            cost=B.asfloat(cost, like),
+            pnl=None if previous_equity is None else after - B.asfloat(previous_equity, like),
+            weights=weights,
+            variance=variance,
         )
 
 
@@ -94,8 +107,15 @@ class RewardFunction(abc.ABC):
     @abc.abstractmethod
     def __call__(self, outcome: StepOutcome) -> Any: ...
 
-    def reset(self, mask: NDArray[np.bool_] | None = None) -> None:  # noqa: B027 (optional hook)
+    def reset(self, mask: Any = None) -> None:  # noqa: B027 (optional hook)
         """Start new episodes: all of them (mask=None) or the sub-envs where mask is True."""
+
+    def detach_state(self) -> None:  # noqa: B027 (optional hook)
+        """Cut any state carried between steps from the autograd graph (torch).
+
+        Called by batched environments when a trainer truncates backpropagation
+        through time; stateless rewards have nothing to do.
+        """
 
     # Arithmetic ------------------------------------------------------------
 
@@ -127,7 +147,8 @@ class _Constant(RewardFunction):
         self.value = float(value)
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        return np.zeros_like(np.asarray(outcome.log_return, dtype=np.float64)) + self.value
+        B, like = backend_and_like(outcome.log_return)
+        return B.zeros_like(B.asfloat(outcome.log_return, like)) + self.value
 
     def __repr__(self) -> str:
         return repr(self.value)
@@ -154,14 +175,19 @@ class _Combination(RewardFunction):
         self.terms = flat
 
     def __call__(self, outcome: StepOutcome) -> Any:
+        B, like = backend_and_like(outcome.log_return)
         total: Any = 0.0
         for weight, fn in self.terms:
-            total = total + weight * np.asarray(fn(outcome), dtype=np.float64)
+            total = total + weight * B.asfloat(fn(outcome), like)
         return total
 
-    def reset(self, mask: NDArray[np.bool_] | None = None) -> None:
+    def reset(self, mask: Any = None) -> None:
         for _, fn in self.terms:
             fn.reset(mask)
+
+    def detach_state(self) -> None:
+        for _, fn in self.terms:
+            fn.detach_state()
 
     def __repr__(self) -> str:
         out = ""
@@ -181,20 +207,38 @@ class _Stateful(RewardFunction):
     def __init__(self) -> None:
         self._state: dict[str, Array] | None = None
 
-    def _get(self, shape: tuple[int, ...]) -> dict[str, Array]:
-        if self._state is None or next(iter(self._state.values())).shape != shape:
-            self._state = {name: np.full(shape, init) for name, init in self._fields}
-        return self._state
+    def _get(self, like: Array) -> dict[str, Array]:
+        """The state, (re)created to match the shape and backend of `like`."""
+        B = backend_and_like(like)[0]
+        shape = tuple(like.shape)
+        state = self._state
+        current = None if state is None else next(iter(state.values()))
+        if (
+            state is None
+            or current is None
+            or tuple(current.shape) != shape
+            or is_tensor(current) != is_tensor(like)
+        ):
+            state = {name: B.full(shape, init, like=like) for name, init in self._fields}
+            self._state = state
+        return state
 
-    def reset(self, mask: NDArray[np.bool_] | None = None) -> None:
+    def reset(self, mask: Any = None) -> None:
         if self._state is None:
             return
         if mask is None:
             self._state = None
             return
-        m = np.asarray(mask, dtype=bool)
-        for name, init in self._fields:
-            self._state[name][m] = init
+        state = self._state
+        B, like = backend_and_like(*state.values())
+        m = B.asbool(mask, like)
+        # Out of place, so a state that is part of an autograd graph stays valid.
+        self._state = {name: B.where(m, init, state[name]) for name, init in self._fields}
+
+    def detach_state(self) -> None:
+        if self._state is not None:
+            B = backend_and_like(*self._state.values())[0]
+            self._state = {name: B.detach(value) for name, value in self._state.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -232,16 +276,17 @@ class ProfitAndLoss(RewardFunction):
     """
 
     def __call__(self, outcome: StepOutcome) -> Any:
+        B, like = backend_and_like(outcome.equity, outcome.pnl)
         if outcome.pnl is not None:
-            return np.asarray(outcome.pnl, dtype=np.float64)
-        equity = np.asarray(outcome.equity, dtype=np.float64)
-        if np.any(equity <= 0.0):
+            return B.asfloat(outcome.pnl, like)
+        equity = B.asfloat(outcome.equity, like)
+        if B.item(B.any(equity <= 0.0)):
             raise ValueError(
                 "ProfitAndLoss cannot recover the equity lost in a wipe-out from the equity "
                 "after it; build the outcome with StepOutcome.from_growth(..., "
                 "previous_equity=...) so that it carries `pnl`."
             )
-        r = np.asarray(outcome.simple_return, dtype=np.float64)
+        r = B.asfloat(outcome.simple_return, like)
         return equity * r / (1.0 + r)
 
     def __repr__(self) -> str:
@@ -257,7 +302,8 @@ class MeanVariance(RewardFunction):
         self.risk_aversion = float(risk_aversion)
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        r = np.asarray(outcome.log_return, dtype=np.float64)
+        B, like = backend_and_like(outcome.log_return)
+        r = B.asfloat(outcome.log_return, like)
         return r - 0.5 * self.risk_aversion * r * r
 
     def __repr__(self) -> str:
@@ -284,11 +330,12 @@ class DrawdownPenalty(_Stateful):
     _fields = (("peak", 1.0), ("drawdown", 0.0))
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        equity = np.asarray(outcome.equity, dtype=np.float64)
-        s = self._get(equity.shape)
-        peak = np.maximum(s["peak"], equity)
-        dd = np.where(peak > 0, 1.0 - equity / np.where(peak > 0, peak, 1.0), 1.0)
-        penalty = np.maximum(dd - s["drawdown"], 0.0)
+        B, like = backend_and_like(outcome.equity)
+        equity = B.asfloat(outcome.equity, like)
+        s = self._get(equity)
+        peak = B.maximum(s["peak"], equity)
+        dd = B.where(peak > 0, 1.0 - equity / B.where(peak > 0, peak, 1.0), 1.0)
+        penalty = B.maximum(dd - s["drawdown"], 0.0)
         s["peak"], s["drawdown"] = peak, dd
         return penalty
 
@@ -320,19 +367,42 @@ class DifferentialSharpe(_Stateful):
         self.eta = float(eta)
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        r = np.asarray(outcome.simple_return, dtype=np.float64)
-        s = self._get(r.shape)
+        B, like = backend_and_like(outcome.simple_return)
+        r = B.asfloat(outcome.simple_return, like)
+        s = self._get(r)
         a, b = s["A"], s["B"]
         d_a, d_b = r - a, r * r - b
         var = b - a * a
-        v = np.maximum(var, 1e-12)
-        ratio = (b * d_a - 0.5 * a * d_b) / (v * np.sqrt(v))  # v**1.5, identical for any shape
-        d = np.where(var > 1e-12, ratio, 0.0)
+        v = B.maximum(var, 1e-12)
+        ratio = (b * d_a - 0.5 * a * d_b) / (v * B.sqrt(v))  # v**1.5, identical for any shape
+        d = B.where(var > 1e-12, ratio, 0.0)
         s["A"], s["B"] = a + self.eta * d_a, b + self.eta * d_b
         return d
 
     def __repr__(self) -> str:
         return f"DifferentialSharpe(eta={self.eta:g})"
+
+
+class PortfolioVariance(RewardFunction):
+    """The step's ex-ante portfolio variance under the environment's risk model.
+
+    Subtract it for a mean-variance objective that penalises the risk the portfolio
+    takes rather than the noise of realised returns, e.g.
+    `SimpleReturn() - 2.0 * PortfolioVariance()`. Needs an environment with a risk
+    model (`StepOutcome.variance`), such as a `BatchMarketEnv` with `risk=`.
+    """
+
+    def __call__(self, outcome: StepOutcome) -> Any:
+        if outcome.variance is None:
+            raise ValueError(
+                "PortfolioVariance needs the step's ex-ante variance (StepOutcome.variance), "
+                "which an environment computes only with a risk model, e.g. "
+                "BatchMarketEnv(..., risk=FactorRiskModel(...))."
+            )
+        return outcome.variance
+
+    def __repr__(self) -> str:
+        return "PortfolioVariance()"
 
 
 __all__ = [
@@ -345,4 +415,5 @@ __all__ = [
     "TurnoverPenalty",
     "DrawdownPenalty",
     "DifferentialSharpe",
+    "PortfolioVariance",
 ]

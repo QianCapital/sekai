@@ -64,6 +64,21 @@ jobs:
           sekai check LimitOrderBook-v0 --steps 200
           sekai bench Portfolio-v0 --num-envs 256 --steps 50
 
+  torch:
+    name: Test with PyTorch (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[test]" stable-baselines3
+      - name: pytest (the torch backend, batched envs and sekai.nn tests run here)
+        run: pytest
+
   minimum-versions:
     name: Test with minimum supported dependencies
     runs-on: ubuntu-latest

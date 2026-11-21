@@ -1,6 +1,6 @@
 # Finance environments
 
-Six environments model the core problems of systematic trading. Each is a standard
+Seven environments model the core problems of systematic trading. Each is a standard
 `sekai.Env` (so wrappers, vector envs and the gymnasium bridge all apply), runs on simulated
 prices by default, and comes with baselines, closed-form where the underlying model has one,
 that a learned policy has to beat.
@@ -10,6 +10,7 @@ that a learned policy has to beat.
 | [`Trading-v0`](#trading-v0) | trade one asset | GBM, any market model, or your price history | buy and hold, momentum |
 | [`Portfolio-v0`](#portfolio-v0) | allocate across assets and cash | correlated GBM, any market model, or your history | equal weight, inverse volatility |
 | [`Market-v0`](#market-v0) | trade a changing universe with costs, financing and outside data | two-regime market with listings and delistings, or your `MarketData` | equal weight, a regime oracle |
+| [`Market-v1`](#market-v1) | the same, with explicit execution timing, hard constraints, holding costs and risk models; batched on NumPy or torch | as `Market-v0`, or any scenario generator | as `Market-v0` |
 | [`MarketMaking-v0`](#marketmaking-v0) | quote a bid and an ask | Avellaneda & Stoikov (2008) | `avellaneda_stoikov_action()` |
 | [`OptimalExecution-v0`](#optimalexecution-v0) | liquidate a large position | Almgren & Chriss (2000) | `almgren_chriss_actions()` |
 | [`LimitOrderBook-v0`](#limitorderbook-v0) | quote and trade in a limit order book | zero-intelligence order flow | inventory-skewed quotes |
@@ -533,6 +534,37 @@ momentum tilt  +0.0870 ± 0.1378
 random         -0.0086 ± 0.0753
 ```
 
+## Market-v1
+
+`Market-v1` is the general finance environment of sekai 0.3: a one-lane
+[`BatchMarketEnv`](../finance/batched.md), the same implementation that `make_vec` runs as a
+native vector env and that runs as a batch of torch tensors on a GPU, differentiable in the
+actions. It takes every argument of `Market-v0` and adds:
+
+- `execution=`: when a decision fills, `"next_close"` by default (no fill at the close the
+  agent just observed), or `"close"`, `"next_open"`, `"next_vwap"`;
+- `scenarios=`: any generator of market scenarios (e.g. a generative model of markets);
+- `action=`: what the agent controls, including scores and leverage projected onto hard
+  constraints (gross and per-name caps, dollar and factor neutrality);
+- `observation=`: a custom observation builder;
+- `holding_cost=`, `risk=`, `shortable=`, `max_drawdown=`: per-name borrow fees and
+  financing on gross, a factor risk model (ex-ante variance in the info and the reward),
+  unshortable names, a drawdown stop.
+
+With `execution="close"` it reproduces `Market-v0` exactly. See
+[Batched and differentiable environments](../finance/batched.md) for the details.
+
+```python
+import sekai
+
+env = sekai.make("Market-v1", episode_length=60)
+result = env.reset(seed=0)
+print(sorted(result.observation))  # ['account', 'assets', 'pending', 'portfolio']
+while not result.done:
+    result = env.step(env.unwrapped.action_mask().astype(np.float32))  # equal weight
+print(f"{result.info['equity']:.4f}")  # 1.0188
+```
+
 ## MarketMaking-v0
 
 ![MarketMaking-v0, drawn by MarketMakingRenderer](../assets/finance_market_making.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
@@ -917,8 +949,8 @@ parallel environment, in which only the acting traders appear in each observatio
 
 ## Native vector environments
 
-`Trading-v0`, `Portfolio-v0`, `MarketMaking-v0` and `OptimalExecution-v0` have natively
-vectorised versions in `sekai.envs.finance`. Each simulates `num_envs` copies with array
+`Trading-v0`, `Portfolio-v0`, `Market-v1`, `MarketMaking-v0` and `OptimalExecution-v0` have
+natively vectorised versions in `sekai.envs.finance`. Each simulates `num_envs` copies with array
 operations, so one `step()` advances every sub-env at once, and `sekai.make_vec` uses them
 by default (`sekai list` marks these environments `[native vec]`):
 
@@ -926,6 +958,7 @@ by default (`sekai list` marks these environments `[native vec]`):
 |---|---|---|
 | `Trading-v0` | `TradingVecEnv` | |
 | `Portfolio-v0` | `PortfolioVecEnv` | `action_to_weights(actions)`: `(num_envs, n_assets + 1)` targets |
+| `Market-v1` | `MarketVecEnv` (a NumPy [`BatchMarketEnv`](../finance/batched.md)) | `action_mask()`, `slot_assets`, `weights`, `equity` per sub-env |
 | `MarketMaking-v0` | `MarketMakingVecEnv` | `avellaneda_stoikov_action()`: `(num_envs, 2)` quotes; `wealth` |
 | `OptimalExecution-v0` | `OptimalExecutionVecEnv` | `almgren_chriss_actions()`: the `(n_steps, 1)` schedule, the same for every sub-env |
 

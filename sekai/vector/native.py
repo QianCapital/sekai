@@ -88,9 +88,15 @@ def split_infos(infos: InfoArrays, n: int) -> list[InfoDict]:
 
     1-D arrays become Python scalars; arrays with more dimensions give each env
     its own row (copied, so later in-place updates of the source cannot leak).
+    A nested mapping of such arrays (e.g. `{"state": {"regime": ...}}`) is split the
+    same way, into a nested dict per env.
     """
     out: list[InfoDict] = [{} for _ in range(n)]
     for key, value in infos.items():
+        if isinstance(value, Mapping):
+            for info, part in zip(out, split_infos(value, n)):
+                info[key] = part
+            continue
         arr = np.asarray(value)
         if arr.shape[:1] != (n,):
             raise ValueError(f"info {key!r} has shape {arr.shape}; expected a leading axis of {n}.")

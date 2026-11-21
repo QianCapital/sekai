@@ -14,7 +14,9 @@ assets, with the remainder in cash. One step of the account:
    the returns, ready for the next rebalance.
 
 All functions broadcast over leading batch dimensions, so the same code runs a
-single env or every sub-env of a native vector env at once.
+single env or every sub-env of a vector env at once, and they run on any
+`sekai.backend`: NumPy arrays (float64) or torch tensors (their own dtype and
+device, differentiable), so a batched environment on a GPU uses them as they are.
 """
 
 from __future__ import annotations
@@ -23,10 +25,9 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
-Array = NDArray[np.float64]
+from sekai.backend import Array, backend_and_like
 
 
 @dataclass(frozen=True)
@@ -96,20 +97,22 @@ def project_weights(
     Returns:
         `(..., n)` target weights.
     """
-    a = np.where(np.asarray(tradable, dtype=bool), np.asarray(scores, dtype=np.float64), 0.0)
+    B, like = backend_and_like(scores, tradable, cash_score)
+    a = B.where(B.asbool(tradable, like), B.asfloat(scores, like), 0.0)
     lev = config.max_leverage
     if config.allow_short:
-        a = np.clip(a, -lev, lev)
-        gross = np.abs(a).sum(axis=-1, keepdims=True)
-        scale = np.where(gross > lev, lev / np.maximum(gross, 1e-300), 1.0)
-        return np.asarray(a * scale, dtype=np.float64)
-    a = np.clip(a, 0.0, None)
-    total = a.sum(axis=-1, keepdims=True)
+        a = B.clip(a, -lev, lev)
+        gross = B.sum(B.abs(a), axis=-1, keepdims=True)
+        # The floor only matters where the scale is not used; it keeps gradients finite.
+        scale = B.where(gross > lev, lev / B.maximum(gross, lev), 1.0)
+        return B.asfloat(a * scale, like)
+    a = B.clip(a, 0.0, None)
+    total = B.sum(a, axis=-1, keepdims=True)
     if cash_score is not None:
-        total = total + np.clip(np.asarray(cash_score, dtype=np.float64), 0.0, None)[..., None]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        w = np.where(total > 1e-12, lev * a / np.maximum(total, 1e-300), 0.0)
-    return np.asarray(w, dtype=np.float64)
+        total = total + B.clip(B.asfloat(cash_score, like), 0.0, None)[..., None]
+    with B.errstate():
+        w = B.where(total > 1e-12, lev * a / B.maximum(total, 1e-12), 0.0)
+    return B.asfloat(w, like)
 
 
 @dataclass(frozen=True)
@@ -119,7 +122,7 @@ class Settlement:
     growth: Array  # (...): equity multiplier over the period, net of costs and financing
     drifted: Array  # (..., n): weights at the end of the period, before the next rebalance
     financing: Array  # (...): interest and borrow fees as a fraction of equity (signed)
-    wiped_out: NDArray[np.bool_]  # (...): equity fell to zero or below
+    wiped_out: Array  # (...): equity fell to zero or below
 
 
 def settle(
@@ -129,6 +132,7 @@ def settle(
     cost: ArrayLike,
     dt: float,
     config: AccountConfig,
+    holding: ArrayLike | None = None,
 ) -> Settlement:
     """Hold `weights` (set after paying `cost`) over a period with asset `returns`.
 
@@ -139,32 +143,42 @@ def settle(
         cost: `(...)` trading cost already paid, as a fraction of equity.
         dt: Period length in years (for financing).
         config: Account financing terms.
+        holding: `(...)` other costs of holding the positions over the period, as a
+            fraction of equity (from a `sekai.finance.HoldingCost`, e.g. per-name borrow
+            fees); counted in `financing`.
     """
-    w = np.asarray(weights, dtype=np.float64)
-    r = np.nan_to_num(np.asarray(returns, dtype=np.float64))
-    cash = 1.0 - w.sum(axis=-1)
-    rate = np.where(cash >= 0, config.cash_rate, config.effective_margin_rate)
-    financing = cash * rate * dt - config.borrow_rate * dt * np.clip(-w, 0.0, None).sum(axis=-1)
-    gross = 1.0 + (w * r).sum(axis=-1) + financing
-    c = np.asarray(cost, dtype=np.float64)
+    B, like = backend_and_like(weights, returns, cost, holding)
+    w = B.asfloat(weights, like)
+    r = B.nan_to_num(B.asfloat(returns, like))
+    cash = 1.0 - B.sum(w, axis=-1)
+    # An array branch keeps the rates in the arrays' precision (a float64 torch account too).
+    rate = B.where(
+        cash >= 0, B.full(tuple(cash.shape), config.cash_rate, like=w), config.effective_margin_rate
+    )
+    financing = cash * rate * dt - config.borrow_rate * dt * B.sum(B.clip(-w, 0.0, None), axis=-1)
+    if holding is not None:
+        financing = financing - B.asfloat(holding, like)
+    gross = 1.0 + B.sum(w * r, axis=-1) + financing
+    c = B.asfloat(cost, like)
     # A cost of the whole account (or more) wipes it out, whatever the market did.
-    growth = np.where(c >= 1.0, 0.0, (1.0 - c) * gross)
+    growth = B.where(c >= 1.0, 0.0, (1.0 - c) * gross)
     wiped = growth <= 0.0
-    with np.errstate(invalid="ignore", divide="ignore"):
-        drifted = np.where(
-            wiped[..., None], 0.0, w * (1.0 + r) / np.where(wiped, 1.0, gross)[..., None]
+    with B.errstate():
+        drifted = B.where(
+            wiped[..., None], 0.0, w * (1.0 + r) / B.where(wiped, 1.0, gross)[..., None]
         )
     return Settlement(
-        growth=np.asarray(growth, dtype=np.float64),
-        drifted=np.asarray(drifted, dtype=np.float64),
-        financing=np.asarray(financing, dtype=np.float64),
-        wiped_out=np.asarray(wiped),
+        growth=B.asfloat(growth, like),
+        drifted=B.asfloat(drifted, like),
+        financing=B.asfloat(financing, like),
+        wiped_out=B.asbool(wiped, like),
     )
 
 
 def turnover(target: ArrayLike, current: ArrayLike) -> Any:
     """`sum(|target - current|)` over the last axis (cash excluded)."""
-    return np.abs(np.asarray(target, np.float64) - np.asarray(current, np.float64)).sum(axis=-1)
+    B, like = backend_and_like(target, current)
+    return B.sum(B.abs(B.asfloat(target, like) - B.asfloat(current, like)), axis=-1)
 
 
 __all__ = ["AccountConfig", "project_weights", "Settlement", "settle", "turnover"]

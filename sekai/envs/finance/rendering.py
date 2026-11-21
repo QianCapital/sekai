@@ -308,7 +308,7 @@ def _slot_labels(env: Any) -> list[str]:
 
 
 class MarketRenderer(_EnvRenderer):
-    """Draws `Market-v0` (`MarketEnv`).
+    """Draws `Market-v0` (`MarketEnv`) and `Market-v1` (a one-lane `BatchMarketEnv`).
 
     Equity, with the periods the simulated market spends outside its first regime
     shaded (in the default market, the stressed one); the universe over time (one row
@@ -317,6 +317,14 @@ class MarketRenderer(_EnvRenderer):
     """
 
     draws = MarketEnv
+
+    def check(self, env: Any) -> None:
+        from sekai.envs.finance.batch_market import BatchMarketEnv
+
+        batch = getattr(_base(env), "batch_env", None)
+        if isinstance(batch, BatchMarketEnv) and batch.num_envs == 1:
+            return
+        super().check(env)
 
     def __init__(
         self,
