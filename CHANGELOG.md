@@ -177,7 +177,8 @@ All notable changes to sekai are documented here. The format follows
   message stream (`OrderBookMessages`, `MessageType`) as background order flow around
   agents' orders, with real queue priority, seeded from a `BookSnapshot` or a
   `BookSnapshots` history; `read_lobster()` parses LOBSTER message and order-book files you
-  own, with NumPy alone. `LimitOrderBookEnv` and `LimitOrderBookMarket` take
+  own, with NumPy alone, crossed and locked rows included (a replay seeds from the last
+  uncrossed one; `BookSnapshots.crossed`). `LimitOrderBookEnv` and `LimitOrderBookMarket` take
   `flow=MessageReplay(...)`, with episodes as windows of the message stream (`sampler=`,
   `reset(options={"start": t})`) and `info["time"]`; agents' orders are held while the
   replayed market is halted.
@@ -189,17 +190,28 @@ All notable changes to sekai are documented here. The format follows
 - `sekai.envs.finance.LiveMarketEnv`: the `Market-v1` interface (observation builders,
   action maps, rewards, next-close or same-close execution) over a `DataFeed` and a
   `Broker`. Replaying a history through it with a `PaperBroker` reproduces `Market-v1` on
-  that history step for step (tested to about 1e-16, costs, borrow fees and delistings
-  included).
-- `sekai.finance.live`: `Bar`; the `DataFeed` protocol and `ReplayFeed` (bars from a
-  `MarketData` you own); the `Broker` protocol (`reset`, `execute(weights, bar, context)`,
-  `mark(bar)`), `AccountState` and `ExecutionReport`; `PaperBroker`, a simulated account
-  with sekai's accounting, cost and holding-cost models; `orders_for`, share quantities for
-  target weights in whole lots. sekai defines the interfaces and connects to no market or
-  data vendor.
+  that history step for step (tested to about 1e-16, costs, borrow fees, delistings, price
+  gaps and test splits included). Bars are checked (a price is NaN or finite and > 0);
+  `field_shapes=` / `exogenous_shapes=` (default: the feed's, which `ReplayFeed` has) size
+  the observation space; it never decides on a warm-up bar (`Bar.warmup`, which
+  `ReplayFeed` sets for a split's history rows); `reset()` attaches to the account first,
+  keeps the bar window between episodes and holds existing positions bar by bar, so live
+  positions are always marked and checked.
+- `sekai.finance.live`: `Bar` (`validate`); the `DataFeed` protocol and `ReplayFeed` (bars
+  from a `MarketData` you own); the `Broker` protocol (`reset`, `execute(weights, bar,
+  context)`, `mark(bar)`, an optional `fresh_account`), `AccountState` and
+  `ExecutionReport`; `PaperBroker`, a simulated account with sekai's accounting, cost and
+  holding-cost models (assets without a price aren't traded); `orders_for`, share
+  quantities for target weights in exact whole lots, refusing invalid inputs. sekai defines
+  the interfaces and connects to no market or data vendor.
 - `RiskLimits` and `GuardedBroker`: hard limits between any policy and any broker (caps on
   each position, gross and net exposure and turnover, no shorts, and a drawdown kill switch
-  that liquidates and keeps the account flat), with every intervention in `events`.
+  that liquidates and keeps the account flat), with every intervention in `events`. The
+  caps always hold (risk-reducing trades go beyond the turnover budget); a non-finite
+  target keeps the current weight; a non-finite account report trips the kill switch. The
+  kill switch stays tripped across resets until `rearm()`, and measures the drawdown on
+  the account's value, carried over resets of a persistent account (`killed`, `peak`,
+  `drawdown`).
 - `sekai.envs.finance.batch_market.cost_context`: the cost and holding-cost inputs, shared
   by `BatchMarketEnv` and `LiveMarketEnv`.
 - Docs: "Paper and live trading", with a broker adapter sketch.
