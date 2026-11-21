@@ -222,7 +222,8 @@ class MarketPanel:
         """A one-path panel of a `MarketData` history.
 
         Returns are close-to-close (`prices[t] / prices[t - 1] - 1`, NaN where either
-        price is missing), and `valid` is where a price exists.
+        price is missing), and `valid` is where a price exists. On the NumPy backend the
+        panel shares the data's arrays (memory maps included) instead of copying them.
 
         Args:
             data: The history.
@@ -233,10 +234,7 @@ class MarketPanel:
             dtype: torch float dtype (default: torch's default dtype, usually float32).
         """
         B = get_backend(backend)
-        prices = data.prices
-        returns = np.full(prices.shape, np.nan)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            returns[1:] = prices[1:] / prices[:-1] - 1.0
+        returns = data.simple_returns()  # shared with the data (memory-mapped if it is)
         names = list(data.fields) if fields is None else list(fields)
         series = list(data.exogenous) if exogenous is None else list(exogenous)
 

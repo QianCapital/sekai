@@ -175,6 +175,38 @@ print(history.select(["EQ1", "BOND"]))  # MarketData(T=2520, N=2, fields=['close
 either bound optional) and `select(assets)` picks columns by id. All of them carry every
 field and exogenous series along.
 
+### Saving and memory mapping
+
+`data.save(path)` writes a `MarketData` to a directory of `.npy` files (one per field and
+series, the timestamps, the validity mask and the returns, with the names, asset ids and
+warm-up in `metadata.json`), and `MarketData.load(path)` memory-maps it back, read-only:
+nothing is read until it is used, and the operating system shares the pages between
+processes. Pickling memory-mapped data sends its location and rows, not the arrays, so
+the workers of a `ProcVecEnv` map the same files instead of each holding a copy: on a
+10,080 x 1,000 history (154 MB of fields), each of 8 `Market-v1` workers held 264 MB of
+private memory with the data in memory, and 25 MB with it memory-mapped. Slicing rows
+(`data[a:b]`, `between`, `split`, `walk_forward`) keeps the mapping; selecting assets or
+adding fields makes an in-memory copy. `load(path, mmap=False)` reads everything into
+memory instead.
+
+```python
+import pickle
+import tempfile
+
+with tempfile.TemporaryDirectory() as tmp:
+    history.save(tmp)
+    mapped = MarketData.load(tmp)
+    train, test = mapped.split(0.8, embargo=5, history=60)
+    print(mapped.memory_mapped, train.memory_mapped)  # True True
+    print(len(pickle.dumps(train)) < 500)  # True: the location, not the data
+```
+
+More generally, `MarketData` does not copy read-only float64 arrays (a read-only memory map,
+another `MarketData`'s arrays), so splits and slices share memory with the data they come
+from; anything else is copied when the `MarketData` is built. `validate=False` skips the
+checks that read every value (infinities, positive prices, increasing timestamps), for data
+that was checked before.
+
 ### Rows and timestamps
 
 Wherever a point in time is expected (`index_of`, `between`, `split`, and an environment's

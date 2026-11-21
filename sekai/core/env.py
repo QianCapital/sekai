@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import abc
-from typing import Any, ClassVar, Generic
+from typing import TYPE_CHECKING, Any, ClassVar, Generic
 
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core._async_fallback import install_async_fallbacks
 from sekai.core._rng import SeededRNG
 from sekai.core.result import ResetResult, StepResult
 from sekai.spaces.space import Space
+
+if TYPE_CHECKING:
+    from sekai.core.snapshot import Snapshot
 
 
 class Env(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
@@ -82,6 +85,28 @@ class Env(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def snapshot(self) -> Snapshot:
+        """A copy of the environment's state (and its wrappers', random generators included).
+
+        `restore(snapshot)` puts it back, so the same actions then give the same results:
+        for planning from a state, "what if" analysis, or checkpoints (a snapshot pickles).
+        Data that never changes (spaces, `MarketData`, market models, read-only arrays) is
+        shared with the snapshot, not copied. See `sekai.core.snapshot`.
+        """
+        from sekai.core.snapshot import take_snapshot
+
+        return take_snapshot(self)
+
+    def restore(self, snapshot: Snapshot) -> None:
+        """Return to the state of `snapshot` (in place; a snapshot can be restored many times).
+
+        Raises:
+            TypeError: If the snapshot was taken of another kind of environment or wrapper stack.
+        """
+        from sekai.core.snapshot import restore_snapshot
+
+        restore_snapshot(self, snapshot)
 
     def close(self) -> None:
         """Release any resources held by the environment."""

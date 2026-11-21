@@ -606,6 +606,8 @@ if __name__ == "__main__":
 | `close_timeout` | `5.0` | seconds `close()` waits for workers before terminating them |
 | `num_workers` | `None` (one per sub-env) | worker processes; the sub-envs are split evenly between them |
 | `shared_memory` | `None` | pass observations through shared memory: `None` uses it when the observation space allows, `True` requires it (`TypeError` otherwise), `False` turns it off; `vec.shared_memory` tells whether it is in use |
+| `max_restarts` | `0` | how many lost workers may be replaced over the vec env's lifetime ([fault tolerance](#fault-tolerance)); `0` replaces none |
+| `step_timeout` | `None` | seconds `step()` and `reset()` wait for each worker's reply; a worker that does not reply in time is terminated and counts as lost. `None` waits for ever |
 
 With `make_vec()`, pass these through `vector_kwargs`:
 
@@ -632,7 +634,109 @@ VecEnvWorkerError: Worker 0 (sub-envs 0-1) raised EOFError: worker process exite
 ```
 
 Every later call that needs the dead worker raises `VecEnvWorkerError` too; `close()` still
-releases the others.
+releases the others. With `max_restarts`, `ProcVecEnv` replaces the worker instead (see
+[below](#fault-tolerance)).
+
+### Fault tolerance
+
+A training run that lasts days should not end because one worker was killed for using too
+much memory or crashed in native code. Give `ProcVecEnv` a budget of restarts, and a timeout
+to catch workers that hang:
+
+```python
+if __name__ == "__main__":
+    vec = sekai.make_vec(
+        "Portfolio-v0",
+        num_envs=64,
+        vectorization_mode="proc",
+        vector_kwargs={"num_workers": 8, "max_restarts": 10, "step_timeout": 60.0},
+    )
+```
+
+A worker is **lost** when its process exits, or, with `step_timeout`, when it does not reply
+to `step()` or `reset()` within that many seconds (it is then terminated). With
+`max_restarts=N`, up to `N` lost workers over the vec env's lifetime are replaced by new
+workers that build the same sub-envs from the same factories and attach to the same shared
+memory. Each replacement emits a `RuntimeWarning` naming the worker and the cause, and
+`vec.restarts` counts them (`vec.worker_restarts` per worker) for your monitoring. A sub-env
+that raises an exception is not a lost worker: the exception is re-raised as before, and
+nothing is restarted.
+
+The state of the lost sub-envs is gone, so every sub-env of the lost worker (all of them, if
+it ran several) starts afresh:
+
+| Lost during | What happens |
+|---|---|
+| `step()` | each sub-env of the worker returns the first observation of a new episode, reward `0`, `terminated=False`, `truncated=True` and `infos[i] == {"worker_restarted": True, "reset_info": {...}}`; its action is dropped. The other sub-envs' results are unaffected |
+| `reset()` | the reset is redone on the new worker with the same seeds and options; `infos[i]["worker_restarted"]` is `True` |
+| `call()`, `get_attr()`, `set_attr()` | the call raises `VecEnvWorkerError` (what the worker was doing is lost), and the next `step()` or `reset()` replaces the worker, as above |
+
+!!! warning "A truncation without a final observation"
+    After a restart in `step()` there is no `infos[i]["final_observation"]`: the episode was
+    cut short and its last observation went with the worker. Treat it as a truncation
+    without a final observation. The reward-0 transition into it was never played, so leave
+    it out of your rollout, and do not bootstrap from `observations[i]`, which belongs to the
+    new episode. Code that reads `final_observation` on every truncation must check
+    `worker_restarted` first:
+
+    ```python
+    result = vec.step(actions)
+    restarted = np.array([info.get("worker_restarted", False) for info in result.infos])
+    valid = ~restarted  # mask these transitions out of the rollout buffer
+    ```
+
+    `VecRecordEpisodeStatistics` records the cut-short episode as truncated (its length
+    counts the reward-0 restart step).
+
+With `autoreset=False`, a restarted sub-env counts as finished: like any finished sub-env
+([see Autoreset](#autoreset)), it is frozen until the next `reset()`, on the observation it
+restarted with and with `truncated=True`. A sub-env that had finished already, and was
+frozen when its worker was lost, stays frozen on its own final step: its results do not
+change.
+
+**Seeding.** A restarted sub-env is reset with a seed derived from the one that last seeded
+it, so a run with a given seed and the same failures replays exactly. On its `k`-th restart
+(`k` = 0, 1, ...) since it was seeded, sub-env `i` gets the seed
+`root.spawn(k + 1)[k].generate_state(1)[0]`, where `root` is the `SeedSequence` its seed came
+from: `SeedSequence(s).spawn(num_envs)[i]` after `reset(seed=s)`, `SeedSequence(s_i)` after
+`reset(seed=[..., s_i, ...])`. A `reset()` without a seed keeps the root, and a `reset()`
+redone on a new worker uses the seeds you passed, deriving one only for the sub-envs given
+none. A sub-env never seeded with an int restarts unseeded.
+
+```python
+import numpy as np
+
+# The first restart of sub-env 3 after vec.reset(seed=42):
+root = np.random.SeedSequence(42).spawn(64)[3]
+seed = int(root.spawn(1)[0].generate_state(1)[0])
+```
+
+**What is not restored.** A new worker builds its sub-envs from their factories, so changes
+made to the old ones since (with `set_attr()` or `call()`, such as a curriculum level) are
+not replayed: watch for `worker_restarted` or `vec.restarts` and apply them again.
+
+**Timeouts.** `step_timeout` bounds every wait for a reply in `step()` and `reset()`,
+including a new worker's reset, but not its start, while it builds its sub-envs: as in the
+constructor, that takes as long as it takes (with `spawn`, it includes importing your
+modules). `call()`, `get_attr()` and `set_attr()` always wait, since they may legitimately be
+slow (saving a checkpoint, rendering). Set the timeout well above your slowest step or reset:
+a worker that is merely slow is terminated, and its sub-envs' episodes are lost.
+
+**When a worker cannot be replaced** (`max_restarts` is used up, or `0`, the default, which
+keeps the behaviour described [above](#which-sub-env-failed)), when more workers are lost in
+one call than restarts are left (then none of them is replaced), or when the new worker
+itself fails to start or to reset, `VecEnvWorkerError` names the worker, the cause and the
+restarts used:
+
+```text
+VecEnvWorkerError: Worker 1 (sub-env 1) raised EOFError: worker process exited unexpectedly; not restarted (1 worker lost, 10 of max_restarts=10 restarts used)
+VecEnvWorkerError: Worker 1 (sub-env 1) raised TimeoutError: no reply within step_timeout=60.0 s; the worker was terminated; not restarted (1 worker lost, 10 of max_restarts=10 restarts used)
+VecEnvWorkerError: Worker 1 (sub-env 1) was lost (EOFError: worker process exited unexpectedly) and could not be restarted (restart 4 of max_restarts=10): Sub-env 1 raised FileNotFoundError: [Errno 2] No such file or directory: 'prices.parquet'
+```
+
+The worker then stays lost: every later call that needs it raises too (`step()` and
+`reset()` try another replacement while restarts remain), and `close()` still releases
+everything.
 
 ## Closing
 

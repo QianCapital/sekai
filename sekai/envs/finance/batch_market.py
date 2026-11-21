@@ -600,18 +600,29 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         return {k: _take(v, idx, B) for k, v in info.items()}
 
     def _write_paths(self, idx: NDArray[np.int64], fresh: MarketPanel) -> None:
+        """Replace the paths of lanes `idx` (in new arrays: a panel never changes once
+        built, so snapshots and observations already returned can share it)."""
         B, panel = self.backend, self._panel
         lanes = B.asint(idx, self._like)
-        for name in ("returns", "valid"):
-            getattr(panel, name)[lanes] = getattr(fresh, name)
-        for group in ("fields", "exogenous", "state"):
-            mine, theirs = getattr(panel, group), getattr(fresh, group)
-            for key, arr in mine.items():
-                arr[lanes] = theirs[key]
-        if panel.timestamps is not None and fresh.timestamps is not None:
-            ts = np.asarray(panel.timestamps)
-            if ts.ndim == 2:
-                ts[idx] = np.asarray(fresh.timestamps)
+
+        def put(arr: Array, new: Array) -> Array:
+            out = B.copy(arr)
+            out[lanes] = new
+            return out
+
+        timestamps = panel.timestamps
+        if timestamps is not None and fresh.timestamps is not None and np.ndim(timestamps) == 2:
+            timestamps = np.array(timestamps, copy=True)
+            timestamps[idx] = np.asarray(fresh.timestamps)
+        self._panel = MarketPanel(
+            returns=put(panel.returns, fresh.returns),
+            valid=put(panel.valid, fresh.valid),
+            fields={k: put(v, fresh.fields[k]) for k, v in panel.fields.items()},
+            exogenous={k: put(v, fresh.exogenous[k]) for k, v in panel.exogenous.items()},
+            timestamps=timestamps,
+            assets=panel.assets,
+            state={k: put(v, fresh.state[k]) for k, v in panel.state.items()},
+        )
 
     def _observe(self) -> dict[str, Any]:
         view = MarketView(

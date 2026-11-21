@@ -33,7 +33,7 @@ import abc
 import contextlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Generic
+from typing import TYPE_CHECKING, Any, ClassVar, Generic
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,6 +46,9 @@ from sekai.core.result import ResetResult, StepResult
 from sekai.error import ResetRequired
 from sekai.spaces.space import Space
 from sekai.vector.native import InfoArrays, NativeVecEnv, split_infos, take_index
+
+if TYPE_CHECKING:
+    from sekai.core.snapshot import Snapshot
 
 _SHARED = "__sekai_shared__"
 
@@ -344,6 +347,28 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
         hold the graph, so detach those too.
         """
         self._detach()
+
+    def snapshot(self) -> Snapshot:
+        """A copy of the batched environment's state (random generators included).
+
+        `restore(snapshot)` puts it back, so the same actions then give the same results:
+        for planning from a state, "what if" analysis, or checkpoints (a snapshot pickles).
+        Data that never changes (spaces, `MarketData`, market models, read-only arrays) is
+        shared with the snapshot, not copied. See `sekai.core.snapshot`.
+        """
+        from sekai.core.snapshot import take_snapshot
+
+        return take_snapshot(self)
+
+    def restore(self, snapshot: Snapshot) -> None:
+        """Return to the state of `snapshot` (in place; a snapshot can be restored many times).
+
+        Raises:
+            TypeError: If the snapshot was taken of another kind of environment.
+        """
+        from sekai.core.snapshot import restore_snapshot
+
+        restore_snapshot(self, snapshot)
 
     def close(self) -> None:
         self.closed = True

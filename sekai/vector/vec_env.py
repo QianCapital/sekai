@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 import contextlib
 from collections.abc import Callable, Sequence
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import numpy as np
 
@@ -13,6 +13,9 @@ from sekai.core.result import ResetResult, StepResult
 from sekai.error import VecEnvClosed
 from sekai.spaces.space import Space
 from sekai.vector.result import VecResetResult, VecStepResult
+
+if TYPE_CHECKING:
+    from sekai.core.snapshot import Snapshot
 
 _E = TypeVar("_E")
 
@@ -101,6 +104,28 @@ class VecEnv(abc.ABC, Generic[ObsType, ActType]):
         options: one dict for all sub-envs, or a list with one per sub-env.
         """
         ...
+
+    def snapshot(self) -> Snapshot:
+        """A copy of the vector environment's state (random generators included).
+
+        `restore(snapshot)` puts it back, so the same actions then give the same results:
+        for planning from a state, "what if" analysis, or checkpoints (a snapshot pickles).
+        Data that never changes (spaces, `MarketData`, market models, read-only arrays) is
+        shared with the snapshot, not copied. See `sekai.core.snapshot`.
+        """
+        from sekai.core.snapshot import take_snapshot
+
+        return take_snapshot(self)
+
+    def restore(self, snapshot: Snapshot) -> None:
+        """Return to the state of `snapshot` (in place; a snapshot can be restored many times).
+
+        Raises:
+            TypeError: If the snapshot was taken of another kind of environment.
+        """
+        from sekai.core.snapshot import restore_snapshot
+
+        restore_snapshot(self, snapshot)
 
     @abc.abstractmethod
     def close(self) -> None:

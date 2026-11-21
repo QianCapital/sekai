@@ -229,6 +229,39 @@ with sekai.make("CartPole-v1") as env:
 # env.close() has been called here, even if the block raised
 ```
 
+## Snapshots
+
+`env.snapshot()` copies the state of an environment and of every wrapper around it, random
+generators included, and `env.restore(snapshot)` puts it back, in place: references to the
+env and its wrappers stay valid, a snapshot can be restored any number of times, and the
+same actions then give the same results. Use it to plan from a state (tree search, "what
+if" analysis of a decision), or to checkpoint a training run: a snapshot pickles.
+
+```python
+import pickle
+
+env = sekai.make("Market-v1")
+env.reset(seed=0)
+for _ in range(10):
+    env.step(env.action_space.sample())
+snap = env.snapshot()
+
+action = env.action_space.sample()
+first = env.step(action).reward
+env.restore(snap)
+assert env.step(action).reward == first  # the same step again
+env.restore(pickle.loads(pickle.dumps(snap)))  # through a checkpoint file just as well
+```
+
+Data that never changes is shared between an env and its snapshots, not copied: spaces,
+specs, `MarketData` (memory-mapped data pickles as its location), market models, market
+panels and read-only arrays; mark your own immutable classes with
+`sekai.core.snapshot.register_immutable`. In-process vector environments (`SyncVecEnv`,
+`AsyncVecEnv`, native ones) and batched environments snapshot the same way. A `ProcVecEnv`
+cannot, as its sub-envs live in other processes, and a batched env in the middle of a
+differentiable rollout cannot either (its state is part of an autograd graph): snapshot
+between rollouts, or after `detach_state()`.
+
 ## Reaching through wrappers
 
 Wrappers do **not** forward unknown attributes (gymnasium 1.x dropped that too). Use

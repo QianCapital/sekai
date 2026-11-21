@@ -14,6 +14,8 @@ The environment base classes and their result types. See the
         - async_reset
         - async_step
         - close
+        - snapshot
+        - restore
         - rng
         - _set_rng
         - unwrapped
@@ -58,3 +60,11 @@ The environment base classes and their result types. See the
 ::: sekai.MAStepResult
 
 ::: sekai.MAResetResult
+
+## Snapshots
+
+`sekai.core.snapshot`. See [Snapshots](../guide/environments.md#snapshots).
+
+::: sekai.core.snapshot.Snapshot
+
+::: sekai.core.snapshot.register_immutable

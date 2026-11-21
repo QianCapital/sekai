@@ -107,6 +107,35 @@ All notable changes to sekai are documented here. The format follows
 - Docs: "Training agents", "Benchmarks", "Overfitting and multiple testing". Example
   `examples/integrations/sb3_market.py`.
 
+**Scale and long runs**
+
+- `MarketData.save(path)` and `MarketData.load(path, mmap=True)`: a directory of `.npy`
+  files, memory-mapped read-only on load. Memory-mapped data (and its row slices and
+  splits) pickles as its location, so `ProcVecEnv` workers map the same files instead of
+  each holding a copy (on a 154 MB history, 25 MB of private memory per `Market-v1`
+  worker instead of 264 MB). `memory_mapped`, `simple_returns()` (cached), and
+  `validate=False` to skip the checks that read every value.
+- `MarketData` no longer copies read-only float64 arrays (read-only memory maps, another
+  `MarketData`'s arrays), so slices and splits share memory with their source.
+- `env.snapshot()` / `env.restore(snapshot)` on every `Env`, wrapper stack, in-process
+  `VecEnv` and `BatchEnv`: the state, random generators included, restored in place, so the
+  same actions give the same results (tree search, "what if" analysis, checkpoints; a
+  snapshot pickles). Immutable data (spaces, `MarketData`, market models, panels, read-only
+  arrays, classes marked with `sekai.core.snapshot.register_immutable`) is shared, not
+  copied. `ProcVecEnv` raises `NotImplementedError`.
+- `ProcVecEnv(max_restarts=..., step_timeout=...)`: fault-tolerant worker processes. A
+  worker that dies (killed for memory, crashed in native code) or does not reply to
+  `step()` / `reset()` within `step_timeout` seconds is replaced, up to `max_restarts`
+  times, by a new worker built from the same `env_fns` (shared memory included). In
+  `step()` its sub-envs report a new episode as a truncation (reward 0,
+  `infos[i]["worker_restarted"]` and `"reset_info"`, no `"final_observation"`); a
+  `reset()` is redone. Restarted sub-envs are seeded deterministically from the vec env's
+  seeds, so seeded runs with the same failures replay exactly. `restarts` /
+  `worker_restarts` count restarts, and each emits a `RuntimeWarning`. The default
+  `max_restarts=0` keeps the previous behaviour.
+- `BatchMarketEnv` replaces the paths of lanes that restart in new arrays (a panel never
+  changes once built), so snapshots and returned observations can share it.
+
 ### Changed
 
 - `split_infos` (and so every native vector env) splits nested info mappings per env.
