@@ -232,6 +232,15 @@ class _Stateful(RewardFunction):
         state = self._state
         B, like = backend_and_like(*state.values())
         m = B.asbool(mask, like)
+        shape = tuple(next(iter(state.values())).shape)
+        try:
+            fits = np.broadcast_shapes(tuple(m.shape), shape) == shape
+        except ValueError:
+            fits = False
+        if not fits:  # (as a boolean index into the state, the mask raised IndexError in 0.2)
+            raise IndexError(
+                f"reset() got a mask of shape {tuple(m.shape)} for a state of shape {shape}."
+            )
         # Out of place, so a state that is part of an autograd graph stays valid.
         self._state = {name: B.where(m, init, state[name]) for name, init in self._fields}
 
@@ -362,6 +371,7 @@ class DifferentialSharpe(_Stateful):
     """
 
     _fields: tuple[tuple[str, float], ...] = (("A", 0.0), ("B", 0.0))
+    initial_variance: float = 0.0  # the default of rewards pickled by sekai 0.2
 
     def __init__(self, eta: float = 0.01, *, initial_variance: float = 0.0) -> None:
         if not 0.0 < eta < 1.0:

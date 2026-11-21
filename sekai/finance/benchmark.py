@@ -163,6 +163,10 @@ def evaluate(policy: Policy, task: Task, *, name: str = "policy") -> Evaluation:
         policy: A callable from the observation and the unwrapped env to an action.
         task: The task.
         name: A label for the result.
+
+    Raises:
+        ValueError: If the environment reports no account value (`info["equity"]` or
+            `info["portfolio_value"]`), which the statistics are computed from.
     """
     env = task.make()
     base = env.unwrapped
@@ -174,7 +178,14 @@ def evaluate(policy: Policy, task: Task, *, name: str = "policy") -> Evaluation:
             result = env.step(policy(result.observation, base))
             total += float(result.reward)
             info = result.info
-            equity.append(float(info.get("equity", info.get("portfolio_value", np.nan))))
+            value = info.get("equity", info.get("portfolio_value"))
+            if value is None:
+                env.close()
+                raise ValueError(
+                    f"{task.env_id} reports no account value (info['equity'] or "
+                    "info['portfolio_value']), which evaluate() computes its statistics from."
+                )
+            equity.append(float(value))
             if "turnover" in info:
                 turnover.append(float(info["turnover"]))
         curves.append(np.asarray(equity, dtype=np.float64))
@@ -267,7 +278,7 @@ def target_action(env: Any, weights: NDArray[np.float64]) -> NDArray[np.float32]
     `-v1`, long-only or long/short. Long-only, negative weights are dropped and the
     rest of the equity is cash.
     """
-    from sekai.backend import numpy_backend
+    from sekai.backend import get_backend
     from sekai.finance.actions import ActionContext, LongOnlyScores, TargetWeights
 
     w = np.asarray(weights, dtype=np.float64)
@@ -279,7 +290,7 @@ def target_action(env: Any, weights: NDArray[np.float64]) -> NDArray[np.float32]
         if isinstance(amap, TargetWeights):
             return np.clip(w, -1.0, 1.0).astype(np.float32)
         ctx = ActionContext(
-            backend=numpy_backend,
+            backend=get_backend("numpy"),
             tradable=np.asarray(env.action_mask()[: batch.max_assets] > 0)[None],
             weights=np.asarray(env.weights)[None],
         )

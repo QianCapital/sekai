@@ -16,6 +16,7 @@ from sekai.envs.finance._common import (
     check_number,
     check_sources,
     episode_over,
+    price_data,
 )
 from sekai.error import InvalidAction, ResetRequired
 from sekai.finance.account import AccountConfig, project_weights, settle
@@ -167,6 +168,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         privileged_state: bool = False,
     ) -> None:
         check_sources("MarketEnv", data=data, model=model, takes_prices=False)
+        data = price_data(data)
         if lookback < 1 or episode_length < 1:
             raise ValueError("lookback and episode_length must be >= 1.")
         if dt is not None:

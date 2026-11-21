@@ -15,13 +15,12 @@ from sekai.backend import (
     backend_of,
     get_backend,
     is_tensor,
-    numpy_backend,
     to_numpy,
 )
 
 torch = pytest.importorskip("torch")
 
-NP = numpy_backend
+NP = get_backend("numpy")
 TH = get_backend("torch")
 
 

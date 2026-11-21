@@ -42,6 +42,9 @@ class AsyncVecEnv(VecEnv[ObsType, ActType]):
     propagates.
     """
 
+    # The event loop that runs synchronous calls: a resource, not state.
+    _snapshot_exclude = ("_loop",)
+
     def __init__(
         self,
         env_fns: Sequence[Callable[[], Env[ObsType, ActType]]],

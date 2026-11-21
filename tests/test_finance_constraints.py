@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sekai.backend import numpy_backend
+from sekai.backend import get_backend
 from sekai.finance import (
     GBM,
     ActionContext,
@@ -27,7 +27,7 @@ from sekai.finance import (
 from sekai.finance.account import AccountConfig, project_weights
 from sekai.finance.constraints import neutralize
 
-B = numpy_backend
+B = get_backend("numpy")
 
 
 def scores(seed: int = 0, shape: tuple[int, int] = (6, 40)) -> np.ndarray:
@@ -331,3 +331,35 @@ def test_market_data_higher_rank_fields() -> None:
         data.with_fields(bad=np.zeros((50, 3, 2)))
     with pytest.raises(ValueError, match="must be 2-D"):
         MarketData(fields={"close": np.ones((5, 2, 2))})
+
+
+def test_long_only_caps_keep_the_scores_direction() -> None:
+    """The cap applies after scaling, so the book depends on the direction only."""
+    c = Constraints(long_only=True, max_position=0.4)
+    scores = np.array([10.0, 1.0, 0.5])
+    np.testing.assert_allclose(project(scores, c), [0.4, 0.4, 0.2], atol=1e-9)
+    np.testing.assert_allclose(project(scores / 10, c), project(scores, c), atol=1e-12)
+    held = np.array([0.05, 0.03, 0.02])  # a feasible book maps to itself
+    tight = Constraints(long_only=True, max_position=0.05)
+    np.testing.assert_allclose(project(held, tight, gross=0.1), held, atol=1e-12)
+    torch = pytest.importorskip("torch")
+    x = torch.tensor([10.0, 1.0, 0.5], dtype=torch.float64, requires_grad=True)
+    project(x, c)[2].backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0  # was all zeros
+
+
+def test_dollar_neutral_with_limited_shorting_is_exactly_neutral() -> None:
+    rng = np.random.default_rng(0)
+    c = Constraints(dollar_neutral=True, max_position=0.2)
+    for _ in range(300):
+        x = rng.normal(size=(3, 10))
+        shortable = rng.uniform(size=(3, 10)) > 0.8
+        gross = rng.uniform(0, 1, 3)
+        w = project(x, c, gross=gross, shortable=shortable)
+        np.testing.assert_allclose(w.sum(-1), 0.0, atol=1e-12)
+        assert np.all(np.abs(w) <= 0.2 + 1e-12) and np.all(w[~shortable] >= 0)
+        assert np.all(np.abs(w).sum(-1) <= gross + 1e-12)
+    nothing = project(
+        rng.normal(size=4), Constraints(dollar_neutral=True), shortable=np.zeros(4, bool)
+    )
+    np.testing.assert_array_equal(nothing, np.zeros(4))  # no short side: an empty book

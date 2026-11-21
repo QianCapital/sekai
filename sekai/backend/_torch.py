@@ -166,17 +166,20 @@ class TorchBackend(Backend):
         self, x: Array, axis: int | tuple[int, ...] | None = None, keepdims: bool = False
     ) -> Array:
         if axis is None:
-            return torch.sum(x)
+            out = torch.sum(x)
+            return out.reshape((1,) * x.ndim) if keepdims else out
         return torch.sum(x, dim=axis, keepdim=keepdims)
 
     def mean(self, x: Array, axis: int | None = None, keepdims: bool = False) -> Array:
         if axis is None:
-            return torch.mean(x)
+            out = torch.mean(x)
+            return out.reshape((1,) * x.ndim) if keepdims else out
         return torch.mean(x, dim=axis, keepdim=keepdims)
 
     def max(self, x: Array, axis: int | None = None, keepdims: bool = False) -> Array:
         if axis is None:
-            return torch.amax(x)
+            out = torch.amax(x)
+            return out.reshape((1,) * x.ndim) if keepdims else out
         return torch.amax(x, dim=axis, keepdim=keepdims)
 
     def any(self, x: Array, axis: int | None = None) -> Array:
@@ -203,11 +206,11 @@ class TorchBackend(Backend):
         )
         return torch.where(n > 0, median, torch.nan).squeeze(axis)
 
-    def stack(self, xs: Sequence[Array], axis: int = 0) -> Array:
-        return torch.stack(list(xs), dim=axis)
+    def stack(self, arrays: Sequence[Array], axis: int = 0) -> Array:
+        return torch.stack(list(arrays), dim=axis)
 
-    def concat(self, xs: Sequence[Array], axis: int = 0) -> Array:
-        return torch.cat(list(xs), dim=axis)
+    def concat(self, arrays: Sequence[Array], axis: int = 0) -> Array:
+        return torch.cat(list(arrays), dim=axis)
 
     def broadcast_to(self, x: Array, shape: Sequence[int]) -> Array:
         return torch.broadcast_to(self._tensor(x, None), tuple(shape))

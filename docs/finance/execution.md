@@ -229,10 +229,14 @@ satisfies hard `Constraints`:
 
 Untradable assets get 0 and unshortable ones are never negative. The scores are made
 orthogonal to every neutrality column at once (a column of ones for dollar neutrality and
-each exposure) by one least-squares projection, scaled to the requested gross, then for
-`n_iter` rounds clipped to the per-name caps, re-neutralised and rescaled. The final clip
-makes the caps and the gross cap exact; neutrality holds to the residual that clip leaves,
-basis points unless the requested gross is close to `n * max_position`. The requested
+each exposure) by one least-squares projection and scaled to the requested gross. Without
+neutrality constraints the per-name caps are then applied exactly, in one step (each size
+is `min(s * |score|, cap)` for the scale `s` that reaches the gross). With them, the book is
+clipped to the caps, re-neutralised and rescaled for `n_iter` rounds and clipped once more:
+the caps and the gross cap hold exactly, and neutrality to a small residual that shrinks
+with `n_iter`. A dollar-neutral book whose names can't all be shorted, or that asks for
+more gross than a neutral book can hold, is balanced exactly at the end. The caps apply
+after scaling, so the book follows the scores' direction, not their size, and the requested
 gross is reached whenever it is feasible. The projection is differentiable in the scores
 and the gross, so it can sit inside a policy trained by backpropagation:
 

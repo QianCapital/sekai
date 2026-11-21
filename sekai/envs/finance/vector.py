@@ -236,6 +236,11 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         self.pending = np.zeros(num_envs)
         self.equity = np.ones(num_envs)
 
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        if "pending" not in state:  # pickled by sekai 0.2 (same-close fills)
+            self.pending = np.zeros(self.num_envs)
+
     @property
     def price(self) -> Array:
         """The current asset price of every sub-env."""
@@ -426,6 +431,11 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         self.pending = self.weights.copy()
         self.portfolio_value = np.ones(num_envs)
 
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        if "pending" not in state:  # pickled by sekai 0.2 (same-close fills)
+            self.pending = self.weights.copy()
+
     @property
     def timestamp(self) -> NDArray[Any]:
         """The time of every sub-env's current decision, as in `infos[i]["timestamp"]`."""
@@ -470,7 +480,9 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         returns = self._log_returns[np.arange(self.num_envs)[:, None], rows]
         obs = {"returns": returns.astype(np.float32), "weights": self.weights.astype(np.float32)}
         if self.execution == "next_close":
-            obs["pending"] = self.pending.astype(np.float32)
+            # Within its bounds: 1 - sum(w) can round to a hair below 0.
+            bounds = self.template._pending_bounds
+            obs["pending"] = np.clip(self.pending, *bounds).astype(np.float32)
         return obs
 
     def _reset_infos(self, indices: NDArray[np.intp]) -> InfoArrays:

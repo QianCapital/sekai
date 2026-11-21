@@ -22,13 +22,16 @@ Example:
     gross_exposure(torch.ones(4, 3))     # torch, float32, differentiable
     ```
 
-(The `BackendOps` protocol that `sekai.backend` held until 0.2 is removed, as its
-deprecation announced; nothing in sekai used it.)
+The `BackendOps` protocol and `default_backend` that `sekai.backend` held in 0.2 (and
+the `sekai.backend.protocol` and `sekai.backend.numpy_backend` modules) are deprecated
+but still work, with a `DeprecationWarning`; `NumpyBackend` keeps 0.2's methods.
 """
 
 from __future__ import annotations
 
+import importlib
 import sys
+import warnings
 from typing import Any
 
 import numpy as np
@@ -37,8 +40,8 @@ from numpy.typing import NDArray
 from sekai.backend._base import Array, Backend
 from sekai.backend._numpy import NumpyBackend
 
-#: The NumPy backend (a shared instance).
-numpy_backend: Backend = NumpyBackend()
+# The NumPy backend (a shared instance, also returned by `get_backend("numpy")`).
+_NUMPY: Backend = NumpyBackend()
 
 _torch_backend: Backend | None = None
 
@@ -80,7 +83,7 @@ def get_backend(name: str | Backend) -> Backend:
     if isinstance(name, Backend):
         return name
     if name == "numpy":
-        return numpy_backend
+        return _NUMPY
     if name == "torch":
         return _load_torch()
     raise ValueError(f"Unknown backend {name!r}; expected 'numpy' or 'torch'.")
@@ -102,7 +105,7 @@ def backend_and_like(*arrays: Any) -> tuple[Backend, Any]:
         for a in arrays:
             if type(a) not in _NOT_TENSORS and isinstance(a, tensor):
                 return _load_torch(), a
-    return numpy_backend, None
+    return _NUMPY, None
 
 
 def to_numpy(x: Any) -> NDArray[Any]:
@@ -111,14 +114,40 @@ def to_numpy(x: Any) -> NDArray[Any]:
     return backend_of(x).to_numpy(x)
 
 
+_DEPRECATED = (
+    "is deprecated: it was to be removed in sekai 0.3 with the 0.2 backend protocol, and is "
+    "kept for compatibility only. Use the sekai.backend.Backend interface "
+    '(get_backend("numpy"), backend_of) instead.'
+)
+
+
+def __getattr__(name: str) -> Any:
+    # sekai 0.2's backend API: still importable, with a DeprecationWarning.
+    if name == "BackendOps":
+        warnings.warn(f"sekai.backend.BackendOps {_DEPRECATED}", DeprecationWarning, stacklevel=2)
+        from sekai.backend._protocol import BackendOps
+
+        return BackendOps
+    if name == "default_backend":
+        warnings.warn(
+            f"sekai.backend.default_backend {_DEPRECATED}", DeprecationWarning, stacklevel=2
+        )
+        return _NUMPY
+    if name in ("protocol", "numpy_backend"):  # the 0.2 modules (they warn on import)
+        return importlib.import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "Array",
     "Backend",
     "NumpyBackend",
-    "numpy_backend",
     "get_backend",
     "backend_of",
     "backend_and_like",
     "is_tensor",
     "to_numpy",
+    # Deprecated (sekai 0.2)
+    "BackendOps",
+    "default_backend",
 ]

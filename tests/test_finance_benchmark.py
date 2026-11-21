@@ -80,11 +80,11 @@ def test_target_action_gives_the_target_book(env_id: str, kwargs: dict[str, Any]
     action = target_action(base, w)
     assert env.action_space.contains(action) or "action" in kwargs
     if hasattr(base, "batch_env"):
-        from sekai.backend import numpy_backend
+        from sekai.backend import get_backend
         from sekai.finance.actions import ActionContext
 
         ctx = ActionContext(
-            backend=numpy_backend, tradable=tradable[None], weights=np.zeros((1, n))
+            backend=get_backend("numpy"), tradable=tradable[None], weights=np.zeros((1, n))
         )
         got = base.batch_env.action_map(action[None].astype(np.float64), ctx)[0]
     elif env_id.startswith("Market"):
@@ -126,3 +126,11 @@ def test_compare_reports_every_policy() -> None:
     with pytest.raises(ValueError, match="at least one"):
         compare({}, task)
     assert {t.env_id for t in standard_tasks(5)} == {"Market-v1", "Portfolio-v1"}
+
+
+def test_evaluate_needs_an_account_value() -> None:
+    from sekai.finance.benchmark import Task, evaluate
+
+    task = Task("making", "MarketMaking-v0", episodes=1)
+    with pytest.raises(ValueError, match="reports no account value"):
+        evaluate(lambda obs, env: env.action_space.sample(), task)

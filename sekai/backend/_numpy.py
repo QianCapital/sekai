@@ -24,8 +24,21 @@ _ndarray = np.ndarray
 _np: Any = np
 
 
+def _legacy_dtype(like: Any, dtype: Any) -> Any:
+    """The dtype of a `zeros` call: `dtype`, or a dtype given where `like` goes (as sekai
+    0.2's backend protocol took it, `zeros(shape, dtype)`), else None (float64)."""
+    if dtype is not None:
+        return dtype
+    return like if isinstance(like, type | np.dtype | str) else None
+
+
 class NumpyBackend(Backend):
-    """NumPy arrays; floats are float64."""
+    """NumPy arrays; floats are float64.
+
+    It also keeps the methods of sekai 0.2's (deprecated) `BackendOps` protocol, so code
+    written against it still works: `ones`, `concatenate`, `astype`, `random_uniform`,
+    `random_integers`, `array_equal`, and `zeros(shape, dtype)`.
+    """
 
     name: ClassVar[str] = "numpy"
 
@@ -50,8 +63,9 @@ class NumpyBackend(Backend):
     def to_numpy(self, x: Any) -> NDArray[Any]:
         return np.asarray(x)
 
-    def zeros(self, shape: Sequence[int], like: Array | None = None) -> Array:
-        return np.zeros(tuple(shape))
+    def zeros(self, shape: Sequence[int], like: Array | None = None, *, dtype: Any = None) -> Array:
+        dt = _legacy_dtype(like, dtype)
+        return np.zeros(shape, dtype=np.float64 if dt is None else dt)
 
     def full(self, shape: Sequence[int], value: float, like: Array | None = None) -> Array:
         return np.full(tuple(shape), float(value))
@@ -139,11 +153,11 @@ class NumpyBackend(Backend):
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slices give NaN
             return np.nanmedian(x, axis=axis)
 
-    def stack(self, xs: Sequence[Array], axis: int = 0) -> Array:
-        return np.stack(list(xs), axis=axis)
+    def stack(self, arrays: Sequence[Array], axis: int = 0) -> Array:
+        return np.stack(list(arrays), axis=axis)
 
-    def concat(self, xs: Sequence[Array], axis: int = 0) -> Array:
-        return np.concatenate(list(xs), axis=axis)
+    def concat(self, arrays: Sequence[Array], axis: int = 0) -> Array:
+        return np.concatenate(list(arrays), axis=axis)
 
     def broadcast_to(self, x: Array, shape: Sequence[int]) -> Array:
         return np.broadcast_to(x, tuple(shape))
@@ -164,6 +178,30 @@ class NumpyBackend(Backend):
 
     def errstate(self) -> contextlib.AbstractContextManager[Any]:
         return np.errstate(all="ignore")
+
+    # sekai 0.2's BackendOps methods ------------------------------------------
+
+    def ones(self, shape: Sequence[int], dtype: Any = np.float64) -> Array:
+        return np.ones(shape, dtype=dtype)
+
+    def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
+        return np.concatenate(arrays, axis=axis)
+
+    def astype(self, x: Any, dtype: Any) -> Array:
+        return np.asarray(x).astype(dtype)
+
+    def random_uniform(
+        self, rng: np.random.Generator, low: Any, high: Any, shape: Sequence[int]
+    ) -> Array:
+        return rng.uniform(low, high, size=shape)
+
+    def random_integers(
+        self, rng: np.random.Generator, low: int, high: int, size: Sequence[int]
+    ) -> Array:
+        return rng.integers(low, high, size=size)
+
+    def array_equal(self, a: Any, b: Any) -> bool:
+        return bool(np.array_equal(a, b))
 
 
 __all__ = ["NumpyBackend"]

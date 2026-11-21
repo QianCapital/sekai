@@ -536,3 +536,43 @@ def test_volatility_field_prices_impact_and_step_return() -> None:
     )  # coefficient * vol * |w| * sqrt(participation)
     assert float(out.info["cost"][0]) == pytest.approx(want)
     assert float(out.info["return"][0]) == pytest.approx(float(out.info["equity"][0]) - 1.0)
+
+
+def test_custom_cost_models_written_for_0_2_work_combined() -> None:
+    """A cost model without `assets=` (sekai 0.2's interface) works on Market-v1, also
+    inside a CompositeCost, which passes `assets` only to the models that take it."""
+    from sekai.finance import CostModel, ProportionalCost
+
+    calls = []
+
+    class Flat(CostModel):
+        def __call__(self, trades: Any, *, equity: Any = None) -> Any:  # type: ignore[override]
+            calls.append(1)
+            return 1e-4 * np.abs(np.asarray(trades)).sum(axis=-1)
+
+    for cost in (Flat(), Flat() + ProportionalCost(1e-4), ProportionalCost(1e-4) + Flat()):
+        env = sekai.make("Market-v1", transaction_cost=cost)
+        env.reset(seed=0)
+        env.step(env.action_space.sample())
+    assert len(calls) == 3
+
+
+def test_attributes_reach_the_batch_env_as_on_market_v0() -> None:
+    """get_attr returns the objects themselves and set_attr changes the running env."""
+    from sekai.finance import LogReturn, SimpleReturn
+
+    def rewards(env: Any) -> list[float]:
+        env.reset(seed=0)
+        env.action_space.seed(0)
+        return [float(env.step(env.action_space.sample()).reward) for _ in range(5)]
+
+    env = sekai.make("Market-v1", features=("volume",), data=DATA)
+    assert isinstance(env.get_attr("reward_fn"), LogReturn)
+    assert env.unwrapped.features == ("volume",) and env.unwrapped.exogenous == ()
+    env.set_attr("reward_fn", SimpleReturn())
+    expected = sekai.make("Market-v1", features=("volume",), data=DATA, reward=SimpleReturn())
+    assert rewards(env) == rewards(expected)
+    env.unwrapped.delisting_return = -0.5
+    assert env.unwrapped.batch_env.delisting_return == -0.5
+    vec = sekai.make_vec("Market-v1", num_envs=2, data=DATA)
+    assert all(isinstance(r, LogReturn) for r in vec.get_attr("reward_fn"))

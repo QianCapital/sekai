@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import abc
 import contextlib
+import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Generic
@@ -39,7 +40,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from sekai._types import ActType, InfoDict, ObsType, SeedType
-from sekai.backend import Array, Backend, get_backend, to_numpy
+from sekai.backend import Array, Backend, backend_of, get_backend, to_numpy
 from sekai.core._rng import SeededRNG
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
@@ -448,7 +449,7 @@ class BatchVecEnv(NativeVecEnv[Any, Any]):
         if name.startswith("_") or name == "batch_env":
             raise AttributeError(name)
         value = getattr(self.batch_env, name)
-        if callable(value):
+        if inspect.ismethod(value):  # a method: its results are converted too
             return lambda *args, **kwargs: tree_to_numpy(value(*args, **kwargs))
         return tree_to_numpy(value)
 
@@ -498,6 +499,7 @@ class UnbatchedEnv(Env[Any, Any]):
         self.__dict__["metadata"] = dict(type(batch_env).metadata)
         self._started = False
         self._over = False
+        self._built = True  # from here on, the batch env's attributes are set on it
 
     def reset(
         self, *, seed: SeedType = None, options: dict[str, Any] | None = None
@@ -550,9 +552,28 @@ class UnbatchedEnv(Env[Any, Any]):
                 return arr[0]
             return arr
 
-        if callable(value):
+        if inspect.ismethod(value):  # a method: its results are converted too
             return lambda *args, **kwargs: lane(value(*args, **kwargs))
         return lane(value)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # The batch env's attributes (reward_fn, cost_model, ...) are set on it, as on a
+        # single environment; per-lane ones take `value` as the lane's.
+        batch = self.__dict__.get("batch_env")
+        if (
+            not self.__dict__.get("_built")
+            or name.startswith("_")
+            or name in self.__dict__
+            or hasattr(type(self), name)
+            or not hasattr(batch, name)
+        ):
+            object.__setattr__(self, name, value)
+            return
+        current = getattr(batch, name)
+        shape = getattr(current, "shape", None)
+        if not _is_shared(batch, name) and shape is not None and tuple(shape)[:1] == (1,):
+            value = backend_of(current).cast(value, current)[None]
+        setattr(batch, name, value)
 
     def close(self) -> None:
         self.batch_env.close()

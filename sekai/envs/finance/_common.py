@@ -21,6 +21,18 @@ from sekai.finance.sampling import (
 )
 
 
+def price_data(data: MarketData | None) -> MarketData | None:
+    """The history an environment that reads returns from prices trades on.
+
+    With corporate actions (`MarketData(..., corporate_actions=True)`) that is
+    `data.adjusted()`, a total-return price index, so splits don't look like crashes
+    and dividends count; other data is used as it is.
+    """
+    if data is not None and data.has_corporate_actions:
+        return data.adjusted()
+    return data
+
+
 def check_sources(
     env: str, *, data: Any, model: Any, prices: Any = None, takes_prices: bool = True
 ) -> None:

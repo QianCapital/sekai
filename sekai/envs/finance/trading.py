@@ -20,6 +20,7 @@ from sekai.envs.finance._common import (
     check_sources,
     episode_over,
     field_or_none,
+    price_data,
 )
 from sekai.envs.finance._common import step_length as _step_length
 from sekai.envs.finance.market import simulate_gbm
@@ -100,6 +101,9 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
+    # Defaults for environments pickled by sekai 0.2, which had neither attribute.
+    execution: str = "close"
+    pending: float = 0.0
 
     def __init__(
         self,
@@ -121,6 +125,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         execution: str = "close",
     ) -> None:
         check_sources("TradingEnv", prices=prices, data=data, model=model)
+        data = price_data(data)
         self.execution = check_execution(execution)
         if episode_length < 1 or lookback < 1:
             raise ValueError("episode_length and lookback must be >= 1.")
@@ -166,9 +171,9 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         pos_high = 1.0 if np.max(self.positions) <= 1 else np.inf
         low = np.concatenate([np.full(lookback, -np.inf), [pos_low]])
         high = np.concatenate([np.full(lookback, np.inf), [pos_high]])
-        if self.execution == "next_close":  # the pending target, one of the positions
-            low = np.append(low, np.min(self.positions))
-            high = np.append(high, np.max(self.positions))
+        if self.execution == "next_close":  # the pending target: a position, or 0 at reset
+            low = np.append(low, min(float(np.min(self.positions)), 0.0))
+            high = np.append(high, max(float(np.max(self.positions)), 0.0))
         self.observation_space = Box(
             low.astype(np.float32), high.astype(np.float32), dtype=np.float32
         )

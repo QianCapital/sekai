@@ -106,7 +106,7 @@ class MarketPanel:
         arrays.update({f"exogenous[{k!r}]": v for k, v in self.exogenous.items()})
         arrays.update({f"state[{k!r}]": v for k, v in self.state.items()})
         for name, arr in arrays.items():
-            if backend_of(arr) is not B:
+            if backend_of(arr).name != B.name:
                 raise ValueError(f"{name} is on another backend than returns ({B.name}).")
         for name, arr in self.fields.items():
             if tuple(arr.shape[:3]) != shape:

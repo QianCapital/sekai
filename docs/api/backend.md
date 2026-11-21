@@ -12,8 +12,16 @@ arrays or torch tensors. See
         - get_backend
         - is_tensor
         - to_numpy
-        - numpy_backend
 
 ::: sekai.backend.Backend
 
 ::: sekai.backend.NumpyBackend
+
+## sekai 0.2's backend protocol
+
+`sekai.backend.BackendOps`, `sekai.backend.default_backend` and the modules
+`sekai.backend.protocol` and `sekai.backend.numpy_backend` are sekai 0.2's backend API.
+They are deprecated but still work, with a `DeprecationWarning`, and `NumpyBackend` still
+implements `BackendOps` (`ones`, `concatenate`, `astype`, `random_uniform`,
+`random_integers`, `array_equal`, `zeros(shape, dtype)`). New code uses the `Backend`
+interface above.

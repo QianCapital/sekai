@@ -20,7 +20,7 @@ from typing import Any, ClassVar
 import numpy as np
 from numpy.typing import NDArray
 
-from sekai.backend import numpy_backend
+from sekai.backend import get_backend
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.envs.finance.batch_market import cost_context
@@ -30,6 +30,8 @@ from sekai.finance.live import AccountState, Bar, Broker, DataFeed
 from sekai.finance.observations import MarketObservation, MarketView, ObservationBuilder
 from sekai.finance.panel import MarketPanel
 from sekai.finance.rewards import LogReturn, RewardFunction, StepOutcome
+
+_NUMPY = get_backend("numpy")
 
 _COST_FIELDS = {
     "volume": ("dollar_volume", "volume"),
@@ -217,7 +219,7 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
     def _view(self, panel: MarketPanel) -> MarketView:
         row = len(self._bars) - 1
         return MarketView(
-            backend=numpy_backend,
+            backend=_NUMPY,
             panel=panel,
             paths=np.zeros(1, dtype=np.int64),
             rows=np.array([row]),
@@ -296,7 +298,7 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
             shortable = (np.isfinite(flag) & (flag != 0))[None]
         names = getattr(self.action_map, "fields", ())
         ctx = ActionContext(
-            backend=numpy_backend,
+            backend=_NUMPY,
             tradable=tradable[None],
             weights=self._weights[None],
             shortable=shortable,
@@ -317,7 +319,7 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
         context = {
             k: np.asarray(v)[0]
             for k, v in cost_context(
-                backend=numpy_backend,
+                backend=_NUMPY,
                 panel=panel,
                 paths=np.zeros(1, dtype=np.int64),
                 slots=np.arange(self.n_slots)[None],

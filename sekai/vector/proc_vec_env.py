@@ -375,12 +375,6 @@ def _worker(
 
 
 class ProcVecEnv(VecEnv[ObsType, ActType]):
-    _snapshot_unsupported = (
-        "ProcVecEnv's sub-envs live in worker processes, so it cannot be snapshotted; "
-        "use a SyncVecEnv or a native vector env, or snapshot the sub-envs inside the "
-        "workers with vec.call('snapshot')."
-    )
-
     """Vectorised env using worker processes for true CPU-bound parallelism.
 
     Sub-environments run in worker processes and communicate via
@@ -475,6 +469,11 @@ class ProcVecEnv(VecEnv[ObsType, ActType]):
             None (default) waits for ever. call(), get_attr() and set_attr() always
             wait.
     """
+
+    _snapshot_unsupported = (
+        "ProcVecEnv's sub-envs live in worker processes, so it can't be snapshotted; "
+        "use a SyncVecEnv or a native vector env (sekai.make_vec) for snapshots."
+    )
 
     # The constructor runs with these; the arguments apply once every worker is up.
     max_restarts: int = 0

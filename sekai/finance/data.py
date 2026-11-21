@@ -30,8 +30,12 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import mmap
 import operator
 import os
+import shutil
+import tempfile
+import uuid
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -97,13 +101,59 @@ def _readonly(arr: NDArray[Any]) -> NDArray[Any]:
     return arr
 
 
-def _float_array(value: ArrayLike) -> NDArray[np.float64]:
-    """`value` as a float64 array. Read-only float64 arrays (memory maps opened
-    read-only, another MarketData's arrays and their views) are kept as they are, so data
-    is shared rather than copied; anything else is copied (the MarketData then owns it)."""
-    if isinstance(value, np.ndarray) and value.dtype == np.float64 and not value.flags.writeable:
-        return value
+def _float_array(value: ArrayLike, *, copy: bool) -> NDArray[np.float64]:
+    """`value` as a float64 array the MarketData can keep: a copy of it, or with
+    `copy=False` a float64 array itself (through a view, so making it read-only leaves the
+    caller's array as it was)."""
+    if not copy and isinstance(value, np.ndarray) and value.dtype == np.float64:
+        return value.view() if value.flags.writeable else value
     return np.array(value, dtype=np.float64)
+
+
+def _is_mapped(arr: Any) -> bool:
+    """Whether `arr` is (a view of) a memory map."""
+    while arr is not None:
+        if isinstance(arr, np.memmap | mmap.mmap):
+            return True
+        arr = getattr(arr, "base", None)
+    return False
+
+
+def _as_field(name: str, value: ArrayLike, *, copy: bool, validate: bool) -> NDArray[np.float64]:
+    """A per-asset field as a `(T, N, ...)` float64 array, checked when `validate`."""
+    arr = _float_array(value, copy=copy)
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    if arr.ndim < 2:
+        raise ValueError(f"field {name!r} must be (T, N) or (T, N, ...), got {arr.shape}.")
+    if validate and np.isinf(arr).any():
+        raise ValueError(f"field {name!r} contains infinite values; use NaN for missing.")
+    return arr
+
+
+def _as_exogenous(
+    name: str, value: ArrayLike, n_steps: int, *, copy: bool, validate: bool
+) -> NDArray[np.float64]:
+    """A market-wide series as a `(T, ...)` float64 array, checked when `validate`."""
+    arr = _float_array(value, copy=copy)
+    if arr.ndim < 1 or arr.shape[0] != n_steps:
+        raise ValueError(
+            f"exogenous {name!r} must have shape ({n_steps},) or ({n_steps}, ...), got {arr.shape}."
+        )
+    if validate and np.isinf(arr).any():
+        raise ValueError(f"exogenous {name!r} contains infinite values.")
+    return arr
+
+
+def _check_corporate_actions(arrays: Mapping[str, NDArray[np.float64]], validate: bool) -> None:
+    if validate and "split" in arrays:
+        ratios = arrays["split"]
+        if ratios.ndim != 2 or np.any(ratios[np.isfinite(ratios)] <= 0):
+            raise ValueError("the split field must be (T, N) and positive (NaN = no split).")
+    if validate and "dividend" in arrays:
+        cash = arrays["dividend"]
+        if cash.ndim != 2 or np.any(cash[np.isfinite(cash)] < 0):
+            raise ValueError("the dividend field must be (T, N) and >= 0 (NaN = none).")
 
 
 _FORMAT = "sekai.MarketData"
@@ -220,10 +270,15 @@ class MarketData:
             (see `simple_returns`): they are checked, returns include them, and
             environments and brokers apply them. Off by default, so fields with those
             names are ordinary fields, as they were in 0.2.
+        copy: Copy the arrays given (the default, as in 0.2), so the data never changes
+            whatever happens to them later. With `copy=False`, float64 arrays are kept as
+            they are (read-only views of them), sharing their memory: for memory maps you
+            opened yourself, say. Those arrays must then not change.
 
-    Read-only float64 arrays (a memory map opened read-only, another MarketData's
-    arrays) are used as they are rather than copied, so derived data (`split`, slices)
-    and memory-mapped data (`MarketData.load`) share memory. Everything else is copied.
+    A MarketData never changes once built. Data derived from it shares its arrays rather
+    than copying them (`with_fields`, `adjusted`), as do memory-mapped data
+    (`MarketData.load`) and its row slices; slices and splits of data held in memory are
+    copies, so they don't keep the whole history alive.
 
     Example:
         ```python
@@ -249,6 +304,7 @@ class MarketData:
         warmup: int = 0,
         validate: bool = True,
         corporate_actions: bool = False,
+        copy: bool = True,
     ) -> None:
         raw: dict[str, ArrayLike] = dict(fields or {})
         if prices is not None:
@@ -258,16 +314,10 @@ class MarketData:
         if price_field not in raw:
             raise ValueError(f"MarketData needs prices (or a {price_field!r} field).")
 
-        arrays: dict[str, NDArray[np.float64]] = {}
-        for name, value in raw.items():
-            arr = _float_array(value)
-            if arr.ndim == 1:
-                arr = arr[:, None]
-            if arr.ndim < 2:
-                raise ValueError(f"field {name!r} must be (T, N) or (T, N, ...), got {arr.shape}.")
-            if validate and np.isinf(arr).any():
-                raise ValueError(f"field {name!r} contains infinite values; use NaN for missing.")
-            arrays[name] = arr
+        arrays = {
+            name: _as_field(name, value, copy=copy, validate=validate)
+            for name, value in raw.items()
+        }
         shape = arrays[price_field].shape
         if len(shape) != 2:
             raise ValueError(f"prices ({price_field!r}) must be 2-D (T, N), got shape {shape}.")
@@ -288,16 +338,7 @@ class MarketData:
                 raise ValueError(
                     "corporate_actions=True needs a 'split' or a 'dividend' field (or both)."
                 )
-            if validate and "split" in arrays:
-                ratios = arrays["split"]
-                if ratios.ndim != 2 or np.any(ratios[np.isfinite(ratios)] <= 0):
-                    raise ValueError(
-                        "the split field must be (T, N) and positive (NaN = no split)."
-                    )
-            if validate and "dividend" in arrays:
-                cash = arrays["dividend"]
-                if cash.ndim != 2 or np.any(cash[np.isfinite(cash)] < 0):
-                    raise ValueError("the dividend field must be (T, N) and >= 0 (NaN = none).")
+            _check_corporate_actions(arrays, validate)
 
         if timestamps is None:
             times: NDArray[Any] = np.arange(n_steps, dtype=np.int64)
@@ -323,17 +364,10 @@ class MarketData:
         if len(set(ids)) != n_assets:
             raise ValueError("asset ids must be unique.")
 
-        exo: dict[str, NDArray[np.float64]] = {}
-        for name, value in (exogenous or {}).items():
-            arr = _float_array(value)
-            if arr.ndim < 1 or arr.shape[0] != n_steps:
-                raise ValueError(
-                    f"exogenous {name!r} must have shape ({n_steps},) or ({n_steps}, ...), "
-                    f"got {arr.shape}."
-                )
-            if validate and np.isinf(arr).any():
-                raise ValueError(f"exogenous {name!r} contains infinite values.")
-            exo[name] = _readonly(arr)
+        exo = {
+            name: _readonly(_as_exogenous(name, value, n_steps, copy=copy, validate=validate))
+            for name, value in (exogenous or {}).items()
+        }
 
         if isinstance(warmup, bool | np.bool_):
             raise TypeError(f"warmup must be an integer, got {warmup!r}.")
@@ -353,9 +387,51 @@ class MarketData:
         self._corporate_actions = bool(corporate_actions)
         self._mask: NDArray[np.bool_] = _readonly(np.isfinite(price))
         self._returns: NDArray[np.float64] | None = None
-        # (directory, first row, end row) when the arrays are memory-mapped from a saved
-        # MarketData: pickling then sends that, not the arrays (see __reduce_ex__).
-        self._origin: tuple[str, int, int] | None = None
+        # (directory, first row, end row, save id) when the arrays are memory-mapped from a
+        # saved MarketData: pickling then sends that, not the arrays (see __reduce_ex__).
+        self._origin: tuple[str, int, int, str | None] | None = None
+
+    @classmethod
+    def _from_arrays(
+        cls,
+        *,
+        fields: dict[str, NDArray[np.float64]],
+        timestamps: NDArray[Any],
+        assets: tuple[Any, ...],
+        exogenous: dict[str, NDArray[np.float64]],
+        price_field: str,
+        warmup: int,
+        corporate_actions: bool,
+        mask: NDArray[np.bool_],
+        returns: NDArray[np.float64] | None = None,
+        origin: tuple[str, int, int, str | None] | None = None,
+    ) -> MarketData:
+        """A MarketData of arrays that are already checked and read-only: no checks, no
+        copies, nothing read (how derived and loaded data are built)."""
+        out = cls.__new__(cls)
+        out._fields = fields
+        out._timestamps = timestamps
+        out._assets = assets
+        out._exogenous = exogenous
+        out.price_field = price_field
+        out._warmup = warmup
+        out._corporate_actions = corporate_actions
+        out._mask = mask
+        out._returns = returns
+        out._origin = origin
+        return out
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        # Data pickled by sekai 0.2 has none of the attributes added since.
+        state.setdefault("_corporate_actions", False)
+        state.setdefault("_returns", None)
+        state.setdefault("_origin", None)
+        self.__dict__.update(state)
+        # Unpickled arrays come back writeable; a MarketData's are read-only.
+        arrays = [*self._fields.values(), *self._exogenous.values(), self._timestamps, self._mask]
+        for arr in [*arrays, self._returns]:
+            if arr is not None:
+                arr.setflags(write=False)
 
     # ------------------------------------------------------------------
     # Construction from pandas
@@ -566,14 +642,17 @@ class MarketData:
             ok = np.isfinite(r[t]) & np.isfinite(index[t - 1])
             index[t] = np.where(ok, index[t - 1] * (1.0 + r[t]), price[t])
         fields = {k: v for k, v in self._fields.items() if k not in ("split", "dividend")}
-        fields[self.price_field] = index
-        return MarketData(
+        # Positive and listed where the raw prices are (total returns are above -100%).
+        fields[self.price_field] = _readonly(index)
+        return MarketData._from_arrays(
             fields=fields,
             timestamps=self._timestamps,
             assets=self._assets,
             exogenous=self._exogenous,
             price_field=self.price_field,
             warmup=self._warmup,
+            corporate_actions=False,
+            mask=self._mask,
         )
 
     def sessions(self) -> NDArray[np.int64]:
@@ -637,38 +716,53 @@ class MarketData:
         cols: NDArray[np.intp] | None = None,
         warmup: int = 0,
     ) -> MarketData:
-        """A copy restricted to `rows` and `cols`.
+        """The rows `rows` (a slice with a positive step) and the assets `cols`.
 
-        The copy's warm-up is this data's warm-up rows that `rows` keeps (they stay
-        leading, since timestamps must increase), or `warmup` leading rows if more.
+        Memory-mapped arrays stay mapped (the subset is a view of the files); arrays held
+        in memory are copied, so a small slice doesn't keep the whole history alive. The
+        subset's warm-up is this data's warm-up rows that `rows` keeps (they stay
+        leading, since timestamps increase), or `warmup` leading rows if more.
         """
         r: Any = slice(None) if rows is None else rows
+        if isinstance(r, slice) and r.step is not None and r.step < 1:
+            raise ValueError(
+                f"MarketData slices must keep time increasing (a positive step), got {r.step}."
+            )
         c: Any = slice(None) if cols is None else cols
         assets = self._assets if cols is None else tuple(self._assets[i] for i in cols)
         kept = np.count_nonzero(np.arange(self.n_steps)[r] < self._warmup)
-        out = MarketData(
-            fields={name: arr[r][:, c] for name, arr in self._fields.items()},
-            timestamps=self._timestamps[r],
+
+        def part(arr: NDArray[Any], *, by_asset: bool) -> NDArray[Any]:
+            out = arr[r][:, c] if by_asset and cols is not None else arr[r]
+            if not _is_mapped(arr) and np.may_share_memory(out, arr):
+                out = out.copy()
+            return _readonly(out)
+
+        n_rows = len(range(*r.indices(self.n_steps))) if isinstance(r, slice) else len(r)
+        shape = (n_rows, self.n_assets if cols is None else len(cols))
+        if shape[0] < 2 or shape[1] < 1:
+            raise ValueError(f"MarketData needs at least 2 rows and 1 asset, got shape {shape}.")
+        start, stop, step = r.indices(self.n_steps) if isinstance(r, slice) else (0, 0, 0)
+        contiguous = isinstance(r, slice) and step == 1
+        # Returns carry over only from row 0: a later first row has no price before it,
+        # so its return is NaN in the subset (computed when first needed).
+        returns = self._returns if contiguous and start == 0 else None
+        origin = None
+        if contiguous and cols is None and self._origin is not None:
+            directory, first, _, save_id = self._origin
+            origin = (directory, first + start, first + max(start, stop), save_id)
+        return MarketData._from_arrays(
+            fields={name: part(arr, by_asset=True) for name, arr in self._fields.items()},
+            timestamps=part(self._timestamps, by_asset=False),
             assets=assets,
-            exogenous={name: arr[r] for name, arr in self._exogenous.items()},
+            exogenous={name: part(arr, by_asset=False) for name, arr in self._exogenous.items()},
             price_field=self.price_field,
             warmup=max(int(kept), warmup),
-            validate=False,  # a subset of validated data
             corporate_actions=self._corporate_actions,
+            mask=part(self._mask, by_asset=True),
+            returns=None if returns is None else part(returns, by_asset=True),
+            origin=origin,
         )
-        if isinstance(r, slice) and cols is None:
-            start, stop, step = r.indices(self.n_steps)
-            if step == 1:
-                stop = max(start, stop)
-                out._mask = self._mask[start:stop]
-                # Shared only from row 0: a later first row has no price before it, so
-                # its return is NaN in the subset (computed when first needed).
-                if self._returns is not None and start == 0:
-                    out._returns = self._returns[start:stop]
-                if self._origin is not None:
-                    directory, first, _ = self._origin
-                    out._origin = (directory, first + start, first + stop)
-        return out
 
     def __getitem__(self, rows: slice) -> MarketData:
         """Positional time slicing: `data[100:500]`."""
@@ -697,27 +791,67 @@ class MarketData:
         return self._replace(cols=np.array([lookup[a] for a in assets], dtype=np.intp))
 
     def with_fields(self, **arrays: ArrayLike) -> MarketData:
-        """A copy with fields added or replaced (each `(T, N)` or `(T, N, ...)`)."""
-        return MarketData(
-            fields={**self._fields, **arrays},
+        """A copy with fields added or replaced (each `(T, N)` or `(T, N, ...)`).
+
+        The new arrays are copied and checked; the other fields are shared, not copied
+        (memory-mapped ones stay mapped).
+        """
+        if self.price_field in arrays:  # new prices: check everything again
+            fresh = {k: np.array(v, dtype=np.float64) for k, v in arrays.items()}
+            return MarketData(
+                fields={**self._fields, **fresh},
+                timestamps=self._timestamps,
+                assets=self._assets,
+                exogenous=self._exogenous,
+                price_field=self.price_field,
+                warmup=self._warmup,
+                corporate_actions=self._corporate_actions,
+                copy=False,  # the rest is this data's own, read-only
+            )
+        shape = self.prices.shape
+        new = {}
+        for name, value in arrays.items():
+            arr = _as_field(name, value, copy=True, validate=True)
+            if arr.shape[:2] != shape:
+                raise ValueError(
+                    f"field {name!r} has shape {arr.shape} but {self.price_field!r} has {shape}; "
+                    "a field's first two dimensions are (T, N)."
+                )
+            new[name] = _readonly(arr)
+        actions = self._corporate_actions and bool({"split", "dividend"} & set(new))
+        if actions:
+            _check_corporate_actions(new, validate=True)
+        return MarketData._from_arrays(
+            fields={**self._fields, **new},
             timestamps=self._timestamps,
             assets=self._assets,
             exogenous=self._exogenous,
             price_field=self.price_field,
             warmup=self._warmup,
             corporate_actions=self._corporate_actions,
+            mask=self._mask,
+            returns=None if actions else self._returns,
         )
 
     def with_exogenous(self, **arrays: ArrayLike) -> MarketData:
-        """A copy with exogenous series added or replaced (each `(T,)` or `(T, ...)`)."""
-        return MarketData(
+        """A copy with exogenous series added or replaced (each `(T,)` or `(T, ...)`).
+
+        The new series are copied and checked; everything else is shared, not copied.
+        """
+        new = {
+            name: _readonly(_as_exogenous(name, value, self.n_steps, copy=True, validate=True))
+            for name, value in arrays.items()
+        }
+        return MarketData._from_arrays(
             fields=self._fields,
             timestamps=self._timestamps,
             assets=self._assets,
-            exogenous={**self._exogenous, **arrays},
+            exogenous={**self._exogenous, **new},
             price_field=self.price_field,
             warmup=self._warmup,
             corporate_actions=self._corporate_actions,
+            mask=self._mask,
+            returns=self._returns,
         )
 
     # ------------------------------------------------------------------
@@ -729,28 +863,55 @@ class MarketData:
 
         The directory holds one file per field and exogenous series, the timestamps, the
         validity mask, the simple returns and a `metadata.json` (names, asset ids, price
-        field, warm-up, corporate actions). Asset ids must be JSON values (strings or numbers).
+        field, warm-up, corporate actions). Asset ids must be JSON values (strings or
+        numbers, NumPy ones included).
+
+        The files are written to a new directory next to `path` that then takes its
+        place, so `path` is never left half-written, and data memory-mapped from an
+        earlier save there (even this data itself: `load(p).save(p, overwrite=True)`)
+        is not destroyed: it keeps reading the old files.
 
         Args:
             path: The directory (created if needed).
-            overwrite: Replace the files of a MarketData already saved there.
+            overwrite: Replace a MarketData already saved there.
 
         Returns:
             The directory.
 
         Raises:
-            FileExistsError: If the directory is not empty and `overwrite` is False.
+            FileExistsError: If the directory is not empty and `overwrite` is False, or
+                it holds files that are not a saved MarketData (which are never deleted).
             TypeError: If an asset id is not a JSON value.
+            OSError: If the directory can't be replaced (on Windows, while its files are
+                memory-mapped).
         """
         root = Path(path)
-        if root.exists() and any(root.iterdir()) and not overwrite:
-            raise FileExistsError(f"{root} is not empty; pass overwrite=True to replace it.")
-        assets = list(self._assets)
+        if root.exists() and not root.is_dir():
+            raise FileExistsError(f"{root} is a file, not a directory.")
+        if root.exists() and any(root.iterdir()):
+            if not overwrite:
+                raise FileExistsError(f"{root} is not empty; pass overwrite=True to replace it.")
+            if not _holds_saved_data(root):
+                raise FileExistsError(
+                    f"{root} holds files that are not a saved MarketData; not replacing them."
+                )
+        assets = [a.item() if isinstance(a, np.generic) else a for a in self._assets]
         for a in assets:
             if isinstance(a, bool) or not isinstance(a, (str, int, float)):
                 raise TypeError(f"save() needs asset ids that are strings or numbers, got {a!r}.")
-        (root / "fields").mkdir(parents=True, exist_ok=True)
-        (root / "exogenous").mkdir(exist_ok=True)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix=f".{root.name}.", suffix=".tmp", dir=root.parent))
+        try:
+            self._write(tmp, assets)
+            _replace_dir(tmp, root)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        return root
+
+    def _write(self, root: Path, assets: list[Any]) -> None:
+        (root / "fields").mkdir()
+        (root / "exogenous").mkdir()
         fields = list(self._fields)
         exogenous = list(self._exogenous)
         for i, name in enumerate(fields):
@@ -765,13 +926,14 @@ class MarketData:
             "version": _FORMAT_VERSION,
             "fields": fields,
             "exogenous": exogenous,
-            "assets": [a.item() if isinstance(a, np.generic) else a for a in assets],
+            "assets": assets,
             "price_field": self.price_field,
             "warmup": self._warmup,
             "corporate_actions": self._corporate_actions,
+            # Lets a pickled slice tell this save from a later one at the same path.
+            "save_id": uuid.uuid4().hex,
         }
         (root / "metadata.json").write_text(json.dumps(meta, indent=1))
-        return root
 
     @classmethod
     def load(cls, path: str | os.PathLike[str], *, mmap: bool = True) -> MarketData:
@@ -782,14 +944,17 @@ class MarketData:
         and pickling the data (as `ProcVecEnv` does for its workers) sends the directory
         and row range, not the arrays, so every worker maps the same files instead of
         holding a copy. Slicing rows (`data[a:b]`, `split`, `walk_forward`, `between`)
-        keeps that; selecting assets or adding fields makes an in-memory copy.
+        keeps that. `select` copies the assets it keeps into memory, and `with_fields`
+        shares the mapped fields but pickles by value, since its new fields are not in
+        the files.
 
         Args:
             path: The directory `save()` wrote.
             mmap: Memory-map the arrays (else read them into memory).
 
         Raises:
-            ValueError: If the directory does not hold a saved MarketData.
+            ValueError: If the directory does not hold a saved MarketData, or its files
+                don't agree with each other.
         """
         root = Path(path)
         try:
@@ -808,23 +973,31 @@ class MarketData:
             arr = np.load(root / name, mmap_mode=mode, allow_pickle=False)
             return arr if mmap else _readonly(arr)
 
-        data = cls(
-            fields={name: read(f"fields/{i}.npy") for i, name in enumerate(meta["fields"])},
-            timestamps=read("timestamps.npy"),
-            assets=meta["assets"],
-            exogenous={
-                name: read(f"exogenous/{i}.npy") for i, name in enumerate(meta["exogenous"])
-            },
-            price_field=meta["price_field"],
+        fields = {name: read(f"fields/{i}.npy") for i, name in enumerate(meta["fields"])}
+        exogenous = {name: read(f"exogenous/{i}.npy") for i, name in enumerate(meta["exogenous"])}
+        timestamps = read("timestamps.npy")
+        mask = read("mask.npy")
+        returns = read("returns.npy")
+        price_field = meta["price_field"]
+        # The shapes come from the file headers: checking them reads no data.
+        shape = (len(timestamps), len(meta["assets"]))
+        bad = [n for n, a in fields.items() if a.shape[:2] != shape]
+        bad += [n for n, a in exogenous.items() if a.shape[:1] != shape[:1]]
+        if price_field not in fields or bad or mask.shape != shape or returns.shape != shape:
+            raise ValueError(f"The files in {root} don't agree with each other: {bad or shape}.")
+        save_id = meta.get("save_id")
+        return cls._from_arrays(
+            fields=fields,
+            timestamps=timestamps,
+            assets=tuple(meta["assets"]),
+            exogenous=exogenous,
+            price_field=price_field,
             warmup=int(meta["warmup"]),
-            validate=False,  # validated when it was built, before save()
             corporate_actions=bool(meta.get("corporate_actions", False)),
+            mask=mask,
+            returns=returns,
+            origin=(str(root.resolve()), 0, shape[0], save_id) if mmap else None,
         )
-        data._mask = read("mask.npy")
-        data._returns = read("returns.npy")
-        if mmap:
-            data._origin = (str(root.resolve()), 0, data.n_steps)
-        return data
 
     @property
     def memory_mapped(self) -> bool:
@@ -833,8 +1006,8 @@ class MarketData:
 
     def __reduce_ex__(self, protocol: Any) -> Any:
         if self._origin is not None:
-            directory, start, stop = self._origin
-            return (_load_rows, (directory, start, stop, self._warmup))
+            directory, start, stop, save_id = self._origin
+            return (_load_rows, (directory, start, stop, self._warmup, save_id))
         return super().__reduce_ex__(protocol)
 
     # ------------------------------------------------------------------
@@ -954,12 +1127,58 @@ class MarketData:
         )
 
 
-def _load_rows(directory: str, start: int, stop: int, warmup: int) -> MarketData:
-    """Rows `start:stop` of a saved MarketData, memory-mapped (how memory-mapped data unpickles)."""
+def _load_rows(
+    directory: str, start: int, stop: int, warmup: int, save_id: str | None = None
+) -> MarketData:
+    """Rows `start:stop` of a saved MarketData, memory-mapped (how memory-mapped data unpickles).
+
+    Raises:
+        ValueError: If the data saved at `directory` was replaced by another save since.
+    """
     data = MarketData.load(directory)
+    assert data._origin is not None
+    if save_id is not None and data._origin[3] != save_id:
+        raise ValueError(
+            f"The MarketData saved at {directory} was replaced by another save after this "
+            "data was pickled from it."
+        )
     if (start, stop) == (0, data.n_steps) and warmup == data.warmup:
         return data
     return data._replace(rows=slice(start, stop), warmup=warmup)
+
+
+def _holds_saved_data(root: Path) -> bool:
+    try:
+        meta = json.loads((root / "metadata.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("format") == _FORMAT
+
+
+def _replace_dir(new: Path, root: Path) -> None:
+    """Put the directory `new` at `root`, replacing any directory there.
+
+    Two renames, so `root` is never half-written. On POSIX systems arrays memory-mapped
+    from the old files keep working (the files live on until they are unmapped); Windows
+    refuses to rename a directory whose files are in use.
+    """
+    if not root.exists():
+        os.replace(new, root)
+        return
+    old = root.with_name(f".{root.name}.{uuid.uuid4().hex}.old")
+    try:
+        os.replace(root, old)
+    except OSError as e:
+        raise OSError(
+            f"Can't replace {root}: {e}. On Windows, a saved MarketData can't be replaced "
+            "while it is memory-mapped; save to another directory."
+        ) from e
+    try:
+        os.replace(new, root)
+    except BaseException:
+        os.replace(old, root)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
 
 
 __all__ = ["MarketData", "Time"]

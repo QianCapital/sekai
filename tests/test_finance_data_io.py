@@ -72,16 +72,52 @@ def test_memory_mapped_splits_pickle_as_a_location(tmp_path: Path) -> None:
     assert not data.with_fields(extra=np.zeros((200, 4))).memory_mapped
 
 
-def test_read_only_arrays_are_shared_not_copied() -> None:
-    data = make()
-    train, _ = data.split(0.5)
-    assert np.shares_memory(train.prices, data.prices)
-    assert np.shares_memory(train.mask, data.mask)
+def test_arrays_are_copied_unless_shared_on_purpose(tmp_path: Path) -> None:
+    """A MarketData never changes once built: inputs are copied (as in 0.2), whatever
+    they are; derived data shares the arrays it can, and copy=False opts in to sharing."""
     owned = np.ones((10, 2))
     fresh = MarketData(owned)
-    assert not np.shares_memory(fresh.prices, owned)  # writable input: copied
+    assert not np.shares_memory(fresh.prices, owned)
     owned[0, 0] = 5.0
     assert fresh.prices[0, 0] == 1.0
+    # Read-only inputs too: a pandas copy-on-write view or a memory map of the caller's.
+    frozen = np.ones((10, 2))
+    frozen.setflags(write=False)
+    assert not np.shares_memory(MarketData(frozen).prices, frozen)
+    np.save(tmp_path / "p.npy", np.full((10, 2), 100.0))
+    mapped = np.load(tmp_path / "p.npy", mmap_mode="r")
+    copied = MarketData(mapped, fields={"x": mapped}, exogenous={"e": mapped[:, 0]})
+    np.save(tmp_path / "p.npy", np.full((10, 2), 200.0))  # the caller rewrites the file
+    assert copied.prices[0, 0] == copied.field("x")[0, 0] == 100.0
+    assert type(copied.prices) is np.ndarray
+    # copy=False shares the caller's arrays (read-only views of them).
+    mine = np.ones((10, 2))
+    shared = MarketData(mine, copy=False)
+    assert np.shares_memory(shared.prices, mine) and mine.flags.writeable
+    assert not shared.prices.flags.writeable
+    # Derived data shares this data's arrays; slices of data in memory are copies.
+    data = make()
+    assert np.shares_memory(data.with_fields(z=data.prices).field("volume"), data.field("volume"))
+    assert np.shares_memory(
+        data.with_exogenous(z=data.timestamps.astype(float)).prices, data.prices
+    )
+    train, _ = data.split(0.5)
+    assert not np.shares_memory(train.prices, data.prices)
+    assert not np.shares_memory(data[10:20].mask, data.mask)
+
+
+def test_slices_are_checked() -> None:
+    data = make()
+    for rows in (slice(None, None, -1), slice(40, 10, -1)):
+        with pytest.raises(ValueError, match="positive step"):
+            data[rows]
+    with pytest.raises(ValueError, match="at least 2 rows"):
+        data[5:6]
+    with pytest.raises(ValueError, match="at least 2 rows"):
+        data.select([])
+    every_other = data[::2]
+    np.testing.assert_array_equal(every_other.prices, data.prices[::2])
+    assert np.all(every_other.timestamps[1:] > every_other.timestamps[:-1])
 
 
 def test_returns_of_slices() -> None:
@@ -127,3 +163,50 @@ def test_memory_mapped_data_in_environments(tmp_path: Path) -> None:
     out = vec.step(vec.batch_action_space.sample())
     assert out.observations["assets"]["values"].shape[0] == 2
     vec.close()
+
+
+def test_save_over_its_own_source(tmp_path: Path) -> None:
+    """Saving onto the directory the data is mapped from replaces it safely."""
+    root = make().save(tmp_path / "d")
+    loaded = MarketData.load(root)
+    before = np.array(loaded.prices)
+    loaded.save(root, overwrite=True)
+    np.testing.assert_array_equal(loaded.prices, before)  # still reads its (old) files
+    again = MarketData.load(root)
+    same(again, loaded)
+    wider = again.with_fields(extra=again.prices * 2)
+    wider.save(root, overwrite=True)
+    np.testing.assert_array_equal(MarketData.load(root).field("extra"), before * 2)
+    assert [p.name for p in tmp_path.iterdir()] == ["d"]  # no temporary directories left
+
+
+def test_save_never_deletes_other_files(tmp_path: Path) -> None:
+    (tmp_path / "mine").mkdir()
+    (tmp_path / "mine" / "notes.txt").write_text("keep me")
+    with pytest.raises(FileExistsError, match="not empty"):
+        make().save(tmp_path / "mine")
+    with pytest.raises(FileExistsError, match="not a saved MarketData"):
+        make().save(tmp_path / "mine", overwrite=True)
+    assert (tmp_path / "mine" / "notes.txt").read_text() == "keep me"
+    (tmp_path / "file").write_text("x")
+    with pytest.raises(FileExistsError, match="is a file"):
+        make().save(tmp_path / "file", overwrite=True)
+
+
+def test_pickled_slice_refuses_a_replaced_save(tmp_path: Path) -> None:
+    root = make().save(tmp_path / "d")
+    blob = pickle.dumps(MarketData.load(root)[10:50])
+    assert len(blob) < 1000  # by location
+    np.testing.assert_array_equal(pickle.loads(blob).prices, make()[10:50].prices)
+    make(dated=False).save(root, overwrite=True)
+    with pytest.raises(ValueError, match="replaced by another save"):
+        pickle.loads(blob)
+
+
+def test_save_numpy_asset_ids_and_shape_checks(tmp_path: Path) -> None:
+    p = np.ones((5, 3))
+    root = MarketData(p, assets=np.array([10, 20, 30])).save(tmp_path / "ids")
+    assert MarketData.load(root).assets == (10, 20, 30)
+    np.save(root / "mask.npy", np.ones((4, 3), dtype=bool))  # a damaged save
+    with pytest.raises(ValueError, match="don't agree"):
+        MarketData.load(root)

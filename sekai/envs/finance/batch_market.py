@@ -151,6 +151,9 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
+    # A scenario generator draws from the seed it is given, so snapshots share it (a
+    # generative model, perhaps on a GPU and still training, is never copied).
+    _snapshot_shared = ("scenarios",)
 
     def __init__(
         self,
@@ -239,10 +242,12 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         self._episode_length = int(episode_length)
         self._window = self._lookback + self._episode_length + 1
         self.execution = execution
+        self._features = tuple(features)
+        self._exogenous = tuple(exogenous)
         self.builder = (
             observation
             if observation is not None
-            else MarketObservation(tuple(features), tuple(exogenous))
+            else MarketObservation(self._features, self._exogenous)
         )
         self.action_map = (
             action
@@ -480,6 +485,18 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
     def n_slots(self) -> int:
         """Asset slots per lane (`max_assets`)."""
         return self.max_assets
+
+    @property
+    @shared
+    def features(self) -> tuple[str, ...]:
+        """The per-asset fields given as `features=` (shown by the default observation)."""
+        return self._features
+
+    @property
+    @shared
+    def exogenous(self) -> tuple[str, ...]:
+        """The market-wide series given as `exogenous=` (shown by the default observation)."""
+        return self._exogenous
 
     @shared
     def field_shape(self, name: str) -> tuple[int, ...]:

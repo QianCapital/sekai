@@ -23,9 +23,16 @@ from sekai.backend import Array, backend_and_like
 
 
 def factor_exposures(weights: Array, loadings: Array) -> Array:
-    """`L' w`: `(..., k)` exposures of `(..., n)` weights to `(..., n, k)` loadings."""
+    """`L' w`: `(..., k)` exposures of `(..., n)` weights to `(..., n, k)` loadings.
+
+    A missing (NaN) loading of an asset that isn't held is ignored; one of a held asset
+    makes its exposures NaN.
+    """
     B, like = backend_and_like(weights, loadings)
-    return B.einsum("...n,...nk->...k", B.asfloat(weights, like), B.asfloat(loadings, like))
+    w = B.asfloat(weights, like)
+    loads = B.asfloat(loadings, like)
+    loads = B.where(B.isnan(loads) & (w == 0)[..., None], 0.0, loads)
+    return B.einsum("...n,...nk->...k", w, loads)
 
 
 def portfolio_variance(
@@ -45,7 +52,8 @@ def portfolio_variance(
 
     Returns:
         `(...)` variances, in the units of the inputs (per period for per-period
-        covariances).
+        covariances). Missing (NaN) inputs of an asset that isn't held are ignored; one
+        of a held asset makes the variance NaN rather than understating it.
 
     Raises:
         ValueError: If only one of `loadings` and `factor_cov` is given, or neither
@@ -62,7 +70,9 @@ def portfolio_variance(
         x = factor_exposures(w, loadings)
         total = B.einsum("...k,...kj,...j->...", x, B.asfloat(factor_cov, like), x)
     if idio_var is not None:
-        total = total + B.sum(w * w * B.nan_to_num(B.asfloat(idio_var, like)), axis=-1)
+        d = B.asfloat(idio_var, like)
+        d = B.where(B.isnan(d) & (w == 0), 0.0, d)
+        total = total + B.sum(w * w * d, axis=-1)
     return total
 
 

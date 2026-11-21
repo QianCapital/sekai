@@ -19,6 +19,7 @@ from sekai.envs.finance._common import (
     check_sources,
     episode_over,
     field_or_none,
+    price_data,
 )
 from sekai.envs.finance._common import step_length as _step_length
 from sekai.envs.finance.market import random_correlation, simulate_gbm
@@ -80,6 +81,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
+    execution: str = "close"  # the default of environments pickled by sekai 0.2
 
     def __init__(
         self,
@@ -102,6 +104,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         execution: str = "close",
     ) -> None:
         check_sources("PortfolioEnv", prices=prices, data=data, model=model)
+        data = price_data(data)
         self.execution = check_execution(execution)
         if episode_length < 1 or lookback < 1:
             raise ValueError("episode_length and lookback must be >= 1.")
@@ -186,6 +189,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             spaces["pending"] = Box(
                 low.astype(np.float32), high.astype(np.float32), dtype=np.float32
             )
+            self._pending_bounds = (low, high)
         self.observation_space = Dict(spaces)
         if allow_short:
             self.action_space = Box(-1.0, 1.0, shape=(n_assets,), dtype=np.float32)
@@ -215,6 +219,11 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         w = np.zeros(self.n_assets + 1)
         w[-1] = 1.0
         return w
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        if "pending" not in state:  # pickled by sekai 0.2 (same-close fills)
+            self.pending = self._cash_only()
 
     def action_to_weights(self, action: Any) -> NDArray[np.float64]:
         """Map an action to target weights over (assets..., cash)."""
@@ -386,7 +395,8 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             "weights": self.weights.astype(np.float32),
         }
         if self.execution == "next_close":
-            obs["pending"] = self.pending.astype(np.float32)
+            # Within its bounds: 1 - sum(w) can round to a hair below 0.
+            obs["pending"] = np.clip(self.pending, *self._pending_bounds).astype(np.float32)
         return obs
 
     def _info(

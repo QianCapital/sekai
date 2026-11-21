@@ -253,3 +253,22 @@ def test_margin() -> None:
         BatchMarketEnv(1, data=data, episode_length=50, maintenance_margin=0.25).initial_margin
         == 0.5
     )
+
+
+@pytest.mark.parametrize(
+    "env_id", ["Trading-v0", "Trading-v1", "Portfolio-v0", "Portfolio-v1", "Market-v0", "Market-v1"]
+)
+def test_every_env_applies_corporate_actions(env_id: str) -> None:
+    """A 2-for-1 split loses a holder nothing, in the envs that read prices too."""
+    p = np.full((60, 1), 100.0)
+    p[30:] = 50.0
+    split = np.full((60, 1), np.nan)
+    split[30] = 2.0
+    data = MarketData(p, fields={"split": split}, corporate_actions=True)
+    env = sekai.make(env_id, data=data, episode_length=50, lookback=5, transaction_cost=0.0)
+    env.reset(seed=0, options={"start": 5})
+    space = env.action_space
+    full = space.n - 1 if hasattr(space, "n") else np.ones(space.shape, np.float32)
+    for _ in range(40):
+        out = env.step(full)
+    assert float(out.info["equity"]) == pytest.approx(1.0)

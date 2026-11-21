@@ -104,16 +104,52 @@ class TestRunningMeanStd:
         assert np.all(np.isfinite(stats.normalize(np.ones(2))))
 
 
-def test_deprecated_backend_names_are_removed() -> None:
+def test_backend_mismatch_is_deprecated() -> None:
     import sekai.error
 
-    for module in (sekai, sekai.error):
-        with pytest.raises(AttributeError):
-            module.BackendMismatch  # type: ignore[attr-defined]
+    assert "BackendMismatch" not in sekai.__all__
+    with pytest.warns(DeprecationWarning, match="removed in sekai 0.3"):
+        cls = sekai.BackendMismatch
+    with pytest.warns(DeprecationWarning, match="sekai.error.BackendMismatch is deprecated"):
+        assert sekai.error.BackendMismatch is cls
+    err = cls("numpy", "torch")
+    assert isinstance(err, sekai.SekaiError) and "expected 'numpy'" in str(err)
+    with pytest.warns(DeprecationWarning):
+        assert type(pickle.loads(pickle.dumps(err))) is cls
     with pytest.raises(AttributeError):
         sekai.NoSuchName  # type: ignore[attr-defined]
-    with pytest.raises(ImportError):
-        from sekai.backend import BackendOps  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_sekai_0_2_backend_protocol_still_works() -> None:
+    """sekai 0.2's (deprecated) backend API keeps working, with a DeprecationWarning."""
+    import importlib
+    import sys
+
+    with pytest.warns(DeprecationWarning, match="BackendOps is deprecated"):
+        from sekai.backend import BackendOps  # type: ignore[attr-defined]
+    with pytest.warns(DeprecationWarning, match="default_backend is deprecated"):
+        from sekai.backend import default_backend  # type: ignore[attr-defined]
+    for name in ("sekai.backend.protocol", "sekai.backend.numpy_backend"):
+        sys.modules.pop(name, None)
+        with pytest.warns(DeprecationWarning, match=name.replace(".", r"\.")):
+            module = importlib.import_module(name)
+        assert module.__all__
+    from sekai.backend import NumpyBackend
+    from sekai.backend.numpy_backend import NumpyBackend as Legacy
+
+    assert Legacy is NumpyBackend and isinstance(NumpyBackend(), BackendOps)
+    B = default_backend
+    assert B.zeros((2,), np.int32).dtype == np.int32 and B.zeros(3, dtype=bool).dtype == bool
+    assert B.zeros((2,)).dtype == np.float64  # the 0.3 interface: float64 by default
+    assert B.ones((2,), np.float32).dtype == np.float32
+    np.testing.assert_array_equal(B.concatenate([np.ones(1), np.zeros(1)]), [1.0, 0.0])
+    np.testing.assert_array_equal(B.stack(arrays=[np.ones(1), np.zeros(1)]), [[1.0], [0.0]])
+    assert B.astype(np.ones(2), np.int8).dtype == np.int8
+    np.testing.assert_array_equal(B.clip(np.array([-1.0, 2.0]), 0.0, 1.0), [0.0, 1.0])
+    a, b = np.random.default_rng(0), np.random.default_rng(0)
+    np.testing.assert_array_equal(B.random_uniform(a, 0.0, 1.0, (3,)), b.uniform(0, 1, 3))
+    np.testing.assert_array_equal(B.random_integers(a, 0, 9, (3,)), b.integers(0, 9, 3))
+    assert B.array_equal(np.ones(2), [1, 1]) and B.is_array(np.ones(1)) and not B.is_array([1])
 
 
 class TestStats:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import inspect
 from collections.abc import Iterator
 from typing import Any, Generic
 
@@ -10,6 +11,17 @@ from sekai._types import ActType, ObsType, SeedType, WActType, WObsType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.spaces.space import Space
+
+# Methods `Env` gained in sekai 0.3. An environment written for 0.2 may define its own
+# methods with these names: `get_attr` (and so a vector env's `call`) finds those, as it
+# did in 0.2, rather than the wrappers' inherited `Env` versions.
+_ADDED_IN_0_3 = frozenset({"snapshot", "restore"})
+
+
+def _defines_own(layer: Any, name: str) -> bool:
+    """Whether `layer`'s class defines `name` itself rather than inheriting `Env`'s."""
+    attr = inspect.getattr_static(type(layer), name, None)
+    return attr is not None and attr is not inspect.getattr_static(Env, name)
 
 
 class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActType]):
@@ -135,6 +147,10 @@ class Wrapper(Env[WObsType, WActType], Generic[WObsType, WActType, ObsType, ActT
         return hasattr(self, name) or self.env.has_attr(name)
 
     def get_attr(self, name: str) -> Any:
+        if name in _ADDED_IN_0_3:
+            for layer in self:
+                if _defines_own(layer, name):
+                    return getattr(layer, name)
         if hasattr(self, name):
             return getattr(self, name)
         return self.env.get_attr(name)

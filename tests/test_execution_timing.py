@@ -107,3 +107,23 @@ def test_check_env(env_id: str) -> None:
     vec.reset(seed=0)
     vec.step(vec.batch_action_space.sample())
     vec.close()
+
+
+@pytest.mark.parametrize("positions", [(0.5, 1.0), (-1.0, -0.5), (1.0, 2.0)])
+def test_trading_v1_reset_observation_is_in_its_space(positions: tuple[float, float]) -> None:
+    env = sekai.make("Trading-v1", positions=positions)
+    assert env.observation_space.contains(env.reset(seed=0).observation)
+    vec = sekai.make_vec("Trading-v1", num_envs=2, positions=positions)
+    obs = vec.reset(seed=0).observations
+    assert all(env.observation_space.contains(o) for o in obs)
+
+
+def test_portfolio_v1_observations_stay_in_their_space() -> None:
+    env = sekai.make("Portfolio-v1", allow_short=True)
+    env.reset(seed=1)
+    env.action_space.seed(1)
+    for _ in range(2000):
+        out = env.step(env.action_space.sample())
+        assert env.observation_space.contains(out.observation)
+        if out.done:
+            env.reset()
