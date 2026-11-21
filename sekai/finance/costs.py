@@ -108,10 +108,10 @@ def _fill_from_median(
         option: Name of the model's fallback argument, for the error message.
     """
     ok = B.isfinite(values) & (values >= 0)
-    if B.item(B.all(ok)):
+    if bool(B.all(ok)):
         return values
     any_ok = B.any(ok, axis=-1)
-    if fallback is None and B.item(B.any(~any_ok & B.any(traded, axis=-1))):
+    if fallback is None and bool(B.any(~any_ok & B.any(traded, axis=-1))):
         raise ValueError(
             f"{model} has no valid {name!r} (finite and >= 0) for any asset in a row with "
             f"trades, so it cannot price them (they would be free). Supply the input, or "
@@ -200,7 +200,8 @@ class ProportionalCost(CostModel):
     ) -> Array:
         B, like = backend_and_like(trades)
         t = B.abs(B.asfloat(trades, like))
-        rate = _per_asset(B, self.rate, assets, t)
+        # With NumPy and no slots, the rate is used as it is (as in 0.2).
+        rate = self.rate if like is None and assets is None else _per_asset(B, self.rate, assets, t)
         if self.rate.ndim == 0:
             out: Array = rate * B.sum(t, axis=-1)
             return out
@@ -247,7 +248,11 @@ class SpreadCost(CostModel):
         B, like = backend_and_like(trades, spread)
         t = B.abs(B.asfloat(trades, like))
         if self.half_spread is not None:
-            half = _per_asset(B, self.half_spread, assets, t)
+            half = (
+                self.half_spread
+                if like is None and assets is None
+                else _per_asset(B, self.half_spread, assets, t)
+            )
         else:
             quoted = B.broadcast_to(_require(B, "spread", spread, "SpreadCost()", t), t.shape)
             half = 0.5 * _fill_from_median(
@@ -361,14 +366,12 @@ class SquareRootImpact(CostModel):
         with B.errstate():
             liquid = B.isfinite(traded) & (traded > 0)
             participation = B.where(liquid, notional / B.where(liquid, traded, 1.0), 0.0)
-            # The square root of 0 has an infinite derivative, so entries that are not
-            # used (untraded or illiquid) take a harmless 1: gradients stay finite.
-            priced = liquid & (t > 0)
-            unit = B.where(
-                liquid,
-                self.coefficient * sigma * B.sqrt(B.where(priced, participation, 1.0)),
-                1.0,
-            )
+            # The square root of 0 has an infinite derivative, so with torch the entries
+            # that are not used (untraded or illiquid) take a harmless 1 and gradients stay
+            # finite. NumPy needs no gradients (and the unused entries don't count).
+            if like is not None:
+                participation = B.where(liquid & (t > 0), participation, 1.0)
+            unit = B.where(liquid, self.coefficient * sigma * B.sqrt(participation), 1.0)
         per_asset = B.where(t > 0, B.minimum(unit, 1.0) * t, 0.0)
         return B.asfloat(B.sum(per_asset, axis=-1), t)
 
@@ -391,6 +394,7 @@ class CompositeCost(CostModel):
         self.models = flat
         # Models written before cost models got `assets=` (sekai 0.2) don't take it.
         self._takes_assets = tuple(_accepts(m, "assets") for m in flat)
+        self._all_take_assets = all(self._takes_assets)
         self.requires = frozenset().union(*(m.requires for m in flat))
         # An input has a fallback only if every model that reads it has one.
         self.fallbacks = frozenset(
@@ -401,10 +405,13 @@ class CompositeCost(CostModel):
 
     def __call__(self, trades: ArrayLike, **context: Any) -> Array:
         B, like = backend_and_like(trades)
-        plain = {k: v for k, v in context.items() if k != "assets"}
         takes = getattr(self, "_takes_assets", None)  # absent when pickled by sekai 0.2
         if takes is None:
-            takes = tuple(_accepts(m, "assets") for m in self.models)
+            takes = self._takes_assets = tuple(_accepts(m, "assets") for m in self.models)
+            self._all_take_assets = all(takes)
+        plain = context
+        if "assets" in context and not self._all_take_assets:
+            plain = {k: v for k, v in context.items() if k != "assets"}
         total: Any = None
         for model, with_assets in zip(self.models, takes):
             cost = model(trades, **(context if with_assets else plain))

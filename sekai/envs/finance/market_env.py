@@ -386,7 +386,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
 
     def action_mask(self) -> NDArray[np.int8]:
         """1 for slots that can be traded now (and for cash, in the long-only action)."""
-        mask = self._tradable(self.lookback + self._t).astype(np.int8)
+        mask = self._tradable(self._lookback + self._t).astype(np.int8)
         return mask if self.config.allow_short else np.append(mask, np.int8(1))
 
     # ------------------------------------------------------------------
@@ -418,7 +418,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     def _decision_row(self) -> int:
         if not self._started:
             raise ResetRequired()
-        return min(self.lookback + self._t, self._window - 1)
+        return min(self._lookback + self._t, self._window - 1)
 
     @property
     def timestamp(self) -> Any:
@@ -459,8 +459,8 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         if "equity" in needs:
             ctx["equity"] = self.capital * self.equity
         if "volatility" in needs:
-            window = self._log_returns[row - self.lookback + 1 : row + 1]
-            avail = self._available[row - self.lookback + 1 : row + 1]
+            window = self._log_returns[row - self._lookback + 1 : row + 1]
+            avail = self._available[row - self._lookback + 1 : row + 1]
             n = avail.sum(axis=0)
             mean = window.sum(axis=0) / np.maximum(n, 1)
             var = (np.where(avail, window - mean, 0.0) ** 2).sum(axis=0) / np.maximum(n, 1)
@@ -485,7 +485,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         a = flat_action(action).astype(np.float64)
         if a.shape != self.action_space.shape or not np.all(np.isfinite(a)):
             raise InvalidAction(action, self.action_space)
-        tradable = self._tradable(self.lookback + self._t)
+        tradable = self._tradable(self._lookback + self._t)
         if self.config.allow_short:
             weights = project_weights(a, tradable, self.config)
         else:
@@ -497,7 +497,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
             raise ResetRequired()
         if self._over:
             raise episode_over()
-        row = self.lookback + self._t
+        row = self._lookback + self._t
         target = self.target_weights(action)
         trades = target - self.weights
         turnover = float(np.abs(trades).sum())
@@ -523,7 +523,7 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
         truncated = not terminated and self._t >= self.episode_length
         self._over = terminated or truncated
         if not (terminated or truncated):
-            self._assign_slots(self.lookback + self._t)
+            self._assign_slots(self._lookback + self._t)
         outcome = StepOutcome.from_growth(
             growth,
             equity=self.equity,
@@ -540,8 +540,8 @@ class MarketEnv(Env[dict[str, Any], NDArray[np.float32]]):
     # ------------------------------------------------------------------
 
     def _get_obs(self) -> dict[str, Any]:
-        row = min(self.lookback + self._t, self._window - 1)
-        rows = slice(row - self.lookback + 1, row + 1)
+        row = min(self._lookback + self._t, self._window - 1)
+        rows = slice(row - self._lookback + 1, row + 1)
         cols, ok = self._slot_cols, self._slot_cols >= 0
         window = self._features[rows][:, np.where(ok, cols, 0)]  # (L, S, F)
         values = np.ascontiguousarray(np.transpose(window, (1, 0, 2)))

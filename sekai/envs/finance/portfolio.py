@@ -228,15 +228,18 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
     def action_to_weights(self, action: Any) -> NDArray[np.float64]:
         """Map an action to target weights over (assets..., cash)."""
         a = flat_action(action).astype(np.float64)
-        if a.shape != self.action_space.shape or not np.all(np.isfinite(a)):
+        if a.shape != self.action_space.shape or not np.isfinite(a).all():
             raise InvalidAction(action, self.action_space)
         if self.allow_short:
-            a = np.clip(a, -1.0, 1.0)
+            a = a.clip(-1.0, 1.0)
             gross = np.abs(a).sum()
             if gross > 1.0:
                 a = a / gross
-            return np.append(a, 1.0 - a.sum())
-        a = np.clip(a, 0.0, None)
+            w = np.empty(len(a) + 1)
+            w[:-1] = a
+            w[-1] = 1.0 - a.sum()
+            return w
+        a = a.clip(0.0, None)
         total = a.sum()
         return self._cash_only() if total < 1e-12 else a / total
 
@@ -352,7 +355,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             target, self.pending = self.pending, decided
         trades = target[:-1] - self.weights[:-1]
         turnover = float(np.abs(trades).sum())
-        i = self.lookback + self._t
+        i = self._lookback + self._t
         cost = float(self.cost_model(trades, **self._cost_context(i)))
 
         asset_returns = self._path[i + 1] / self._path[i] - 1.0
@@ -362,7 +365,9 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             growth = 0.0
 
         # Weights drift with prices until the next rebalance.
-        drifted = target * np.append(1.0 + asset_returns, 1.0)
+        growths = np.ones(len(target))
+        growths[:-1] += asset_returns
+        drifted = target * growths
         self.weights = drifted / drifted.sum() if growth > 0 else self._cash_only()
         previous_value, self.portfolio_value = (
             self.portfolio_value,
@@ -389,7 +394,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         )
 
     def _get_obs(self) -> dict[str, NDArray[np.float32]]:
-        returns = self._log_returns[self._t : self._t + self.lookback]
+        returns = self._log_returns[self._t : self._t + self._lookback]
         obs = {
             "returns": returns.astype(np.float32),
             "weights": self.weights.astype(np.float32),
@@ -402,7 +407,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
     def _info(
         self, asset_returns: NDArray[np.float64], turnover: float, cost: float
     ) -> dict[str, Any]:
-        return {
+        info: dict[str, Any] = {
             "portfolio_value": self.portfolio_value,
             "equity": self.portfolio_value,
             "weights": self.weights.copy(),
@@ -411,4 +416,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             "asset_returns": np.asarray(asset_returns).copy(),
             "timestamp": self.timestamp,
             "dt": self.dt,
-        } | ({"pending": self.pending.copy()} if self.execution == "next_close" else {})
+        }
+        if self.execution == "next_close":
+            info["pending"] = self.pending.copy()
+        return info

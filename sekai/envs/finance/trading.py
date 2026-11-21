@@ -221,7 +221,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         """The current asset price."""
         if self._path is None:
             raise ResetRequired()
-        return float(self._path[self.lookback + self._t])
+        return float(self._path[self._lookback + self._t])
 
     @property
     def elapsed_steps(self) -> int:
@@ -286,7 +286,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         if "equity" in needs:
             ctx["equity"] = self.capital * self.equity
         if "volatility" in needs:
-            window = self._log_returns[self._t : self._t + self.lookback]
+            window = self._log_returns[self._t : self._t + self._lookback]
             ctx["volatility"] = np.array([window.std()])
         for name, key in (("volume", "volume"), ("spread", "spread")):
             if name in needs:
@@ -305,7 +305,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
             raise episode_over()
         check_action(self.action_space, action)
 
-        i = self.lookback + self._t
+        i = self._lookback + self._t
         decided = float(self.positions[int(action)])
         if self.execution == "close":
             target = decided
@@ -346,13 +346,17 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         )
 
     def _get_obs(self) -> NDArray[np.float32]:
-        window = self._log_returns[self._t : self._t + self.lookback]
-        if self.execution == "next_close":
-            return np.append(window, [self.position, self.pending]).astype(np.float32)
-        return np.append(window, self.position).astype(np.float32)
+        n = self._lookback
+        pending = self.execution == "next_close"
+        obs = np.empty(n + 2 if pending else n + 1, dtype=np.float32)
+        obs[:n] = self._log_returns[self._t : self._t + n]  # rounded to float32 as by astype
+        obs[n] = self.position
+        if pending:
+            obs[n + 1] = self.pending
+        return obs
 
     def _info(self, asset_return: float, cost: float, turnover: float) -> dict[str, Any]:
-        return {
+        info: dict[str, Any] = {
             "equity": self.equity,
             "position": self.position,
             "price": self.price,
@@ -361,4 +365,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
             "turnover": turnover,
             "timestamp": self.timestamp,
             "dt": self.dt,
-        } | ({"pending": self.pending} if self.execution == "next_close" else {})
+        }
+        if self.execution == "next_close":
+            info["pending"] = self.pending
+        return info

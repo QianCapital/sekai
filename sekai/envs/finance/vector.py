@@ -294,7 +294,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
     def _reset_infos(self, indices: NDArray[np.intp]) -> InfoArrays:
         k = len(indices)
         zeros = np.zeros(k)
-        return {
+        info: dict[str, Any] = {
             "equity": self.equity[indices],
             "position": self.position[indices],
             "price": self._paths[indices, self.lookback],
@@ -303,7 +303,10 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
             "turnover": zeros,
             "timestamp": self._windows.timestamps(self._t)[indices],
             "dt": np.full(k, self.dt),
-        } | ({"pending": self.pending[indices]} if self.execution == "next_close" else {})
+        }
+        if self.execution == "next_close":
+            info["pending"] = self.pending[indices]
+        return info
 
     def _cost_context(self, i: NDArray[np.intp]) -> dict[str, Any]:
         needs = self.cost_model.requires
@@ -363,7 +366,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         rewards = np.asarray(self.reward_fn(outcome), dtype=np.float64)
         truncated = ~terminated & (self._t >= self.episode_length)
         price = self._paths[ar, self.lookback + self._t]
-        info = {
+        info: dict[str, Any] = {
             "equity": self.equity.copy(),
             "position": self.position.copy(),
             "price": price,
@@ -487,7 +490,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
 
     def _reset_infos(self, indices: NDArray[np.intp]) -> InfoArrays:
         k = len(indices)
-        return {
+        info: dict[str, Any] = {
             "portfolio_value": self.portfolio_value[indices],
             "equity": self.portfolio_value[indices],
             "weights": self.weights[indices],
@@ -496,7 +499,10 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
             "asset_returns": np.zeros((k, self.n_assets)),
             "timestamp": self._windows.timestamps(self._t)[indices],
             "dt": np.full(k, self.dt),
-        } | ({"pending": self.pending[indices]} if self.execution == "next_close" else {})
+        }
+        if self.execution == "next_close":
+            info["pending"] = self.pending[indices]
+        return info
 
     def _cost_context(self, i: NDArray[np.intp]) -> dict[str, Any]:
         needs = self.cost_model.requires
@@ -574,7 +580,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
             previous_equity=previous_value,
         )
         rewards = np.asarray(self.reward_fn(outcome), dtype=np.float64)
-        info = {
+        info: dict[str, Any] = {
             "portfolio_value": self.portfolio_value.copy(),
             "equity": self.portfolio_value.copy(),
             "weights": self.weights,

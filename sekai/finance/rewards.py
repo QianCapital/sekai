@@ -87,6 +87,22 @@ class StepOutcome:
             variance: The step's ex-ante variance, passed through.
         """
         B, like = backend_and_like(growth, equity, turnover, cost, previous_equity)
+        if like is None:  # NumPy, called every step of a single env: the calls of 0.2
+            g = np.maximum(np.asarray(growth, dtype=np.float64), 1e-12)
+            after = np.asarray(equity, dtype=np.float64)
+            pnl = (
+                None if previous_equity is None else after - np.asarray(previous_equity, np.float64)
+            )
+            return cls(
+                np.log(g),
+                g - 1.0,
+                after,
+                np.asarray(turnover, dtype=np.float64),
+                np.asarray(cost, dtype=np.float64),
+                pnl,
+                weights,
+                variance,
+            )
         g = B.maximum(B.asfloat(growth, like), 1e-12)
         after = B.asfloat(equity, like)
         return cls(
