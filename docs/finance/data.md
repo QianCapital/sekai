@@ -63,6 +63,7 @@ print(data.mask.astype(int))
 | `assets` | `N` ids | unique; default `"asset_0", "asset_1", ...` |
 | `exogenous` | each `(T,)` or `(T, k)` | market-wide series: interest rates, an index level, macro data |
 | `warmup` | `int`, default 0 | leading rows that are lookback-only history: observed, never a decision row (set by [splits](#chronological-splits)) |
+| `copy` | `bool`, default True | copy the arrays given; `False` shares float64 arrays (read-only views of them) |
 | `corporate_actions` | `bool`, default False | read the fields `split` and `dividend` as [corporate actions](#corporate-actions); off, they are ordinary fields |
 
 | Accessor | Returns |
@@ -170,8 +171,9 @@ build. A scenario generator or a live feed that supplies corporate actions sets
 `corporate_actions=True` on its `MarketPanel` or `Bar` itself.
 
 The environments that compute returns from prices (`Trading`, `Portfolio`, `Market-v0`)
-need adjusted prices instead: `data.adjusted()` replaces the prices with a total-return
-index and drops the two fields. The index is built forwards from each asset's first price,
+trade on adjusted prices instead, which they take themselves: `data.adjusted()` replaces
+the prices with a total-return index and drops the two fields (so their `info["price"]` is
+that index). The index is built forwards from each asset's first price,
 using only corporate actions up to each row; the usual back-adjustment rescales history
 with later events, which puts future information in past prices. Share counts in other
 fields (`volume`) are left as they are: turn them into traded values (`dollar_volume`,
@@ -223,14 +225,19 @@ field and exogenous series along.
 
 `data.save(path)` writes a `MarketData` to a directory of `.npy` files (one per field and
 series, the timestamps, the validity mask and the returns, with the names, asset ids and
-warm-up in `metadata.json`), and `MarketData.load(path)` memory-maps it back, read-only:
+warm-up in `metadata.json`). It writes to a new directory that then takes the place of
+`path`, so saving again (even onto the directory the data is mapped from) never leaves it
+half-written or destroys data mapped from it, and it refuses to replace a directory that
+holds anything but a saved `MarketData`. `MarketData.load(path)` memory-maps it back, read-only:
 nothing is read until it is used, and the operating system shares the pages between
 processes. Pickling memory-mapped data sends its location and rows, not the arrays, so
 the workers of a `ProcVecEnv` map the same files instead of each holding a copy: on a
 10,080 x 1,000 history (154 MB of fields), each of 8 `Market-v1` workers held 264 MB of
 private memory with the data in memory, and 25 MB with it memory-mapped. Slicing rows
-(`data[a:b]`, `between`, `split`, `walk_forward`) keeps the mapping; selecting assets or
-adding fields makes an in-memory copy. `load(path, mmap=False)` reads everything into
+(`data[a:b]`, `between`, `split`, `walk_forward`) keeps the mapping. `select` copies the
+assets it keeps into memory, and `with_fields` keeps the mapped fields mapped but pickles
+by value, since its new fields aren't in the files. A pickled slice refuses to load once
+another `save` has replaced the directory. `load(path, mmap=False)` reads everything into
 memory instead.
 
 ```python
@@ -245,11 +252,14 @@ with tempfile.TemporaryDirectory() as tmp:
     print(len(pickle.dumps(train)) < 500)  # True: the location, not the data
 ```
 
-More generally, `MarketData` does not copy read-only float64 arrays (a read-only memory map,
-another `MarketData`'s arrays), so splits and slices share memory with the data they come
-from; anything else is copied when the `MarketData` is built. `validate=False` skips the
-checks that read every value (infinities, positive prices, increasing timestamps), for data
-that was checked before.
+A `MarketData` never changes once built: it copies the arrays it is given (a pandas
+copy-on-write view and a memory map you opened yourself included), so changing them later
+changes nothing. `MarketData(..., copy=False)` shares float64 arrays instead (read-only
+views of them), for large arrays you won't change. Data derived from a `MarketData`
+shares its arrays rather than copying them (`with_fields`, `with_exogenous`, `adjusted`),
+and slices and splits of data held in memory are copies, so they don't keep the whole
+history alive. `validate=False` skips the checks that read every value (infinities,
+positive prices, increasing timestamps), for data that was checked before.
 
 ### Rows and timestamps
 

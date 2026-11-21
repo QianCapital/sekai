@@ -18,8 +18,8 @@ def _func_argument(func: F | None, fn: F | None, wrapper: str) -> F:
         if func is not None:
             raise TypeError(f"{wrapper}() got both func and fn; pass only func.")
         warnings.warn(
-            f"{wrapper}(fn=...) is deprecated and will be removed in sekai 0.3; "
-            f"use {wrapper}(func=...), as in gymnasium.",
+            f"{wrapper}(fn=...) is deprecated (it was to be removed in sekai 0.3 and is "
+            f"kept for compatibility); use {wrapper}(func=...), as in gymnasium.",
             DeprecationWarning,
             stacklevel=3,
         )

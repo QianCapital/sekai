@@ -232,8 +232,10 @@ with sekai.make("CartPole-v1") as env:
 ## Snapshots
 
 `env.snapshot()` copies the state of an environment and of every wrapper around it, random
-generators included, and `env.restore(snapshot)` puts it back, in place: references to the
-env and its wrappers stay valid, a snapshot can be restored any number of times, and the
+generators included, and `env.restore(snapshot)` puts it back, in place: every environment
+involved (each wrapper, a vector env's sub-envs, the batch env behind `Market-v1`) is
+restored where it is, so references to any of them stay valid, as do arrays an env hands
+out as views of its state. A snapshot can be restored any number of times, and the
 same actions then give the same results. Use it to plan from a state (tree search, "what
 if" analysis of a decision), or to checkpoint a training run: a snapshot pickles.
 
@@ -255,12 +257,20 @@ env.restore(pickle.loads(pickle.dumps(snap)))  # through a checkpoint file just 
 
 Data that never changes is shared between an env and its snapshots, not copied: spaces,
 specs, `MarketData` (memory-mapped data pickles as its location), market models, market
-panels and read-only arrays; mark your own immutable classes with
-`sekai.core.snapshot.register_immutable`. In-process vector environments (`SyncVecEnv`,
-`AsyncVecEnv`, native ones) and batched environments snapshot the same way. A `ProcVecEnv`
-cannot, as its sub-envs live in other processes, and a batched env in the middle of a
-differentiable rollout cannot either (its state is part of an autograd graph): snapshot
-between rollouts, or after `detach_state()`.
+panels, scenario generators (they draw from the seed they are given) and read-only arrays
+that nothing else can write through; mark your own immutable classes with
+`sekai.core.snapshot.register_immutable`, list shared attributes in `_snapshot_shared` and
+resources that aren't state (a connection, an event loop) in `_snapshot_exclude`.
+In-process vector environments (`SyncVecEnv`, `AsyncVecEnv`, native ones) and batched
+environments snapshot the same way. A `ProcVecEnv` cannot, as its sub-envs live in other
+processes (asking anywhere in a wrapper stack raises before anything is copied), and a
+batched env in the middle of a differentiable rollout cannot either (its state is part of
+an autograd graph): snapshot between rollouts, or after `detach_state()`.
+
+An environment written for sekai 0.2 may define methods of its own called `snapshot` and
+`restore`. They are its methods, as before: `env.get_attr("snapshot")` and a vector env's
+`call("snapshot")` reach them through any wrappers, and sekai's snapshots of the stack
+don't use them.
 
 ## Reaching through wrappers
 

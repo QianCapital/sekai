@@ -427,6 +427,10 @@ class MarketData:
         state.setdefault("_returns", None)
         state.setdefault("_origin", None)
         self.__dict__.update(state)
+        # NumPy 1.x pickles datetime dtypes with (empty) metadata, which np.save warns about.
+        times = self._timestamps
+        if times.dtype.metadata is not None:
+            self._timestamps = times.view(np.dtype(times.dtype.str))
         # Unpickled arrays come back writeable; a MarketData's are read-only.
         arrays = [*self._fields.values(), *self._exogenous.values(), self._timestamps, self._mask]
         for arr in [*arrays, self._returns]:

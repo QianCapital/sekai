@@ -33,8 +33,9 @@ All notable changes to sekai are documented here. The format follows
   constraints and have inverses (`from_target`) for writing baselines once.
 - Constraints by projection (`sekai.finance.constraints`): `Constraints(long_only,
   max_gross, max_position, dollar_neutral, neutral_to)` and `project()`, which enforces
-  gross and per-name caps, joint dollar and factor neutrality, untradable and unshortable
-  names, differentiably.
+  gross and per-name caps (exactly; the book follows the scores' direction, not their
+  scale), joint dollar and factor neutrality, untradable and unshortable names,
+  differentiably.
 - Factor risk models (`sekai.finance.risk`): `portfolio_variance`, `factor_exposures`, and
   `FactorRiskModel`, which tells an environment where its loadings, factor covariance and
   idiosyncratic variances are in the data; the env reports each step's ex-ante `variance`
@@ -118,14 +119,27 @@ All notable changes to sekai are documented here. The format follows
   files, memory-mapped read-only on load. Memory-mapped data (and its row slices and
   splits) pickles as its location, so `ProcVecEnv` workers map the same files instead of
   each holding a copy (on a 154 MB history, 25 MB of private memory per `Market-v1`
-  worker instead of 264 MB). `memory_mapped`, `simple_returns()` (cached), and
-  `validate=False` to skip the checks that read every value.
+  worker instead of 264 MB). `save` writes a new directory that then takes the target's
+  place, so it never leaves a half-written one, never deletes files that aren't a saved
+  `MarketData`, and can save onto the directory the data is mapped from; a pickled slice
+  refuses a directory saved over since. `load` reads nothing until it is used.
+  `memory_mapped`, `simple_returns()` (cached), and `validate=False` to skip the checks
+  that read every value.
+- `MarketData(..., copy=False)` shares float64 arrays (read-only views of them) instead of
+  copying them; data derived from a `MarketData` (`with_fields`, `with_exogenous`,
+  `adjusted`) shares its arrays without re-reading them.
 - `env.snapshot()` / `env.restore(snapshot)` on every `Env`, wrapper stack, in-process
   `VecEnv` and `BatchEnv`: the state, random generators included, restored in place, so the
   same actions give the same results (tree search, "what if" analysis, checkpoints; a
-  snapshot pickles). Immutable data (spaces, `MarketData`, market models, panels, read-only
-  arrays, classes marked with `sekai.core.snapshot.register_immutable`) is shared, not
-  copied. `ProcVecEnv` raises `NotImplementedError`.
+  snapshot pickles). Every environment involved (each wrapper, a vector env's sub-envs,
+  the batch env behind an adapter) is restored in place, so references and array views
+  stay valid. Immutable data (spaces, `MarketData`, market models, panels, scenario
+  generators, read-only arrays nothing else writes, classes marked with
+  `sekai.core.snapshot.register_immutable` or listed in `_snapshot_shared`) is shared, not
+  copied; `_snapshot_exclude` leaves resources out. `ProcVecEnv` raises
+  `NotImplementedError`, also from inside a wrapper stack, before anything is copied. An
+  environment's own `snapshot` / `restore` methods (from 0.2 code) are what `get_attr` and
+  a vector env's `call` find, as before.
 - `ProcVecEnv(max_restarts=..., step_timeout=...)`: fault-tolerant worker processes. A
   worker that dies (killed for memory, crashed in native code) or does not reply to
   `step()` / `reset()` within `step_timeout` seconds is replaced, up to `max_restarts`
@@ -146,10 +160,11 @@ All notable changes to sekai are documented here. The format follows
   `MarketData.simple_returns()` gives total returns, which `Market-v1` trades on (its
   next-open fills apply the fill day's actions to the overnight move). Off by default, so
   fields with those names stay ordinary fields, as in 0.2. `MarketData.adjusted()` returns
-  a forward-adjusted total-return price index (no future information in past prices) for
-  the environments that read prices; `has_corporate_actions`. `MarketPanel` and `Bar` carry
-  the same switch, which `MarketPanel.from_market_data` and `ReplayFeed` copy from the
-  data.
+  a forward-adjusted total-return price index (no future information in past prices),
+  which the environments that read prices (`Trading`, `Portfolio`, `Market-v0`) trade on
+  when the data has corporate actions; `has_corporate_actions`. `MarketPanel` and `Bar`
+  carry the same switch, which `MarketPanel.from_market_data` and `ReplayFeed` copy from
+  the data.
 - Trading sessions: `MarketData.sessions()` (calendar dates of datetime timestamps, or a
   `session` series), and `BatchMarketEnv(flat_overnight=True)`, which sells the book at the
   last decision of each session (`info["session_end"]`).
@@ -209,7 +224,8 @@ All notable changes to sekai are documented here. The format follows
   charts slightly shorter; pass `branding=False` for the previous plain header (in the
   unbranded palettes; `theme=sekai.rendering.LIGHT` keeps the house colours).
 
-- `split_infos` (and so every native vector env) splits nested info mappings per env.
+- `split_infos` (and so every native vector env) splits nested info mappings per env
+  (they raised `ValueError` in 0.2).
 - `Market-v0` refuses a `features=` field with several values per asset with a clear
   `ValueError` (such fields are new).
 - Given torch tensors, `project_weights`, `settle`, `turnover`, the cost models and
@@ -217,20 +233,21 @@ All notable changes to sekai are documented here. The format follows
   device; 0.2 returned float64 NumPy arrays. NumPy inputs give the same float64 results as
   before. To keep the old behaviour, convert tensors first (`sekai.backend.to_numpy`).
   These functions are annotated as returning `Any`, so type checkers no longer infer NumPy
-  arrays from them.
-- `MarketData` keeps the read-only float64 arrays it is given (read-only memory maps,
-  another `MarketData`'s arrays) instead of copying them, so slices and splits share
-  memory with their source. Writeable arrays are still copied.
-- The finance core now goes through `sekai.backend`, which costs small single
-  environments a little: on one core, `Trading-v0` makes about 12% fewer steps per second
-  than in 0.2, `Portfolio-v0` about 7% fewer, and cost models about 13% fewer calls.
-  `Market-v0`, `settle`, `project_weights` and the native vector envs are as fast as
-  before, and NumPy results are identical bit for bit.
+  arrays from them (code that type-checked still does).
+- Single environments step faster than in 0.2, with bit-identical results: on one core,
+  `Trading-v0` makes about 6% more steps per second and `Portfolio-v0` about 7% more, and
+  `Market-v0` about the same. The finance functions now dispatch on the array type, so a
+  composite cost model called on its own takes about 2.5% longer.
 
-### Removed
+### Deprecated
 
-- The `BackendOps` protocol, `default_backend` and `sekai.BackendMismatch`, deprecated in
-  0.2 with an announced removal in 0.3. `sekai.backend` is now the array layer above.
+- sekai 0.2's `sekai.backend` API, announced for removal in 0.3, is kept and still warns:
+  `BackendOps`, `default_backend`, the modules `sekai.backend.protocol` and
+  `sekai.backend.numpy_backend`, and `sekai.BackendMismatch`. `NumpyBackend` keeps its 0.2
+  methods (`ones`, `concatenate`, `astype`, `random_uniform`, `random_integers`,
+  `array_equal`, `zeros(shape, dtype)`) alongside the new `Backend` interface.
+- The `fn=` keyword of `TransformObservation` / `TransformReward`, announced for removal in
+  0.3, is kept and still warns; use `func=`.
 
 ## [0.2.0] - 2026-10-20
 
