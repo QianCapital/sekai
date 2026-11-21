@@ -319,6 +319,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                     exogenous={**panel.exogenous, "session": B.asfloat(sessions, panel.returns)},
                     timestamps=panel.timestamps,
                     assets=panel.assets,
+                    corporate_actions=panel.corporate_actions,
                 )
             ppy = data.periods_per_year
             self.dt = dt if dt is not None else (1.0 / ppy if ppy else 1 / 252)
@@ -386,7 +387,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         if self.execution in _FILL_FIELD:
             assets |= {_FILL_FIELD[self.execution], close}
             # Corporate actions on the fill day adjust the overnight move (if the data has them).
-            if data is not None:
+            if data is not None and data.has_corporate_actions:
                 assets |= {"split", "dividend"} & set(data.fields)
         if self.flat_overnight and data is None:
             market.add("session")  # from MarketData, computed from the timestamps
@@ -433,13 +434,18 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 k: v[:, :W]
                 for k, v in panel.fields.items()
                 if k in asset_fields
-                or (k in ("split", "dividend") and self.execution in _FILL_FIELD)
+                or (
+                    k in ("split", "dividend")
+                    and panel.corporate_actions
+                    and self.execution in _FILL_FIELD
+                )
                 or (k == "volatility" and "volatility" in self.cost_model.requires)
             },
             exogenous={k: v[:, :W] for k, v in panel.exogenous.items()},
             timestamps=None if panel.timestamps is None else np.asarray(panel.timestamps)[..., :W],
             assets=panel.assets,
             state={k: v[:, :W] for k, v in panel.state.items()},
+            corporate_actions=panel.corporate_actions,
         )
         return cut.to(B, device=dev, dtype=self._dtype)
 
@@ -694,6 +700,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             timestamps=timestamps,
             assets=panel.assets,
             state={k: put(v, fresh.state[k]) for k, v in panel.state.items()},
+            corporate_actions=panel.corporate_actions,
         )
 
     def _observe(self) -> dict[str, Any]:
@@ -787,10 +794,10 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 close_next = close[p2, nxt[:, None], cols]
                 priced = both & B.isfinite(fill_next) & B.isfinite(close_now)
                 value_next = fill_next  # a share's value at the fill, dividends and splits in
-                if "dividend" in panel.fields:
+                if panel.corporate_actions and "dividend" in panel.fields:
                     cash = panel.fields["dividend"][p2, nxt[:, None], cols]
                     value_next = value_next + B.where(B.isfinite(cash), cash, 0.0)
-                if "split" in panel.fields:
+                if panel.corporate_actions and "split" in panel.fields:
                     ratio = panel.fields["split"][p2, nxt[:, None], cols]
                     value_next = value_next * B.where(B.isfinite(ratio), ratio, 1.0)
                 move = B.where(priced, value_next / B.where(priced, close_now, 1.0) - 1.0, 0.0)

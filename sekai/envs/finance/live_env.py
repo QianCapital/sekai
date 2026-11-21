@@ -193,10 +193,11 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
         }
         fields["close"] = prices
         value = prices[1:]
-        if "dividend" in bars[-1].fields:
+        actions = bars[-1].corporate_actions
+        if actions and "dividend" in bars[-1].fields:
             div = np.stack([np.asarray(b.fields["dividend"], dtype=np.float64) for b in bars[1:]])
             value = value + np.nan_to_num(div, nan=0.0)
-        if "split" in bars[-1].fields:
+        if actions and "split" in bars[-1].fields:
             ratio = np.stack([np.asarray(b.fields["split"], dtype=np.float64) for b in bars[1:]])
             value = value * np.where(np.isfinite(ratio), ratio, 1.0)
         returns = np.full(prices.shape, np.nan)

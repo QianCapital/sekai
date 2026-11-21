@@ -216,6 +216,10 @@ class MarketData:
         validate: Check the values (no infinities, positive prices, increasing
             timestamps). False skips the checks that read every value, for data already
             validated, such as a `load()` of data that `save()` wrote.
+        corporate_actions: Read the fields `split` and `dividend` as corporate actions
+            (see `simple_returns`): they are checked, returns include them, and
+            environments and brokers apply them. Off by default, so fields with those
+            names are ordinary fields, as they were in 0.2.
 
     Read-only float64 arrays (a memory map opened read-only, another MarketData's
     arrays) are used as they are rather than copied, so derived data (`split`, slices)
@@ -225,6 +229,11 @@ class MarketData:
         ```python
         data = MarketData(closes, timestamps=dates, assets=tickers, fields={"volume": volumes})
         train, test = data.split(0.8, embargo=5, history=60)
+
+        # Raw (unadjusted) prices with their splits and dividends:
+        data = MarketData(
+            raw_closes, fields={"split": splits, "dividend": dividends}, corporate_actions=True
+        )
         ```
     """
 
@@ -239,6 +248,7 @@ class MarketData:
         price_field: str = "close",
         warmup: int = 0,
         validate: bool = True,
+        corporate_actions: bool = False,
     ) -> None:
         raw: dict[str, ArrayLike] = dict(fields or {})
         if prices is not None:
@@ -273,14 +283,21 @@ class MarketData:
         price = arrays[price_field]
         if validate and np.any(price[np.isfinite(price)] <= 0):
             raise ValueError("prices must be positive where they are defined (NaN = not listed).")
-        if validate and "split" in arrays:
-            ratios = arrays["split"]
-            if ratios.ndim != 2 or np.any(ratios[np.isfinite(ratios)] <= 0):
-                raise ValueError("the split field must be (T, N) and positive (NaN = no split).")
-        if validate and "dividend" in arrays:
-            cash = arrays["dividend"]
-            if cash.ndim != 2 or np.any(cash[np.isfinite(cash)] < 0):
-                raise ValueError("the dividend field must be (T, N) and >= 0 (NaN = none).")
+        if corporate_actions:
+            if "split" not in arrays and "dividend" not in arrays:
+                raise ValueError(
+                    "corporate_actions=True needs a 'split' or a 'dividend' field (or both)."
+                )
+            if validate and "split" in arrays:
+                ratios = arrays["split"]
+                if ratios.ndim != 2 or np.any(ratios[np.isfinite(ratios)] <= 0):
+                    raise ValueError(
+                        "the split field must be (T, N) and positive (NaN = no split)."
+                    )
+            if validate and "dividend" in arrays:
+                cash = arrays["dividend"]
+                if cash.ndim != 2 or np.any(cash[np.isfinite(cash)] < 0):
+                    raise ValueError("the dividend field must be (T, N) and >= 0 (NaN = none).")
 
         if timestamps is None:
             times: NDArray[Any] = np.arange(n_steps, dtype=np.int64)
@@ -333,6 +350,7 @@ class MarketData:
         self._exogenous = exo
         self.price_field = price_field
         self._warmup = n_warmup
+        self._corporate_actions = bool(corporate_actions)
         self._mask: NDArray[np.bool_] = _readonly(np.isfinite(price))
         self._returns: NDArray[np.float64] | None = None
         # (directory, first row, end row) when the arrays are memory-mapped from a saved
@@ -351,12 +369,14 @@ class MarketData:
         fields: Mapping[str, Any] | None = None,
         exogenous: Any = None,
         price_field: str = "close",
+        corporate_actions: bool = False,
     ) -> MarketData:
         """Build from wide pandas DataFrames (index = timestamps, columns = assets).
 
         Every field is aligned to the prices' index and columns (missing → NaN).
         `exogenous` is a DataFrame (one series per column) or a mapping of name
-        to Series/DataFrame, aligned to the same index.
+        to Series/DataFrame, aligned to the same index. `corporate_actions` is as in
+        the constructor.
         """
         index = prices.index
         columns = prices.columns
@@ -375,6 +395,7 @@ class MarketData:
             assets=[str(c) for c in columns],
             exogenous=exo,
             price_field=price_field,
+            corporate_actions=corporate_actions,
         )
 
     @classmethod
@@ -386,11 +407,13 @@ class MarketData:
         asset: str = "symbol",
         price: str = "close",
         fields: Sequence[str] = (),
+        corporate_actions: bool = False,
     ) -> MarketData:
         """Build from a long ("tidy") DataFrame with one row per (time, asset).
 
         Columns `time` and `asset` identify the row, `price` holds the price, and
-        each column in `fields` becomes a field of the same name.
+        each column in `fields` becomes a field of the same name. `corporate_actions`
+        is as in the constructor.
         """
         wide = frame.pivot_table(index=time, columns=asset, values=[price, *fields], aggfunc="last")
         wide = wide.sort_index()
@@ -399,6 +422,7 @@ class MarketData:
             prices,
             fields={name: wide[name] for name in fields},
             price_field=price,
+            corporate_actions=corporate_actions,
         )
 
     # ------------------------------------------------------------------
@@ -489,10 +513,11 @@ class MarketData:
         """`(T, N)` simple returns of holding each asset over `(t - 1, t]`; NaN in row 0 and
         wherever either price is missing (read-only, computed once).
 
-        Without corporate actions this is `prices[t] / prices[t - 1] - 1`. With a `split`
-        field (new shares per old share, effective at row t: 2.0 for a 2-for-1 split; NaN
-        means none) and a `dividend` field (cash per share, after any split, going ex at
-        row t; NaN means none), it is the total return of a holder:
+        Without corporate actions this is `prices[t] / prices[t - 1] - 1`. Data built
+        with `corporate_actions=True` may have a `split` field (new shares per old share,
+        effective at row t: 2.0 for a 2-for-1 split; NaN means none) and a `dividend`
+        field (cash per share, after any split, going ex at row t; NaN means none); the
+        return is then the total return of a holder:
         `split[t] * (prices[t] + dividend[t]) / prices[t - 1] - 1`, so raw (unadjusted)
         prices give the right returns.
         """
@@ -500,9 +525,9 @@ class MarketData:
             price = self.prices
             out = np.full(price.shape, np.nan)
             now = price[1:]
-            if "dividend" in self._fields:
+            if self._corporate_actions and "dividend" in self._fields:
                 now = now + np.nan_to_num(self._fields["dividend"][1:], nan=0.0)
-            if "split" in self._fields:
+            if self._corporate_actions and "split" in self._fields:
                 ratio = self._fields["split"][1:]
                 now = now * np.where(np.isfinite(ratio), ratio, 1.0)
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -512,11 +537,14 @@ class MarketData:
 
     @property
     def has_corporate_actions(self) -> bool:
-        """Whether the data has `split` or `dividend` fields (see `simple_returns`)."""
-        return "split" in self._fields or "dividend" in self._fields
+        """Whether the `split` and `dividend` fields are corporate actions (the data was
+        built with `corporate_actions=True`; see `simple_returns`)."""
+        return self._corporate_actions
 
     def adjusted(self) -> MarketData:
         """A copy whose prices are a total-return index, with the corporate-action fields removed.
+
+        Data without corporate actions is returned as it is.
 
         Each listed stretch of an asset starts at its raw price and then moves with
         `simple_returns()`, so splits no longer look like crashes and dividends are
@@ -529,6 +557,8 @@ class MarketData:
         derive a share-count field such as `volume` into a traded value first
         (`dollar_volume`, which `Market-v1`'s cost models prefer) if a split affects it.
         """
+        if not self._corporate_actions:
+            return self
         price = self.prices
         r = self.simple_returns()
         index = np.array(price, copy=True)
@@ -624,6 +654,7 @@ class MarketData:
             price_field=self.price_field,
             warmup=max(int(kept), warmup),
             validate=False,  # a subset of validated data
+            corporate_actions=self._corporate_actions,
         )
         if isinstance(r, slice) and cols is None:
             start, stop, step = r.indices(self.n_steps)
@@ -674,6 +705,7 @@ class MarketData:
             exogenous=self._exogenous,
             price_field=self.price_field,
             warmup=self._warmup,
+            corporate_actions=self._corporate_actions,
         )
 
     def with_exogenous(self, **arrays: ArrayLike) -> MarketData:
@@ -685,6 +717,7 @@ class MarketData:
             exogenous={**self._exogenous, **arrays},
             price_field=self.price_field,
             warmup=self._warmup,
+            corporate_actions=self._corporate_actions,
         )
 
     # ------------------------------------------------------------------
@@ -696,7 +729,7 @@ class MarketData:
 
         The directory holds one file per field and exogenous series, the timestamps, the
         validity mask, the simple returns and a `metadata.json` (names, asset ids, price
-        field, warm-up). Asset ids must be JSON values (strings or numbers).
+        field, warm-up, corporate actions). Asset ids must be JSON values (strings or numbers).
 
         Args:
             path: The directory (created if needed).
@@ -735,6 +768,7 @@ class MarketData:
             "assets": [a.item() if isinstance(a, np.generic) else a for a in assets],
             "price_field": self.price_field,
             "warmup": self._warmup,
+            "corporate_actions": self._corporate_actions,
         }
         (root / "metadata.json").write_text(json.dumps(meta, indent=1))
         return root
@@ -784,6 +818,7 @@ class MarketData:
             price_field=meta["price_field"],
             warmup=int(meta["warmup"]),
             validate=False,  # validated when it was built, before save()
+            corporate_actions=bool(meta.get("corporate_actions", False)),
         )
         data._mask = read("mask.npy")
         data._returns = read("returns.npy")
@@ -911,6 +946,8 @@ class MarketData:
         extra = f", exogenous={sorted(self._exogenous)}" if self._exogenous else ""
         if self._warmup:
             extra += f", warmup={self._warmup}"
+        if self._corporate_actions:
+            extra += ", corporate_actions=True"
         return (
             f"MarketData(T={self.n_steps}, N={self.n_assets}, fields={sorted(self._fields)}"
             f"{extra}, {first} .. {last})"

@@ -60,15 +60,20 @@ class Bar:
     Attributes:
         timestamp: When the period ended.
         prices: `(N,)` closing prices; NaN for an asset that cannot be traded.
-        fields: Per-asset data, `(N, ...)` each: volume, spread, borrow rates, `split` and
-            `dividend` (corporate actions effective in this period).
+        fields: Per-asset data, `(N, ...)` each: volume, spread, borrow rates, and with
+            `corporate_actions` the period's `split` and `dividend`.
         exogenous: Market-wide data of the period.
+        corporate_actions: Whether the fields `split` (new shares per old share) and
+            `dividend` (cash per share) are corporate actions effective in this period,
+            as in `MarketData.simple_returns`. Otherwise fields with those names are
+            ordinary fields.
     """
 
     timestamp: Any
     prices: Array
     fields: Mapping[str, Array] = field(default_factory=dict)
     exogenous: Mapping[str, Any] = field(default_factory=dict)
+    corporate_actions: bool = False
 
 
 @runtime_checkable
@@ -111,6 +116,7 @@ class ReplayFeed:
             prices=np.asarray(d.prices[t], dtype=np.float64),
             fields={k: np.asarray(v[t]) for k, v in d.fields.items() if k != d.price_field},
             exogenous={k: np.asarray(v[t]) for k, v in d.exogenous.items()},
+            corporate_actions=d.has_corporate_actions,
         )
 
     def __repr__(self) -> str:
@@ -180,8 +186,8 @@ class PaperBroker:
     """A simulated account with sekai's accounting: the backtest's numbers, bar by bar.
 
     Trades fill at the bar's close at a cost from `transaction_cost`; positions then earn
-    the assets' total returns (corporate actions in the next bar's `split` and `dividend`
-    fields count), cash earns `cash_rate` (or pays `margin_rate`), shorts pay
+    the assets' total returns (the next bar's `split` and `dividend` fields count when it
+    has `corporate_actions`), cash earns `cash_rate` (or pays `margin_rate`), shorts pay
     `borrow_rate`, and `holding_cost` charges the rest; an asset that stops trading
     returns `delisting_return` and its position becomes cash.
 
@@ -264,11 +270,11 @@ class PaperBroker:
             raise RuntimeError("PaperBroker.mark() needs an execute() first.")
         prev, now = self._prices, np.asarray(bar.prices, dtype=np.float64)
         value = now
-        if "dividend" in bar.fields:
+        if bar.corporate_actions and "dividend" in bar.fields:
             value = value + np.nan_to_num(
                 np.asarray(bar.fields["dividend"], dtype=np.float64), nan=0.0
             )
-        if "split" in bar.fields:
+        if bar.corporate_actions and "split" in bar.fields:
             ratio = np.asarray(bar.fields["split"], dtype=np.float64)
             value = value * np.where(np.isfinite(ratio), ratio, 1.0)
         with np.errstate(invalid="ignore", divide="ignore"):

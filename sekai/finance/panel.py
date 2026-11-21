@@ -76,6 +76,10 @@ class MarketPanel:
         assets: The `N` asset identifiers, or None.
         state: Latent series of a simulation, `(P, T, ...)` each (e.g. the regime), for
             privileged information; empty for historical data.
+        corporate_actions: Whether the fields `split` and `dividend` are corporate
+            actions (see `MarketData.simple_returns`), which `returns` already include
+            and environments apply when they fill at a price other than the close.
+            Otherwise fields with those names are ordinary fields.
 
     Raises:
         ValueError: If the shapes disagree or the arrays mix backends.
@@ -88,6 +92,7 @@ class MarketPanel:
     timestamps: NDArray[Any] | None = None
     assets: tuple[Any, ...] | None = None
     state: Mapping[str, Array] = field(default_factory=dict)
+    corporate_actions: bool = False
 
     def __post_init__(self) -> None:
         if self.returns.ndim != 3:
@@ -165,6 +170,7 @@ class MarketPanel:
             timestamps=self.timestamps,
             assets=self.assets,
             state={k: conv(v) for k, v in self.state.items()},
+            corporate_actions=self.corporate_actions,
         )
 
     # ------------------------------------------------------------------
@@ -182,6 +188,7 @@ class MarketPanel:
         timestamps: Any = None,
         assets: Sequence[Any] | None = None,
         state: Mapping[str, Any] | None = None,
+        corporate_actions: bool = False,
     ) -> MarketPanel:
         """A panel from arrays already on their backend (the usual way generators build one).
 
@@ -194,6 +201,8 @@ class MarketPanel:
             timestamps: NumPy timestamps `(T,)` or `(P, T)`.
             assets: `N` asset identifiers.
             state: Latent series `(P, T, ...)`.
+            corporate_actions: The fields `split` and `dividend` are corporate actions
+                (which `returns` must already include).
         """
         B = backend_of(returns)
         r = B.asfloat(returns)
@@ -206,6 +215,7 @@ class MarketPanel:
             timestamps=None if timestamps is None else np.asarray(timestamps),
             assets=None if assets is None else tuple(assets),
             state={k: B.asfloat(v, r) for k, v in (state or {}).items()},
+            corporate_actions=corporate_actions,
         )
 
     @classmethod
@@ -221,8 +231,9 @@ class MarketPanel:
     ) -> MarketPanel:
         """A one-path panel of a `MarketData` history.
 
-        Returns are close-to-close (`prices[t] / prices[t - 1] - 1`, NaN where either
-        price is missing), and `valid` is where a price exists. On the NumPy backend the
+        Returns are `data.simple_returns()`: close-to-close (`prices[t] / prices[t - 1] -
+        1`, NaN where either price is missing), with the data's corporate actions if it
+        has them. `valid` is where a price exists. On the NumPy backend the
         panel shares the data's arrays (memory maps included) instead of copying them.
 
         Args:
@@ -248,6 +259,7 @@ class MarketPanel:
             exogenous={name: conv(data.exogenous_series(name)) for name in series},
             timestamps=data.timestamps,
             assets=data.assets,
+            corporate_actions=data.has_corporate_actions,
         )
 
     @classmethod

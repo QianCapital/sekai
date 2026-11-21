@@ -47,8 +47,25 @@ def history(n_steps: int = 400, seed: int = 0) -> MarketData:
 DATA = history()
 
 
+def with_actions(data: MarketData) -> MarketData:
+    """`data` with a few splits and dividends, as corporate actions."""
+    split = np.full(data.prices.shape, np.nan)
+    split[120, 0], split[90, 3] = 2.0, 0.5
+    dividend = np.full(data.prices.shape, np.nan)
+    dividend[60::40, 1] = 0.3
+    fields = {k: v for k, v in data.fields.items() if k != data.price_field}
+    return MarketData(
+        data.prices,
+        fields={**fields, "split": split, "dividend": dividend},
+        timestamps=data.timestamps,
+        corporate_actions=True,
+    )
+
+
+@pytest.mark.parametrize("actions", [False, True])
 @pytest.mark.parametrize("execution", ["next_close", "close"])
-def test_paper_trading_reproduces_market_v1(execution: str) -> None:
+def test_paper_trading_reproduces_market_v1(execution: str, actions: bool) -> None:
+    data = with_actions(DATA) if actions else DATA
     lookback, start = 10, 50
     cost = SpreadCost() + SquareRootImpact(0.3)
     account: dict[str, Any] = dict(
@@ -62,11 +79,11 @@ def test_paper_trading_reproduces_market_v1(execution: str) -> None:
         action=TargetWeights(1.5),
     )
     batch = sekai.make(
-        "Market-v1", data=DATA, transaction_cost=cost, holding_cost=BorrowFee(), **account, **common
+        "Market-v1", data=data, transaction_cost=cost, holding_cost=BorrowFee(), **account, **common
     )
     dt = batch.unwrapped.batch_env.dt
     broker = PaperBroker(transaction_cost=cost, holding_cost=BorrowFee(), dt=dt, **account)
-    live = LiveMarketEnv(ReplayFeed(DATA, start=start - lookback), broker, dt=dt, **common)
+    live = LiveMarketEnv(ReplayFeed(data, start=start - lookback), broker, dt=dt, **common)
     a, b = batch.reset(seed=0, options={"start": start}), live.reset()
     np.testing.assert_allclose(
         b.observation["assets"]["values"], a.observation["assets"]["values"], atol=1e-6
@@ -129,7 +146,8 @@ def test_paper_broker_accounting() -> None:
     split = PaperBroker(transaction_cost=NoCost())
     split.reset(("a",))
     split.execute(np.array([1.0]), Bar(0, np.array([100.0])), {})
-    state = split.mark(Bar(1, np.array([50.0]), fields={"split": np.array([2.0])}))
+    two_for_one = {"split": np.array([2.0])}
+    state = split.mark(Bar(1, np.array([50.0]), fields=two_for_one, corporate_actions=True))
     assert state.equity == pytest.approx(1.0)  # a 2-for-1 split is no loss
 
 

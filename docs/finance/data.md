@@ -58,11 +58,12 @@ print(data.mask.astype(int))
 | Argument | Shape | Rules |
 |---|---|---|
 | `prices` | `(T, N)`, or `(T,)` for one asset | stored as the field `price_field` (default `"close"`); NaN = not listed; finite prices must be positive |
-| `fields` | each `(T, N)` | more per-asset data: volumes, spreads, features; NaN allowed, infinities not |
+| `fields` | each `(T, N)` or `(T, N, ...)` | more per-asset data: volumes, spreads, features, factor loadings `(T, N, k)`; NaN allowed, infinities not |
 | `timestamps` | `(T,)` | strictly increasing `datetime64` (date strings and `datetime` objects are converted) or numbers; default `0, 1, ..., T-1`; timezone-aware values raise `ValueError` ([below](#from-pandas)) |
 | `assets` | `N` ids | unique; default `"asset_0", "asset_1", ...` |
 | `exogenous` | each `(T,)` or `(T, k)` | market-wide series: interest rates, an index level, macro data |
 | `warmup` | `int`, default 0 | leading rows that are lookback-only history: observed, never a decision row (set by [splits](#chronological-splits)) |
+| `corporate_actions` | `bool`, default False | read the fields `split` and `dividend` as [corporate actions](#corporate-actions); off, they are ordinary fields |
 
 | Accessor | Returns |
 |---|---|
@@ -155,11 +156,18 @@ explicitly first: `frame.tz_convert("UTC").tz_localize(None)` to work in UTC, or
 Give `MarketData` raw (unadjusted) prices with a `split` field (new shares per old share,
 effective at a row: `2.0` for a 2-for-1 split, `0.5` for a 1-for-2 reverse split) and a
 `dividend` field (cash per share, after any split, going ex at a row), NaN where there is
-none, and `simple_returns()` gives a holder's total return,
+none, and `corporate_actions=True`. `simple_returns()` then gives a holder's total return,
 `split[t] * (prices[t] + dividend[t]) / prices[t - 1] - 1`, rather than the price change:
 a split no longer looks like a crash and dividends count. `Market-v1` trades on these
 returns directly (and its next-open fills apply the fill day's corporate actions to the
 overnight move), so raw prices with these fields behave exactly like adjusted prices.
+
+The switch is off by default, so fields that merely have these names (as data built for
+sekai 0.2 may) stay ordinary fields, with any values. Data derived from `MarketData`
+(slices, `split`, `select`, `with_fields`, `save` and `load`) keeps it, and
+`MarketPanel.from_market_data` and `ReplayFeed` pass it on to the panels and bars they
+build. A scenario generator or a live feed that supplies corporate actions sets
+`corporate_actions=True` on its `MarketPanel` or `Bar` itself.
 
 The environments that compute returns from prices (`Trading`, `Portfolio`, `Market-v0`)
 need adjusted prices instead: `data.adjusted()` replaces the prices with a total-return
@@ -173,7 +181,7 @@ which `Market-v1`'s cost models prefer) before a split makes them inconsistent.
 prices = np.array([[100.0], [102.0], [51.5], [52.0], [51.0]])
 split = np.array([[np.nan], [np.nan], [2.0], [np.nan], [np.nan]])  # 2-for-1 at row 2
 dividend = np.array([[np.nan], [np.nan], [np.nan], [np.nan], [0.5]])  # 0.50 ex at row 4
-raw = MarketData(prices, fields={"split": split, "dividend": dividend})
+raw = MarketData(prices, fields={"split": split, "dividend": dividend}, corporate_actions=True)
 print(raw.simple_returns()[:, 0].round(4))  # [    nan  0.02    0.0098  0.0097 -0.0096]
 print(raw.adjusted().prices[:, 0])  # [100. 102. 103. 104. 103.]
 ```

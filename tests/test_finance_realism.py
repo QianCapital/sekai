@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -9,7 +11,16 @@ import pytest
 
 import sekai
 from sekai.envs.finance import BatchMarketEnv
-from sekai.finance import MarketData, NoCost, ProportionalCost, TargetWeights
+from sekai.finance import (
+    Bar,
+    MarketData,
+    MarketPanel,
+    NoCost,
+    PaperBroker,
+    ProportionalCost,
+    ReplayFeed,
+    TargetWeights,
+)
 
 
 def raw_history(seed: int = 0) -> MarketData:
@@ -28,7 +39,9 @@ def raw_history(seed: int = 0) -> MarketData:
     # Dividends paid out lower the raw price by the cash paid.
     paid = np.cumsum(np.nan_to_num(dividend), axis=0)
     raw = raw - paid
-    return MarketData(raw, fields={"split": split, "dividend": dividend, "open": raw})
+    return MarketData(
+        raw, fields={"split": split, "dividend": dividend, "open": raw}, corporate_actions=True
+    )
 
 
 def test_total_returns() -> None:
@@ -43,15 +56,21 @@ def test_total_returns() -> None:
     np.testing.assert_allclose(adj.prices[1:] / adj.prices[:-1] - 1, r[1:], rtol=1e-12)
     np.testing.assert_array_equal(adj.prices[0], p[0])  # forward adjusted: starts at the raw price
     assert "open" in adj.fields and "split" not in adj.fields
+    bad_split = {"split": np.array([[np.nan], [-2.0], [np.nan]])}
     with pytest.raises(ValueError, match="split field"):
-        MarketData(np.ones((3, 1)), fields={"split": np.array([[np.nan], [-2.0], [np.nan]])})
+        MarketData(np.ones((3, 1)), fields=bad_split, corporate_actions=True)
+    bad_dividend = {"dividend": np.array([[np.nan], [-1.0], [np.nan]])}
     with pytest.raises(ValueError, match="dividend field"):
-        MarketData(np.ones((3, 1)), fields={"dividend": np.array([[np.nan], [-1.0], [np.nan]])})
+        MarketData(np.ones((3, 1)), fields=bad_dividend, corporate_actions=True)
 
 
 def test_adjusted_restarts_each_listed_stretch() -> None:
     p = np.array([[10.0], [11.0], [np.nan], [20.0], [22.0]])
-    np.testing.assert_allclose(MarketData(p).adjusted().prices[:, 0], [10, 11, np.nan, 20, 22])
+    split = np.array([[np.nan], [np.nan], [np.nan], [np.nan], [2.0]])
+    data = MarketData(p, fields={"split": split}, corporate_actions=True)
+    np.testing.assert_allclose(data.adjusted().prices[:, 0], [10, 11, np.nan, 20, 44])
+    plain = MarketData(p)
+    assert plain.adjusted() is plain  # nothing to adjust
 
 
 @pytest.mark.parametrize("execution", ["close", "next_close"])
@@ -80,7 +99,7 @@ def test_raw_prices_with_actions_trade_like_adjusted_prices(execution: str) -> N
 def test_next_open_overnight_move_includes_corporate_actions() -> None:
     p = np.array([[100.0], [100.0], [50.0], [50.0]])
     split = np.array([[np.nan], [np.nan], [2.0], [np.nan]])
-    data = MarketData(p, fields={"open": p, "split": split})
+    data = MarketData(p, fields={"open": p, "split": split}, corporate_actions=True)
     env = BatchMarketEnv(
         1,
         data=data,
@@ -94,6 +113,65 @@ def test_next_open_overnight_move_includes_corporate_actions() -> None:
     env.step(np.array([[1.0]]))  # long from the open of row 2: no change in value over the split
     out = env.step(np.array([[1.0]]))
     assert float(out.info["equity"][0]) == pytest.approx(1.0)
+
+
+def test_split_and_dividend_are_ordinary_fields_by_default() -> None:
+    """Without corporate_actions=True the names mean nothing, as in 0.2: any values, no effect."""
+    rng = np.random.default_rng(1)
+    p = np.cumprod(1 + rng.normal(0, 0.01, (60, 2)), axis=0) * 100
+    other = {"split": rng.normal(size=(60, 2)), "dividend": -np.ones((60, 2, 3))}
+    data = MarketData(p, fields={"open": p, **other})
+    plain = MarketData(p, fields={"open": p})
+    assert not data.has_corporate_actions and data.adjusted() is data
+    np.testing.assert_array_equal(data.simple_returns(), plain.simple_returns())
+    assert not MarketPanel.from_market_data(data).corporate_actions
+    bar = ReplayFeed(data).next_bar()
+    assert bar is not None and not bar.corporate_actions and "split" in bar.fields
+
+    def run(d: MarketData) -> list[float]:
+        env = BatchMarketEnv(
+            1,
+            data=d,
+            lookback=1,
+            episode_length=40,
+            execution="next_open",
+            transaction_cost=NoCost(),
+            action=TargetWeights(),
+        )
+        env.reset(seed=0, options={"start": 1})
+        return [float(env.step(np.array([[0.7, 0.3]])).info["equity"][0]) for _ in range(40)]
+
+    assert run(data) == run(plain)
+    broker = PaperBroker(transaction_cost=NoCost())
+    broker.reset(("a",))
+    broker.execute(np.array([1.0]), Bar(0, np.array([100.0])), {})
+    state = broker.mark(Bar(1, np.array([50.0]), fields={"split": np.array([2.0])}))
+    assert state.equity == pytest.approx(0.5)  # an ordinary field: the price halved
+
+
+def test_corporate_actions_switch(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="needs a 'split' or a 'dividend' field"):
+        MarketData(np.ones((3, 1)), fields={"splits": np.ones((3, 1))}, corporate_actions=True)
+    data = raw_history()
+    assert "corporate_actions=True" in repr(data)
+    saved = MarketData.load(data.save(tmp_path / "data"))
+    derived = [
+        data[10:200],
+        data.select(["asset_1", "asset_3"]),
+        data.with_fields(signal=data.prices),
+        data.with_exogenous(rate=np.zeros(data.n_steps)),
+        *data.split(0.5, embargo=2, history=5),
+        saved,
+        saved[20:100],
+        pickle.loads(pickle.dumps(saved)),
+        pickle.loads(pickle.dumps(data)),
+    ]
+    assert all(d.has_corporate_actions for d in derived)
+    np.testing.assert_array_equal(saved.simple_returns(), data.simple_returns())
+    panel = MarketPanel.from_market_data(data)
+    assert panel.corporate_actions and panel.to("numpy").corporate_actions
+    bar = ReplayFeed(data).next_bar()
+    assert bar is not None and bar.corporate_actions
 
 
 def intraday(days: int = 6, bars: int = 4) -> MarketData:

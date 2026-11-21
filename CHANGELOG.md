@@ -143,12 +143,15 @@ All notable changes to sekai are documented here. The format follows
 
 **Market realism**
 
-- Corporate actions: with raw prices and `split` (new shares per old share) and `dividend`
-  (cash per share) fields, `MarketData.simple_returns()` gives total returns, which
-  `Market-v1` trades on (its next-open fills apply the fill day's actions to the overnight
-  move). `MarketData.adjusted()` returns a forward-adjusted total-return price index (no
-  future information in past prices) for the environments that read prices;
-  `has_corporate_actions`.
+- Corporate actions, opt-in: `MarketData(..., corporate_actions=True)` reads `split` (new
+  shares per old share) and `dividend` (cash per share) fields with raw prices, and
+  `MarketData.simple_returns()` gives total returns, which `Market-v1` trades on (its
+  next-open fills apply the fill day's actions to the overnight move). Off by default, so
+  fields with those names stay ordinary fields, as in 0.2. `MarketData.adjusted()` returns
+  a forward-adjusted total-return price index (no future information in past prices) for
+  the environments that read prices; `has_corporate_actions`. `MarketPanel` and `Bar` carry
+  the same switch, which `MarketPanel.from_market_data` and `ReplayFeed` copy from the
+  data.
 - Trading sessions: `MarketData.sessions()` (calendar dates of datetime timestamps, or a
   `session` series), and `BatchMarketEnv(flat_overnight=True)`, which sells the book at the
   last decision of each session (`info["session_end"]`).

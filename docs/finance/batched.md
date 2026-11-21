@@ -72,7 +72,8 @@ period in which the order fills, and the volatility of the window the decision o
 
 **Your history.** `data=` takes a `MarketData` (see [Market data](data.md)), with every
 feature, cost and risk input as a field. Raw prices with `split` and `dividend` fields
-trade on total returns ([corporate actions](data.md#corporate-actions)), and a
+and `corporate_actions=True` trade on total returns
+([corporate actions](data.md#corporate-actions)), and a
 [memory-mapped](data.md#saving-and-memory-mapping) `MarketData` is shared by every worker
 process instead of copied. Episodes are windows of it, placed by `sampler=`
 (each lane gets `sampler.spawn()`) or by `reset(options={"start": ...})`. sekai never
