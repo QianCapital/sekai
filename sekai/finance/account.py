@@ -151,10 +151,9 @@ def settle(
     w = B.asfloat(weights, like)
     r = B.nan_to_num(B.asfloat(returns, like))
     cash = 1.0 - B.sum(w, axis=-1)
-    # An array branch keeps the rates in the arrays' precision (a float64 torch account too).
-    rate = B.where(
-        cash >= 0, B.full(tuple(cash.shape), config.cash_rate, like=w), config.effective_margin_rate
-    )
+    # A 0-d array branch keeps the rates in the arrays' precision (a float64 torch account
+    # too); with NumPy it gives the float64 that two Python floats would.
+    rate = B.where(cash >= 0, B.asfloat(config.cash_rate, w), config.effective_margin_rate)
     financing = cash * rate * dt - config.borrow_rate * dt * B.sum(B.clip(-w, 0.0, None), axis=-1)
     if holding is not None:
         financing = financing - B.asfloat(holding, like)

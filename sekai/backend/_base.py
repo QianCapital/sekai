@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import abc
 import contextlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from numpy.typing import NDArray
@@ -228,10 +228,9 @@ class Backend(abc.ABC):
     def tiny(self, like: Array | None = None) -> float:
         """The smallest positive normal number of the float dtype at hand."""
 
-    @contextlib.contextmanager
-    def errstate(self) -> Iterator[None]:
+    def errstate(self) -> contextlib.AbstractContextManager[Any]:
         """Silence floating-point warnings (NumPy's `errstate`; a no-op for torch)."""
-        yield
+        return contextlib.nullcontext()
 
     def __repr__(self) -> str:
         return f"<sekai backend {self.name!r}>"

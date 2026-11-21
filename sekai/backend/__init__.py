@@ -31,6 +31,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+import numpy as np
 from numpy.typing import NDArray
 
 from sekai.backend._base import Array, Backend
@@ -42,6 +43,12 @@ numpy_backend: Backend = NumpyBackend()
 _torch_backend: Backend | None = None
 
 _TORCH_HINT = 'The torch backend needs PyTorch: pip install "sekai[torch]" (or torch itself).'
+
+# Types that are never tensors. They are checked first because `isinstance` against
+# `torch.Tensor` is slow (it has a metaclass check), and NumPy code calls the dispatch
+# below several times a step: with these, it costs NumPy code next to nothing, also
+# when torch is imported for a policy.
+_NOT_TENSORS = frozenset({np.ndarray, float, int, bool, type(None), np.float64, np.bool_})
 
 
 def _load_torch() -> Backend:
@@ -57,6 +64,8 @@ def _load_torch() -> Backend:
 
 def is_tensor(x: Any) -> bool:
     """Whether `x` is a torch tensor (without importing torch)."""
+    if type(x) in _NOT_TENSORS:
+        return False
     torch = sys.modules.get("torch")
     return torch is not None and isinstance(x, torch.Tensor)
 
@@ -79,9 +88,7 @@ def get_backend(name: str | Backend) -> Backend:
 
 def backend_of(*arrays: Any) -> Backend:
     """The backend of `arrays`: torch if any of them is a tensor, else NumPy."""
-    if any(is_tensor(a) for a in arrays):
-        return _load_torch()
-    return numpy_backend
+    return backend_and_like(*arrays)[0]
 
 
 def backend_and_like(*arrays: Any) -> tuple[Backend, Any]:
@@ -89,9 +96,12 @@ def backend_and_like(*arrays: Any) -> tuple[Backend, Any]:
 
     New arrays and converted inputs take that tensor's dtype and device.
     """
-    for a in arrays:
-        if is_tensor(a):
-            return _load_torch(), a
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        tensor = torch.Tensor
+        for a in arrays:
+            if type(a) not in _NOT_TENSORS and isinstance(a, tensor):
+                return _load_torch(), a
     return numpy_backend, None
 
 

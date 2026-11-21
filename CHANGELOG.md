@@ -192,6 +192,11 @@ All notable changes to sekai are documented here. The format follows
 - `split_infos` (and so every native vector env) splits nested info mappings per env.
 - `Market-v0` refuses a `features=` field with several values per asset with a clear
   `ValueError` (such fields are new).
+- The finance core now goes through `sekai.backend`, which costs small single
+  environments a little: on one core, `Trading-v0` makes about 12% fewer steps per second
+  than in 0.2, `Portfolio-v0` about 7% fewer, and cost models about 13% fewer calls.
+  `Market-v0`, `settle`, `project_weights` and the native vector envs are as fast as
+  before, and NumPy results are identical bit for bit.
 
 ### Removed
 
