@@ -239,7 +239,41 @@ See [Holding costs](../finance/execution.md#holding-costs).
         - performance_summary
         - PnLSummary
         - pnl_summary
+        - probabilistic_sharpe_ratio
+        - minimum_track_record_length
+        - expected_maximum_sharpe
+        - deflated_sharpe_ratio
+        - OverfittingReport
+        - probability_of_backtest_overfitting
         - RecordPerformance
+
+## Benchmarks
+
+`sekai.finance.benchmark`. See [Benchmarks](../finance/benchmarks.md).
+
+::: sekai.finance.benchmark.Task
+
+::: sekai.finance.benchmark.evaluate
+
+::: sekai.finance.benchmark.Evaluation
+
+::: sekai.finance.benchmark.compare
+
+::: sekai.finance.benchmark.Comparison
+
+::: sekai.finance.benchmark.target_action
+
+::: sekai.finance.benchmark.Cash
+
+::: sekai.finance.benchmark.EqualWeight
+
+::: sekai.finance.benchmark.InverseVolatility
+
+::: sekai.finance.benchmark.Momentum
+
+::: sekai.finance.benchmark.standard_baselines
+
+::: sekai.finance.benchmark.standard_tasks
 
 ## Universe
 

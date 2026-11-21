@@ -91,6 +91,7 @@ from sekai.vector.wrappers import (
     VecRecordEpisodeStatistics,
     VecTransformObservation,
     VecTransformReward,
+    VecUnnestObservation,
 )
 
 # Statistics
@@ -121,6 +122,7 @@ from sekai.wrappers.action_repeat import ActionRepeat
 from sekai.wrappers.delay_action import DelayAction
 from sekai.wrappers.action_mask_obs import ActionMaskObservation
 from sekai.wrappers.pad_sequence_obs import PadSequenceObservation
+from sekai.wrappers.unnest_obs import UnnestObservation
 
 # Built-in environments (registers CartPole-v1, Portfolio-v0, ... on import)
 from sekai import envs
@@ -203,6 +205,7 @@ __all__ = [
     "VecNormalizeReward",
     "VecTransformObservation",
     "VecTransformReward",
+    "VecUnnestObservation",
     # Stats
     "EpisodeStats",
     "StatsTracker",
@@ -232,6 +235,7 @@ __all__ = [
     "DelayAction",
     "ActionMaskObservation",
     "PadSequenceObservation",
+    "UnnestObservation",
     # Sub-namespaces
     "envs",
     "finance",

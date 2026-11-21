@@ -36,6 +36,8 @@ All wrappers are importable from `sekai.wrappers` and from the top-level `sekai`
 
 ::: sekai.wrappers.PadSequenceObservation
 
+::: sekai.wrappers.UnnestObservation
+
 ::: sekai.wrappers.ActionMaskObservation
 
 ## Actions

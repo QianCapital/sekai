@@ -17,6 +17,7 @@ from sekai.vector.wrappers import (
     VecRecordEpisodeStatistics,
     VecTransformObservation,
     VecTransformReward,
+    VecUnnestObservation,
 )
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "VecNormalizeReward",
     "VecTransformObservation",
     "VecTransformReward",
+    "VecUnnestObservation",
 ]

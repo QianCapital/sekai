@@ -75,6 +75,19 @@ register(
     entry_point="sekai.envs.finance.portfolio:PortfolioEnv",
     vector_entry_point="sekai.envs.finance.vector:PortfolioVecEnv",
 )
+# v1: orders fill at the next close, not at the close the agent just observed.
+register(
+    id="Trading-v1",
+    entry_point="sekai.envs.finance.trading:TradingEnv",
+    vector_entry_point="sekai.envs.finance.vector:TradingVecEnv",
+    kwargs={"execution": "next_close"},
+)
+register(
+    id="Portfolio-v1",
+    entry_point="sekai.envs.finance.portfolio:PortfolioEnv",
+    vector_entry_point="sekai.envs.finance.vector:PortfolioVecEnv",
+    kwargs={"execution": "next_close"},
+)
 register(
     id="MarketMaking-v0",
     entry_point="sekai.envs.finance.market_making:MarketMakingEnv",

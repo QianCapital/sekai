@@ -260,8 +260,8 @@ print(f"PPO mean return over 10 episodes: {sum(returns) / len(returns):.1f}")  #
 using a symmetric `[-1, 1]` action space, which `RescaleAction` provides. `Market-v0` and
 `LimitOrderBook-v0` are the exception: their [`MaskedBox`](dynamic.md) entry becomes a `Dict`
 inside the observation `Dict`, and SB3 does not support nested observation spaces
-(`check_env` warns about it, and `MultiInputPolicy` raises `NotImplementedError`). Flatten
-those two first, as [shown below](#nested-observations-flatten-first).
+(`check_env` warns about it, and `MultiInputPolicy` raises `NotImplementedError`). Unnest or
+flatten those two first, as [shown below](#nested-observations-unnest-or-flatten).
 
 ```python
 import numpy as np
@@ -296,10 +296,14 @@ print(f"PPO {ppo:+.4f}, equal weight {equal_weight:+.4f}")  # ~ PPO +0.0075, equ
 A 20k-step run is nowhere near converged; the closed-form and heuristic baselines on the
 [finance page](../environments/finance.md) are the bar a learned policy has to clear.
 
-### Nested observations: flatten first
+### Nested observations: unnest or flatten
 
-For `Market-v0` and `LimitOrderBook-v0`, wrap the sekai env in `sekai.FlattenObservation`
-before converting it, and train with `MlpPolicy`:
+For `Market-v0`, `Market-v1` and `LimitOrderBook-v0`, wrap the sekai env in
+`sekai.UnnestObservation` before converting it: the nested `Dict` becomes one flat-keyed
+`Dict` (`"assets/values"`, `"assets/mask"`, ...) that `MultiInputPolicy` accepts, and
+`sekai.nn.sb3.MarketFeaturesExtractor` encodes the padded sets of assets as sets (see
+[Training agents](training.md)). Or wrap it in `sekai.FlattenObservation`, and train with
+`MlpPolicy` on one vector:
 
 ```python
 market = to_gymnasium(sekai.FlattenObservation(sekai.make("Market-v0")))

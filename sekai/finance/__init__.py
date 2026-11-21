@@ -21,7 +21,9 @@
   generators (`ScenarioGenerator`, `ModelScenarios`).
 - `rewards`: reward functions (log return, P&L, mean-variance, differential
   Sharpe, drawdown and turnover penalties, ex-ante variance).
-- `metrics`: performance metrics and the `RecordPerformance` wrapper.
+- `metrics`: performance metrics, statistics for selection bias and backtest
+  overfitting, and the `RecordPerformance` wrapper.
+- `benchmark`: reproducible evaluation tasks, classical baselines and comparisons.
 - `universe`: `SlotMap`, stable slots for a changing set of instruments.
 - `lob`: a limit order book matching engine and zero-intelligence order flow.
 - `rendering`: charts for dashboards of market environments (prices with positions
@@ -93,18 +95,23 @@ from sekai.finance.rewards import (
     PortfolioVariance,
 )
 from sekai.finance.metrics import (
+    OverfittingReport,
     PerformanceSummary,
     PnLSummary,
     RecordPerformance,
+    deflated_sharpe_ratio,
+    minimum_track_record_length,
     performance_summary,
     pnl_summary,
+    probabilistic_sharpe_ratio,
+    probability_of_backtest_overfitting,
 )
 from sekai.finance.universe import SlotMap
 from sekai.finance.lob import BACKGROUND, Fill, Order, OrderBook, Side, ZeroIntelligenceFlow
 from sekai.finance.rendering import OrderBookChart, PriceChart, UniverseChart
 from sekai.finance import account, costs, data, features, lob, metrics, rewards, sampling
 from sekai.finance import rendering, simulators, universe
-from sekai.finance import actions, constraints, observations, panel, risk
+from sekai.finance import actions, benchmark, constraints, observations, panel, risk
 
 __all__ = [
     # Data
@@ -176,6 +183,11 @@ __all__ = [
     "PnLSummary",
     "performance_summary",
     "pnl_summary",
+    "probabilistic_sharpe_ratio",
+    "minimum_track_record_length",
+    "deflated_sharpe_ratio",
+    "OverfittingReport",
+    "probability_of_backtest_overfitting",
     "RecordPerformance",
     # Universe and order book
     "SlotMap",
@@ -202,6 +214,7 @@ __all__ = [
     "simulators",
     "universe",
     "actions",
+    "benchmark",
     "constraints",
     "observations",
     "panel",

@@ -21,6 +21,7 @@ from sekai.wrappers.order_enforcing import OrderEnforcing
 from sekai.wrappers.delay_action import DelayAction
 from sekai.wrappers.action_mask_obs import ActionMaskObservation
 from sekai.wrappers.pad_sequence_obs import PadSequenceObservation
+from sekai.wrappers.unnest_obs import UnnestObservation
 
 __all__ = [
     # Episode control
@@ -46,6 +47,7 @@ __all__ = [
     "DelayObservation",
     "ActionMaskObservation",
     "PadSequenceObservation",
+    "UnnestObservation",
     # Rewards
     "NormalizeReward",
     "TransformReward",

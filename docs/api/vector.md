@@ -83,3 +83,5 @@ Exported from `sekai` and `sekai.vector` (`shared` from `sekai.vector` only). Se
 ::: sekai.VecTransformObservation
 
 ::: sekai.VecTransformReward
+
+::: sekai.VecUnnestObservation

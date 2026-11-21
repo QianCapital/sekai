@@ -17,6 +17,7 @@ top-level `sekai` package unless the page says otherwise.
 | [Statistics](stats.md) | `EpisodeStats` and trackers |
 | [Utilities](utils.md) | `check_env`, `RunningMeanStd`, `ExponentialMovingStats`, action-mask helpers, seeding helpers |
 | [Compatibility](compat.md) | `sekai.compat`: the gymnasium and PettingZoo bridges |
+| [Neural networks](nn.md) | `sekai.nn` (needs PyTorch): set encoders for `MaskedBox` observations and Stable-Baselines3 policies |
 | [Errors](errors.md) | `SekaiError` and its subclasses |
 | [CLI](cli.md) | `sekai.cli` |
 

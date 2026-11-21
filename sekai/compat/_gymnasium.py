@@ -81,6 +81,12 @@ class SekaiToGymnasium(gymnasium.Env[Any, Any]):
     explicitly for a renderer that returns text. "human" is not supported, as
     sekai renderers return frames instead of opening a window; wrap the result
     in gymnasium.wrappers.HumanRendering to display "rgb_array" frames.
+
+    Spaces convert one to one, nesting included. Stable-Baselines3 does not support a
+    Dict or Tuple inside the observation (Market-v0's and LimitOrderBook-v0's MaskedBox
+    entry is a Dict): wrap the sekai env in sekai.UnnestObservation first for
+    MultiInputPolicy (sekai.nn.sb3 has a features extractor for the padded sets), or in
+    sekai.FlattenObservation for MlpPolicy.
     """
 
     RENDER_MODES = ("rgb_array", "ansi")

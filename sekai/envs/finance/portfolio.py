@@ -13,6 +13,7 @@ from sekai.envs._utils import flat_action
 from sekai.envs.finance._common import (
     History,
     check_cost_inputs,
+    check_execution,
     check_number,
     check_numbers,
     check_sources,
@@ -59,7 +60,15 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
       ongoing market, so the observation holds no clock).
     - **info**: `portfolio_value` (also as `equity`), `weights`, `turnover`, `cost`,
       `asset_returns`, `timestamp` and `dt` (step length in years: from dated
-      MarketData, else the `model`'s dt, else 1/252, unless `dt=` is given).
+      MarketData, else the `model`'s dt, else 1/252, unless `dt=` is given);
+      `pending` with `execution="next_close"`.
+
+    **Execution.** With `execution="close"` (the default here, as in 0.2) the targets
+    fill at the close the agent just observed, which no real order can do. With
+    `"next_close"` (the default of `Portfolio-v1`) they fill one step later, at the
+    next close: the order is pending for a step while the current weights are held, and
+    the observation has a `"pending"` entry (the pending target weights, cash last), so
+    it stays Markov.
 
     With a history, `reset(options={"start": t})` places the first decision at
     row `t` (an int) or timestamp `t` (a date, or `sekai.finance.Time(t)` for a
@@ -90,8 +99,10 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         reward: RewardFunction | None = None,
         sampler: str | int | EpisodeSampler = "random",
         capital: float = 1_000_000.0,
+        execution: str = "close",
     ) -> None:
         check_sources("PortfolioEnv", prices=prices, data=data, model=model)
+        self.execution = check_execution(execution)
         if episode_length < 1 or lookback < 1:
             raise ValueError("episode_length and lookback must be >= 1.")
         if dt is not None:
@@ -163,12 +174,19 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         # Long-only weights stay in [0, 1]. With shorts, price moves can drift the
         # weights arbitrarily far from the [-1, 1] targets, so they are unbounded.
         w_low, w_high = (-np.inf, np.inf) if allow_short else (0.0, 1.0)
-        self.observation_space = Dict(
-            {
-                "returns": Box(-np.inf, np.inf, shape=(lookback, n_assets), dtype=np.float32),
-                "weights": Box(w_low, w_high, shape=(n_assets + 1,), dtype=np.float32),
-            }
-        )
+        spaces = {
+            "returns": Box(-np.inf, np.inf, shape=(lookback, n_assets), dtype=np.float32),
+            "weights": Box(w_low, w_high, shape=(n_assets + 1,), dtype=np.float32),
+        }
+        if self.execution == "next_close":
+            # Target weights, cash last: long-only in [0, 1]; long/short, assets in [-1, 1]
+            # with a gross of at most 1, so cash (1 - sum(w)) is in [0, 2].
+            low = np.append(np.full(n_assets, -1.0 if allow_short else 0.0), 0.0)
+            high = np.append(np.ones(n_assets), 2.0 if allow_short else 1.0)
+            spaces["pending"] = Box(
+                low.astype(np.float32), high.astype(np.float32), dtype=np.float32
+            )
+        self.observation_space = Dict(spaces)
         if allow_short:
             self.action_space = Box(-1.0, 1.0, shape=(n_assets,), dtype=np.float32)
         else:
@@ -180,6 +198,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         self._t = 0
         self._over = False
         self.weights = self._cash_only()
+        self.pending = self._cash_only()
         self.portfolio_value = 1.0
 
     @property
@@ -274,6 +293,7 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
         self._t = 0
         self._over = False
         self.weights = self._cash_only()
+        self.pending = self._cash_only()
         self.portfolio_value = 1.0
         info = self._info(np.zeros(self.n_assets), 0.0, 0.0)
         return ResetResult(observation=self._get_obs(), info=info)
@@ -316,7 +336,11 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             raise ResetRequired()
         if self._over:
             raise episode_over()
-        target = self.action_to_weights(action)
+        decided = self.action_to_weights(action)
+        if self.execution == "close":
+            target = decided
+        else:  # the previous decision fills now; this one waits for the next close
+            target, self.pending = self.pending, decided
         trades = target[:-1] - self.weights[:-1]
         turnover = float(np.abs(trades).sum())
         i = self.lookback + self._t
@@ -357,10 +381,13 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
 
     def _get_obs(self) -> dict[str, NDArray[np.float32]]:
         returns = self._log_returns[self._t : self._t + self.lookback]
-        return {
+        obs = {
             "returns": returns.astype(np.float32),
             "weights": self.weights.astype(np.float32),
         }
+        if self.execution == "next_close":
+            obs["pending"] = self.pending.astype(np.float32)
+        return obs
 
     def _info(
         self, asset_returns: NDArray[np.float64], turnover: float, cost: float
@@ -374,4 +401,4 @@ class PortfolioEnv(Env[dict[str, NDArray[np.float32]], NDArray[np.float32]]):
             "asset_returns": np.asarray(asset_returns).copy(),
             "timestamp": self.timestamp,
             "dt": self.dt,
-        }
+        } | ({"pending": self.pending.copy()} if self.execution == "next_close" else {})

@@ -129,6 +129,7 @@ nav:
       - Wrappers: guide/wrappers.md
       - Time and history: guide/time.md
       - Vector environments: guide/vector.md
+      - Training agents: guide/training.md
       - Registry: guide/registry.md
       - Async environments: guide/async.md
       - Multi-agent: guide/multi-agent.md
@@ -143,6 +144,7 @@ nav:
       - Costs, accounts and rewards: finance/execution.md
       - Batched and differentiable environments: finance/batched.md
       - Performance metrics: finance/metrics.md
+      - Benchmarks: finance/benchmarks.md
       - Order books: finance/order-book.md
   - Environments:
       - Catalog: environments/index.md
@@ -162,6 +164,7 @@ nav:
       - Statistics: api/stats.md
       - Utilities: api/utils.md
       - Compatibility: api/compat.md
+      - Neural networks: api/nn.md
       - Errors: api/errors.md
       - CLI: api/cli.md
   - About:

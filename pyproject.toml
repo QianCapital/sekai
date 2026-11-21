@@ -54,7 +54,8 @@ gymnasium = ["gymnasium>=1.0"]
 pettingzoo = ["pettingzoo>=1.24", "gymnasium>=1.0"]
 pandas = ["pandas>=1.5"]
 render = ["pillow>=9.0", "imageio>=2.30", "imageio-ffmpeg>=0.4.8"]
-# The torch backend (batched environments on tensors, with autograd) and sekai.nn.
+# The torch backend (batched environments on tensors, with autograd) and sekai.nn. Not in
+# "all": PyTorch is large and its build (CPU, CUDA) is the user's choice.
 torch = ["torch>=2.1"]
 test = [
     "pytest>=7.4",
@@ -131,6 +132,12 @@ python_version = "3.10"
 strict = true
 ignore_missing_imports = true
 files = ["sekai"]
+
+[[tool.mypy.overrides]]
+# sekai.nn subclasses PyTorch and Stable-Baselines3 classes, which are Any where those
+# optional dependencies are not installed (as in CI's lint job).
+module = ["sekai.nn", "sekai.nn.*"]
+disallow_subclassing_any = false
 
 [tool.ruff]
 target-version = "py310"

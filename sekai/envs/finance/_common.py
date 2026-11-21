@@ -233,6 +233,13 @@ def step_length(dt: float | None, history: History | None) -> float:
     return 1.0 / ppy if ppy else 1 / 252
 
 
+def check_execution(execution: str) -> str:
+    """`execution` if it is "close" or "next_close" (Trading-v0 / Portfolio-v0), else ValueError."""
+    if execution not in ("close", "next_close"):
+        raise ValueError(f"execution must be 'close' or 'next_close', got {execution!r}.")
+    return execution
+
+
 def check_cost_inputs(
     cost_model: Any, data: MarketData | None, *, simulated: bool, lookback: int | None = None
 ) -> None:
@@ -268,6 +275,7 @@ def field_or_none(data: MarketData | None, name: str) -> NDArray[np.float64] | N
 __all__ = [
     "History",
     "check_cost_inputs",
+    "check_execution",
     "check_number",
     "check_numbers",
     "check_sources",

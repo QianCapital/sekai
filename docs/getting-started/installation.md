@@ -20,6 +20,7 @@ sekai list
 |---|---|---|
 | `sekai[gymnasium]` | `gymnasium>=1.0` | [`sekai.compat`](../guide/gymnasium.md): `to_gymnasium()` / `from_gymnasium()`, Stable-Baselines3, CleanRL, RLlib |
 | `sekai[render]` | `pillow`, `imageio`, `imageio-ffmpeg` | [saving frames](../guide/rendering.md#saving-gifs-and-videos): `save_gif()` (Pillow), `save_video()` (imageio + ffmpeg) |
+| `sekai[torch]` | `torch` | the [torch backend](../finance/batched.md#backends-and-gradients) of batched environments, and [`sekai.nn`](../guide/training.md) |
 | `sekai[pettingzoo]` | `pettingzoo>=1.24`, `gymnasium` | [`to_pettingzoo()` / `from_pettingzoo()`](../guide/multi-agent.md) for multi-agent libraries |
 | `sekai[pandas]` | `pandas>=1.5` | [`MarketData.from_pandas()` / `from_long()`](../finance/data.md) |
 | `sekai[all]` | `gymnasium`, `pettingzoo`, `pandas` and `render` extras | everything at runtime |

@@ -209,6 +209,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
     s0 = _Param()
     model = _Param()
     capital = _Param()
+    execution = _Param(readonly=_SHAPE)
 
     def __init__(
         self,
@@ -232,6 +233,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         self._log_returns = np.zeros((num_envs, t._window - 1))
         self._t = np.zeros(num_envs, dtype=np.intp)
         self.position = np.zeros(num_envs)
+        self.pending = np.zeros(num_envs)
         self.equity = np.ones(num_envs)
 
     @property
@@ -269,6 +271,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         self._log_returns[indices] = np.diff(np.log(self._paths[indices]), axis=1)
         self._t[indices] = 0
         self.position[indices] = 0.0
+        self.pending[indices] = 0.0
         self.equity[indices] = 1.0
         mask = np.zeros(self.num_envs, dtype=bool)
         mask[indices] = True
@@ -277,9 +280,10 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
     def _observe(self) -> NDArray[np.float32]:
         rows = self._t[:, None] + np.arange(self.lookback)
         window = np.take_along_axis(self._log_returns, rows, axis=1)
-        obs: NDArray[np.float32] = np.concatenate([window, self.position[:, None]], axis=1).astype(
-            np.float32
-        )
+        parts = [window, self.position[:, None]]
+        if self.execution == "next_close":
+            parts.append(self.pending[:, None])
+        obs: NDArray[np.float32] = np.concatenate(parts, axis=1).astype(np.float32)
         return obs
 
     def _reset_infos(self, indices: NDArray[np.intp]) -> InfoArrays:
@@ -294,7 +298,7 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
             "turnover": zeros,
             "timestamp": self._windows.timestamps(self._t)[indices],
             "dt": np.full(k, self.dt),
-        }
+        } | ({"pending": self.pending[indices]} if self.execution == "next_close" else {})
 
     def _cost_context(self, i: NDArray[np.intp]) -> dict[str, Any]:
         needs = self.cost_model.requires
@@ -320,10 +324,15 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
         valid = np.issubdtype(a.dtype, np.integer) or bool(np.all(a == np.floor(a)))
         if not valid or not np.all((a >= 0) & (a < len(self.positions))):
             raise InvalidAction(actions, self.action_space)
-        target = self.positions[a.astype(np.intp)]
+        decided = self.positions[a.astype(np.intp)]
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        if self.execution == "close":
+            target = decided
+        else:  # the previous decisions fill now; these wait for the next close
+            target = self.pending.copy()
+            self.pending = np.where(active, decided, self.pending)
         trade = target - self.position
         ar = np.arange(self.num_envs)
-        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
         i = self.lookback + np.minimum(self._t, self.episode_length - 1)
         cost = np.asarray(self.cost_model(trade[:, None], **self._cost_context(i)), np.float64)
         asset_return = self._paths[ar, i + 1] / self._paths[ar, i] - 1.0
@@ -359,6 +368,8 @@ class TradingVecEnv(_TemplateVecEnv[NDArray[np.float32], Any]):
             "timestamp": self._windows.timestamps(self._t),
             "dt": np.full(self.num_envs, self.dt),
         }
+        if self.execution == "next_close":
+            info["pending"] = self.pending.copy()
         return rewards, terminated, truncated, info
 
 
@@ -386,6 +397,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
     corr = _Param()
     model = _Param()
     capital = _Param()
+    execution = _Param(readonly=_SHAPE)
 
     def __init__(
         self,
@@ -411,6 +423,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         self._t = np.zeros(num_envs, dtype=np.intp)
         self.weights = np.zeros((num_envs, n + 1))
         self.weights[:, -1] = 1.0
+        self.pending = self.weights.copy()
         self.portfolio_value = np.ones(num_envs)
 
     @property
@@ -446,6 +459,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         self._t[indices] = 0
         self.weights[indices] = 0.0
         self.weights[indices, -1] = 1.0
+        self.pending[indices] = self.weights[indices]
         self.portfolio_value[indices] = 1.0
         mask = np.zeros(self.num_envs, dtype=bool)
         mask[indices] = True
@@ -454,7 +468,10 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
     def _observe(self) -> dict[str, NDArray[np.float32]]:
         rows = self._t[:, None] + np.arange(self.lookback)
         returns = self._log_returns[np.arange(self.num_envs)[:, None], rows]
-        return {"returns": returns.astype(np.float32), "weights": self.weights.astype(np.float32)}
+        obs = {"returns": returns.astype(np.float32), "weights": self.weights.astype(np.float32)}
+        if self.execution == "next_close":
+            obs["pending"] = self.pending.astype(np.float32)
+        return obs
 
     def _reset_infos(self, indices: NDArray[np.intp]) -> InfoArrays:
         k = len(indices)
@@ -467,7 +484,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
             "asset_returns": np.zeros((k, self.n_assets)),
             "timestamp": self._windows.timestamps(self._t)[indices],
             "dt": np.full(k, self.dt),
-        }
+        } | ({"pending": self.pending[indices]} if self.execution == "next_close" else {})
 
     def _cost_context(self, i: NDArray[np.intp]) -> dict[str, Any]:
         needs = self.cost_model.requires
@@ -504,11 +521,16 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         return np.where(total < 1e-12, cash, a / np.where(total < 1e-12, 1.0, total))
 
     def _step(self, actions: Any) -> tuple[Array, Any, Any, InfoArrays]:
-        target = self.action_to_weights(actions)
+        decided = self.action_to_weights(actions)
+        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
+        if self.execution == "close":
+            target = decided
+        else:  # the previous decisions fill now; these wait for the next close
+            target = self.pending.copy()
+            self.pending = np.where(active[:, None], decided, self.pending)
         trades = target[:, :-1] - self.weights[:, :-1]
         turnover = np.abs(trades).sum(axis=1)
         ar = np.arange(self.num_envs)
-        active = ~self.frozen  # frozen sub-envs (autoreset off) keep their final state
         i = self.lookback + np.minimum(self._t, self.episode_length - 1)
         cost = np.asarray(self.cost_model(trades, **self._cost_context(i)), dtype=np.float64)
         asset_returns = self._paths[ar, i + 1] / self._paths[ar, i] - 1.0
@@ -550,6 +572,8 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
             "timestamp": self._windows.timestamps(self._t),
             "dt": np.full(self.num_envs, self.dt),
         }
+        if self.execution == "next_close":
+            info["pending"] = self.pending.copy()
         return rewards, terminated, truncated, info
 
 

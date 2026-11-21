@@ -14,6 +14,7 @@ from sekai.envs._utils import check_action
 from sekai.envs.finance._common import (
     History,
     check_cost_inputs,
+    check_execution,
     check_number,
     check_numbers,
     check_sources,
@@ -58,7 +59,14 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
       is a window of an ongoing market, so the observation holds no clock).
     - **info**: `equity`, `position` (drifted), `price`, `asset_return`, `cost`,
       `turnover` (`|w - p|`), `timestamp` (the decision time: a date from
-      dated data, else the row index) and `dt` (step length in years).
+      dated data, else the row index) and `dt` (step length in years); `pending`
+      with `execution="next_close"`.
+
+    **Execution.** With `execution="close"` (the default here, as in 0.2) the target
+    fills at the close the agent just observed, which no real order can do. With
+    `"next_close"` (the default of `Trading-v1`) it fills one step later, at the next
+    close: the order is pending for a step while the current position is held, and the
+    observation has one more entry, the pending target, so it stays Markov.
 
     With a history, `reset(options={"start": t})` begins the episode with its
     first decision at row `t` (an int) or timestamp `t` (a date, or
@@ -88,6 +96,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
             does of a `reward_fn` set later), so a stateful reward is never shared.
         sampler: How episodes are placed in the history.
         capital: Account size in currency, for cost models that need it.
+        execution: When a target fills: "close" or "next_close".
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
@@ -109,8 +118,10 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         reward: RewardFunction | None = None,
         sampler: str | int | EpisodeSampler = "random",
         capital: float = 1_000_000.0,
+        execution: str = "close",
     ) -> None:
         check_sources("TradingEnv", prices=prices, data=data, model=model)
+        self.execution = check_execution(execution)
         if episode_length < 1 or lookback < 1:
             raise ValueError("episode_length and lookback must be >= 1.")
         if len(positions) < 2:
@@ -155,6 +166,9 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         pos_high = 1.0 if np.max(self.positions) <= 1 else np.inf
         low = np.concatenate([np.full(lookback, -np.inf), [pos_low]])
         high = np.concatenate([np.full(lookback, np.inf), [pos_high]])
+        if self.execution == "next_close":  # the pending target, one of the positions
+            low = np.append(low, np.min(self.positions))
+            high = np.append(high, np.max(self.positions))
         self.observation_space = Box(
             low.astype(np.float32), high.astype(np.float32), dtype=np.float32
         )
@@ -166,6 +180,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         self._t = 0
         self._over = False
         self.position = 0.0
+        self.pending = 0.0
         self.equity = 1.0
 
     @property
@@ -256,6 +271,7 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         self._t = 0
         self._over = False
         self.position = 0.0
+        self.pending = 0.0
         self.equity = 1.0
         return ResetResult(observation=self._get_obs(), info=self._info(0.0, 0.0, 0.0))
 
@@ -285,7 +301,11 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
         check_action(self.action_space, action)
 
         i = self.lookback + self._t
-        target = float(self.positions[int(action)])
+        decided = float(self.positions[int(action)])
+        if self.execution == "close":
+            target = decided
+        else:  # the previous decision fills now; this one waits for the next close
+            target, self.pending = self.pending, decided
         trade = target - self.position
         cost = float(self.cost_model(np.array([trade]), **self._cost_context(i)))
 
@@ -322,6 +342,8 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
 
     def _get_obs(self) -> NDArray[np.float32]:
         window = self._log_returns[self._t : self._t + self.lookback]
+        if self.execution == "next_close":
+            return np.append(window, [self.position, self.pending]).astype(np.float32)
         return np.append(window, self.position).astype(np.float32)
 
     def _info(self, asset_return: float, cost: float, turnover: float) -> dict[str, Any]:
@@ -334,4 +356,4 @@ class TradingEnv(Env[NDArray[np.float32], np.intp]):
             "turnover": turnover,
             "timestamp": self.timestamp,
             "dt": self.dt,
-        }
+        } | ({"pending": self.pending} if self.execution == "next_close" else {})

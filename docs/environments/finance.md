@@ -9,6 +9,7 @@ that a learned policy has to beat.
 |---|---|---|---|
 | [`Trading-v0`](#trading-v0) | trade one asset | GBM, any market model, or your price history | buy and hold, momentum |
 | [`Portfolio-v0`](#portfolio-v0) | allocate across assets and cash | correlated GBM, any market model, or your history | equal weight, inverse volatility |
+| [`Trading-v1`, `Portfolio-v1`](#options-shared-by-trading-v0-and-portfolio-v0) | as above, with orders filling at the next close | | |
 | [`Market-v0`](#market-v0) | trade a changing universe with costs, financing and outside data | two-regime market with listings and delistings, or your `MarketData` | equal weight, a regime oracle |
 | [`Market-v1`](#market-v1) | the same, with explicit execution timing, hard constraints, holding costs and risk models; batched on NumPy or torch | as `Market-v0`, or any scenario generator | as `Market-v0` |
 | [`MarketMaking-v0`](#marketmaking-v0) | quote a bid and an ask | Avellaneda & Stoikov (2008) | `avellaneda_stoikov_action()` |
@@ -298,6 +299,14 @@ directly or through a vector env's `set_attr`, raises `AttributeError`; make a n
 | `reward` | `LogReturn()` | any [`RewardFunction`](../finance/execution.md#reward-functions); the env keeps a copy, as it does of a `reward_fn` set later |
 | `sampler` | `"random"` | where episodes start in a history: `"sequential"`, an int, or an [`EpisodeSampler`](../finance/data.md#episode-samplers) |
 | `capital` | `1_000_000` | account size in currency, for cost models that need it |
+| `execution` | `"close"` | when a target fills: `"close"` (the close just observed) or `"next_close"` (the next close; the observation gains the pending order: one more entry for `Trading`, a `"pending"` key for `Portfolio`) |
+
+**Trading-v1 and Portfolio-v1** are the same environments with `execution="next_close"`:
+an order placed on the close the agent just observed fills at the next close, as a real
+order would. `Trading-v0` and `Portfolio-v0` keep their behaviour. On historical data,
+prefer the v1 IDs: same-close fills let a policy trade on prices it could not have traded
+at, which reinforcement learning finds and exploits (see
+[execution timing](../finance/batched.md#execution-timing)).
 
 With a history, `reset(options={"start": t})` puts the episode's first decision at
 row `t` (an int) or timestamp `t` (a date, or `sekai.finance.Time(t)` for a numeric

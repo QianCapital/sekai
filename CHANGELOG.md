@@ -69,6 +69,44 @@ All notable changes to sekai are documented here. The format follows
   API page for `sekai.backend`. Example `examples/integrations/direct_policy_torch.py`:
   pathwise policy training.
 
+**Research validity**
+
+- `Trading-v1` and `Portfolio-v1`: `Trading-v0` and `Portfolio-v0` with orders that fill at
+  the next close (`execution="next_close"`; the observation gains the pending order), and
+  an `execution=` argument on both environments and their native vector versions. The v0
+  IDs keep their behaviour.
+- Selection bias and backtest overfitting (`sekai.finance.metrics`):
+  `probabilistic_sharpe_ratio` and `minimum_track_record_length` (Bailey and López de
+  Prado, 2012): the probability that the true Sharpe ratio beats a benchmark given the
+  record's length, skewness and kurtosis, and the record length needed for a confidence;
+  `expected_maximum_sharpe` and `deflated_sharpe_ratio` (Bailey and López de Prado, 2014):
+  the Sharpe ratio the best of `n_trials` skill-less trials reaches by luck, and the PSR
+  against it; `probability_of_backtest_overfitting` (CSCV; Bailey, Borwein, López de Prado
+  and Zhu, 2015), returning an `OverfittingReport` with the PBO, per-combination logits,
+  the in-sample best's out-of-sample performance, the degradation slope and the
+  probability of loss. Sharpe ratios are annualised like `sharpe_ratio`; SciPy is not
+  required.
+- `sekai.finance.benchmark`: reproducible evaluation. A `Task` fixes an environment and
+  its evaluation episodes; `evaluate(policy, task)` returns an `Evaluation` (equity
+  curves, pooled returns, Sharpe, PSR, drawdowns, turnover); `compare(policies, task)`
+  reports several side by side with each one's deflated Sharpe ratio over all of them.
+  Baselines `Cash`, `EqualWeight`, `InverseVolatility` and `Momentum` (long-only or
+  long/short), and `target_action`, which turns a target book into an action of
+  `Market-v0/v1` (any action map) and `Portfolio-v0/v1`. Reference results for PPO against
+  the baselines in the docs (`examples/integrations/benchmark_reference.py`).
+- `UnnestObservation` and `VecUnnestObservation` turn nested `Dict`/`Tuple` observations
+  into one flat-keyed `Dict` (`"assets/values"`, `"assets/mask"`, ...), with exact maps
+  `unnest_space` / `unnest` / `nest` in `sekai.wrappers.unnest_obs`, so `Market-v0/v1`
+  and `LimitOrderBook-v0` train with Stable-Baselines3's `MultiInputPolicy`.
+- `sekai.nn` (the `torch` extra): `MaskedSetEncoder` encodes `MaskedBox` batches into
+  per-slot and pooled embeddings, permutation-equivariant/invariant, ignoring empty slots
+  (zeros for empty sets), with MLP, 1-D convolution or transformer element encoders,
+  optional attention across slots, and mean/max/sum pooling; `masked_mean`, `masked_max`.
+  `sekai.nn.sb3`: `MarketFeaturesExtractor` for SB3's `MultiInputPolicy`, and
+  `SlotActorCriticPolicy`, which scores each asset slot from its own embedding.
+- Docs: "Training agents", "Benchmarks", "Overfitting and multiple testing". Example
+  `examples/integrations/sb3_market.py`.
+
 ### Changed
 
 - `split_infos` (and so every native vector env) splits nested info mappings per env.

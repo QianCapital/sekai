@@ -18,6 +18,7 @@ from sekai.utils.running_stats import RunningMeanStd
 from sekai.vector.result import VecResetResult, VecStepResult
 from sekai.vector.vec_env import VecEnv
 from sekai.vector.vec_wrapper import VecObservationWrapper, VecRewardWrapper, VecWrapper
+from sekai.wrappers.unnest_obs import nest, unnest, unnest_space
 
 
 class VecRecordEpisodeStatistics(VecWrapper[ObsType, ActType, ObsType, ActType]):
@@ -251,6 +252,39 @@ class VecTransformObservation(VecObservationWrapper[Any, ActType, Any]):
 
     def observation(self, obs: Any) -> Any:
         return self.func(obs)
+
+
+class VecUnnestObservation(VecObservationWrapper[dict[str, Any], ActType, Any]):
+    """Turns batches of nested `Dict`/`Tuple` observations into one flat-keyed `Dict`.
+
+    The vectorised counterpart of UnnestObservation, with the same keys
+    (`"assets/values"`, `"assets/mask"`, ...; see
+    `sekai.wrappers.unnest_obs.unnest_space`), for vector envs whose sub-envs cannot be
+    wrapped one by one, such as a `NativeVecEnv`. Each key holds the stacked leaf, with
+    the leading `num_envs` axis; `infos[i]["final_observation"]` from autoreset is
+    unnested too, and `nest(obs)` is the exact inverse.
+
+    Args:
+        venv: The vector env to wrap; its observation space must be a `Dict` or `Tuple`.
+        sep: Separator between the parts of a key; a non-empty string.
+    """
+
+    def __init__(self, venv: VecEnv[Any, ActType], sep: str = "/") -> None:
+        super().__init__(venv)
+        self.sep = sep
+        self.nested_space: Space[Any] = venv.observation_space
+        self.observation_space = unnest_space(self.nested_space, sep)
+
+    def observation(self, obs: Any) -> dict[str, Any]:
+        return unnest(self.nested_space, obs, self.sep)
+
+    def final_observation(self, obs: Any) -> dict[str, Any]:
+        # Unnesting only moves the leaves, so one observation needs no batch of one.
+        return self.observation(obs)
+
+    def nest(self, obs: Any) -> Any:
+        """The wrapped vector env's (nested) batch from a flat one, or one observation."""
+        return nest(self.nested_space, obs, self.sep)
 
 
 class VecTransformReward(VecRewardWrapper[ObsType, ActType]):

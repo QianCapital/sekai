@@ -17,6 +17,13 @@ Returns are undefined for P&L processes that start from zero wealth (e.g. a
 market maker's mark-to-market P&L); summarise those with `pnl_summary`, which
 works on per-period P&L increments in absolute units.
 
+Picking the best of many backtests (seeds, hyperparameters, rules) inflates its
+Sharpe ratio. `probabilistic_sharpe_ratio`, `minimum_track_record_length` and
+`deflated_sharpe_ratio` account for the length of the track record, non-normal
+returns and the number of trials; `probability_of_backtest_overfitting` estimates,
+from the return series of every trial, how often the in-sample best does worse
+than the median out of sample.
+
 `RecordPerformance` wraps an env whose info reports account equity (or
 cumulative P&L) and attaches a `PerformanceSummary` (or `PnLSummary`) to the
 info of each episode's final step.
@@ -24,9 +31,10 @@ info of each episode's final step.
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from typing import Any
 
@@ -58,6 +66,13 @@ __all__ = [
     "performance_summary",
     "PnLSummary",
     "pnl_summary",
+    # Multiple testing and overfitting
+    "probabilistic_sharpe_ratio",
+    "minimum_track_record_length",
+    "expected_maximum_sharpe",
+    "deflated_sharpe_ratio",
+    "OverfittingReport",
+    "probability_of_backtest_overfitting",
     # Wrapper
     "RecordPerformance",
 ]
@@ -109,6 +124,46 @@ def _check_level(level: float) -> float:
     if not 0.0 < v < 1.0:
         raise ValueError(f"level must lie strictly between 0 and 1, got {level!r}")
     return v
+
+
+def _check_int(value: object, name: str, minimum: int) -> int:
+    if (
+        isinstance(value, bool | np.bool_)
+        or not isinstance(value, int | np.integer)
+        or value < minimum
+    ):
+        raise ValueError(f"{name} must be an int >= {minimum}, got {value!r}")
+    return int(value)
+
+
+def _check_confidence(confidence: float) -> float:
+    v = float(confidence)
+    if not 0.5 <= v < 1.0:
+        raise ValueError(f"confidence must lie in [0.5, 1), got {confidence!r}")
+    return v
+
+
+def _as_track_record(values: ArrayLike, name: str) -> NDArray[np.float64]:
+    """`values` as a finite 1-D float64 array of at least two returns."""
+    x = _as_series(values, name)
+    if x.size < 2:
+        raise ValueError(f"{name} needs at least two periods, got {x.size}")
+    return x
+
+
+def _as_panel(values: ArrayLike, name: str) -> NDArray[np.float64]:
+    """`values` as a finite 2-D float64 array (n_periods, n_strategies), n_strategies >= 2."""
+    try:
+        x = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a 2-D array of numbers: {exc}") from exc
+    if x.ndim != 2:
+        raise ValueError(f"{name} must be 2-D (n_periods, n_strategies), got shape {x.shape}")
+    if x.shape[1] < 2:
+        raise ValueError(f"{name} needs at least two strategies (columns), got shape {x.shape}")
+    if not np.all(np.isfinite(x)):
+        raise ValueError(f"{name} must be finite (no NaN or inf)")
+    return x
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +775,642 @@ def pnl_summary(pnl: ArrayLike, periods_per_year: float = 252, *, scale: float =
         sharpe_ratio=0.0 if sd == 0.0 else mean / sd * math.sqrt(ppy),
         max_drawdown=float(np.max(drawdown)),
         hit_rate=_hit_rate(x),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multiple testing and overfitting
+# ---------------------------------------------------------------------------
+
+_EULER_GAMMA = 0.5772156649015329
+
+# Acklam's rational approximation to the inverse normal CDF (relative error below
+# 1.15e-9): numerator and denominator coefficients, highest power first, for the
+# central region (A, B) and the tails (C, D).
+_PPF_A = (
+    -3.969683028665376e01,
+    2.209460984245205e02,
+    -2.759285104469687e02,
+    1.383577518672690e02,
+    -3.066479806614716e01,
+    2.506628277459239e00,
+)
+_PPF_B = (
+    -5.447609879822406e01,
+    1.615858368580409e02,
+    -1.556989798598866e02,
+    6.680131188771972e01,
+    -1.328068155288572e01,
+    1.0,
+)
+_PPF_C = (
+    -7.784894002430293e-03,
+    -3.223964580411365e-01,
+    -2.400758277161838e00,
+    -2.549732539343734e00,
+    4.374664141464968e00,
+    2.938163982698783e00,
+)
+_PPF_D = (
+    7.784695709041462e-03,
+    3.224671290700398e-01,
+    2.445134137142996e00,
+    3.754408661907416e00,
+    1.0,
+)
+_PPF_TAIL = 0.02425  # below this probability, the tail approximation applies
+
+# CSCV evaluates C(n_partitions, n_partitions / 2) combinations: 12,870 for 16
+# partitions, 184,756 for 20, 2,704,156 for 24.
+_MAX_PARTITIONS = 20
+
+# Upper bound on the elements of each intermediate array in CSCV (8 MB of float64).
+_CSCV_CHUNK = 1 << 20
+
+
+def _horner(coefficients: tuple[float, ...], x: float) -> float:
+    out = 0.0
+    for c in coefficients:
+        out = out * x + c
+    return out
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF, with relative accuracy far into the lower tail.
+
+    The rounding of ``x / sqrt(2)`` is magnified about ``x**2`` times there (1e-13 at -30).
+    """
+    return 0.5 * math.erfc(-x / math.sqrt(2.0))
+
+
+def _norm_ppf(p: float) -> float:
+    """Inverse standard normal CDF for 0 <= p <= 1 (``-inf`` at 0, ``inf`` at 1).
+
+    Acklam's approximation (relative error 1.15e-9) refined by two Newton steps on
+    `_norm_cdf`, accurate to an ulp or two. The upper half comes from the lower one by
+    symmetry, so ``-_norm_ppf(q)`` is an accurate upper quantile even where ``1 - q``
+    would round to 1.
+    """
+    if p > 0.5:
+        return -_norm_ppf(1.0 - p)  # 1 - p is exact for p in [0.5, 1]
+    if p <= 0.0:
+        return -math.inf
+    if p < _PPF_TAIL:
+        q = math.sqrt(-2.0 * math.log(p))
+        x = _horner(_PPF_C, q) / _horner(_PPF_D, q)
+    else:
+        q = p - 0.5
+        r = q * q
+        x = _horner(_PPF_A, r) * q / _horner(_PPF_B, r)
+    for _ in range(2):  # the second step matters in the far tail, where |x| is large
+        density = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+        if density > 0.0:
+            x -= (_norm_cdf(x) - p) / density
+    return x
+
+
+def _sharpe_moments(x: NDArray[np.float64]) -> tuple[float, float, float]:
+    """Per-period Sharpe ratio (as `_sharpe_ratio` with no hurdle), skewness and kurtosis.
+
+    Skewness and (non-excess) kurtosis are the moment estimators ``m3 / m2**1.5`` and
+    ``m4 / m2**2``. Returns with zero standard deviation have a Sharpe ratio of 0, which
+    makes the moments irrelevant; they are reported as a normal's, 0 and 3.
+    """
+    excess = _excess(x, 0.0)
+    sd = _sample_std(excess)
+    if sd == 0.0:
+        return 0.0, 0.0, 3.0
+    dev = excess - np.mean(excess)
+    z = dev / math.sqrt(float(np.mean(dev * dev)))
+    return float(np.mean(excess)) / sd, float(np.mean(z**3)), float(np.mean(z**4))
+
+
+def _probabilistic_sharpe(
+    sharpe: float, benchmark: float, n: int, skew: float, kurt: float
+) -> float:
+    """PSR from per-period Sharpe ratios, the number of returns and their moments."""
+    diff = sharpe - benchmark
+    if diff == 0.0:
+        return 0.5
+    # Never negative for sample moments (kurt >= skew**2 + 1); zero only for a
+    # two-valued sample, whose estimated Sharpe ratio then has no spread.
+    var = 1.0 - skew * sharpe + (kurt - 1.0) / 4.0 * sharpe * sharpe
+    if var <= 0.0:
+        return 1.0 if diff > 0.0 else 0.0
+    return _norm_cdf(diff * math.sqrt((n - 1) / var))
+
+
+def _expected_maximum(n_trials: int, std: float) -> float:
+    if n_trials == 1:
+        return 0.0
+    q = 1.0 / n_trials
+    # -ppf(q) is the upper quantile ppf(1 - q), accurate for any number of trials.
+    return std * ((1.0 - _EULER_GAMMA) * -_norm_ppf(q) + _EULER_GAMMA * -_norm_ppf(q / math.e))
+
+
+def probabilistic_sharpe_ratio(
+    returns: ArrayLike, benchmark_sharpe: float = 0.0, periods_per_year: float = 252
+) -> float:
+    """Probability that the true Sharpe ratio exceeds a benchmark.
+
+    The probabilistic Sharpe ratio (PSR) of Bailey and López de Prado (2012) is
+    ``Phi((sr - sr_b) * sqrt(n - 1) / sqrt(1 - skew * sr + (kurt - 1) / 4 * sr**2))``,
+    where `sr` is the observed and `sr_b` the benchmark Sharpe ratio, both per period, `n`
+    the number of returns, `skew` and `kurt` their skewness and (non-excess, 3 for a
+    normal) kurtosis, and `Phi` the standard normal CDF. A short record, negative
+    skewness and fat tails all make a positive Sharpe ratio less conclusive.
+
+    `benchmark_sharpe` is annualised, like the result of `sharpe_ratio`, and is converted
+    to the per-period ``benchmark_sharpe / sqrt(periods_per_year)``. The observed ratio is
+    the per-period ``sharpe_ratio(returns, periods_per_year) / sqrt(periods_per_year)``,
+    with no risk-free rate (pass excess returns for one). Skewness and kurtosis are the
+    moment estimators ``m3 / m2**1.5`` and ``m4 / m2**2``, with
+    ``m_k = mean((r - mean(r))**k)``.
+
+    Args:
+        returns: Simple per-period returns, shape (n,) with n >= 2.
+        benchmark_sharpe: Annualised Sharpe ratio to beat; 0 asks whether there is any
+            skill at all.
+        periods_per_year: Number of return periods in a year (converts
+            `benchmark_sharpe` to a per-period ratio).
+
+    Returns:
+        The PSR, in [0, 1]; 0.5 when the observed Sharpe ratio equals the benchmark.
+        Returns with zero standard deviation have a Sharpe ratio of 0, as in
+        `sharpe_ratio`.
+
+    Raises:
+        ValueError: If `returns` has fewer than two values, is not 1-D or not finite, or
+            a parameter is invalid.
+
+    Example:
+        ```python
+        rng = np.random.default_rng(0)
+        returns = rng.normal(0.001, 0.01, size=756)  # three years of daily returns
+        sharpe_ratio(returns)                                      # 1.171
+        probabilistic_sharpe_ratio(returns)                        # 0.978: P[SR > 0]
+        probabilistic_sharpe_ratio(returns, benchmark_sharpe=0.5)  # 0.876: P[SR > 0.5]
+        ```
+    """
+    x = _as_track_record(returns, "returns")
+    ppy = _check_positive(periods_per_year, "periods_per_year")
+    benchmark = _check_finite(benchmark_sharpe, "benchmark_sharpe") / math.sqrt(ppy)
+    sharpe, skew, kurt = _sharpe_moments(x)
+    return _probabilistic_sharpe(sharpe, benchmark, x.size, skew, kurt)
+
+
+def minimum_track_record_length(
+    returns: ArrayLike,
+    benchmark_sharpe: float = 0.0,
+    confidence: float = 0.95,
+    periods_per_year: float = 252,
+) -> float:
+    """Number of periods needed for the observed Sharpe ratio to beat a benchmark.
+
+    The minimum track-record length (MinTRL) of Bailey and López de Prado (2012) is
+    ``1 + (1 - skew * sr + (kurt - 1) / 4 * sr**2) * (Phi^-1(confidence) / (sr - sr_b))**2``,
+    with the per-period Sharpe ratios, moments and benchmark conversion of
+    `probabilistic_sharpe_ratio`: the number of returns at which a strategy with the
+    observed Sharpe ratio, skewness and kurtosis has a PSR of `confidence`. A record is
+    long enough if it has at least that many periods.
+
+    Args:
+        returns: Simple per-period returns, shape (n,) with n >= 2, from which the Sharpe
+            ratio, skewness and kurtosis are estimated.
+        benchmark_sharpe: Annualised Sharpe ratio to beat.
+        confidence: Required probability that the true Sharpe ratio exceeds the
+            benchmark, in [0.5, 1).
+        periods_per_year: Number of return periods in a year (converts
+            `benchmark_sharpe` to a per-period ratio).
+
+    Returns:
+        The MinTRL as a number of periods of `returns` (a float >= 1, not rounded up;
+        divide by `periods_per_year` for years). ``math.inf`` if the observed Sharpe
+        ratio does not exceed the benchmark.
+
+    Raises:
+        ValueError: If `returns` has fewer than two values, is not 1-D or not finite, or
+            a parameter is invalid.
+
+    Example:
+        ```python
+        rng = np.random.default_rng(0)
+        returns = rng.normal(0.001, 0.01, size=756)
+        minimum_track_record_length(returns) / 252  # 2.0 years for 95 % that SR > 0
+        ```
+    """
+    x = _as_track_record(returns, "returns")
+    ppy = _check_positive(periods_per_year, "periods_per_year")
+    benchmark = _check_finite(benchmark_sharpe, "benchmark_sharpe") / math.sqrt(ppy)
+    z = _norm_ppf(_check_confidence(confidence))
+    sharpe, skew, kurt = _sharpe_moments(x)
+    diff = sharpe - benchmark
+    if diff <= 0.0:
+        return math.inf
+    var = max(1.0 - skew * sharpe + (kurt - 1.0) / 4.0 * sharpe * sharpe, 0.0)
+    return 1.0 + var * (z / diff) ** 2
+
+
+def expected_maximum_sharpe(n_trials: int, sharpe_std: float) -> float:
+    """Expected best Sharpe ratio of `n_trials` independent trials without skill.
+
+    ``sharpe_std * ((1 - g) * Phi^-1(1 - 1 / n_trials) + g * Phi^-1(1 - 1 / (n_trials * e)))``,
+    with `g` the Euler-Mascheroni constant and ``Phi^-1`` the inverse standard normal CDF,
+    is Bailey and López de Prado's (2014) approximation to the expected maximum of
+    `n_trials` independent normal Sharpe-ratio estimates with true value zero and standard
+    deviation `sharpe_std`: what the best of that many skill-less trials shows by luck
+    alone. It is the benchmark of `deflated_sharpe_ratio`.
+
+    The result is in the units of `sharpe_std`: annualised in, annualised out.
+
+    Args:
+        n_trials: Number of independent trials, an int >= 1.
+        sharpe_std: Standard deviation of the trials' Sharpe ratios (non-negative).
+
+    Returns:
+        The expected maximum Sharpe ratio, increasing in `n_trials` and proportional to
+        `sharpe_std`. 0.0 for a single trial, whose expected Sharpe ratio is zero (the
+        approximation diverges there).
+
+    Raises:
+        ValueError: If `n_trials` is not an int >= 1, or `sharpe_std` is negative or not
+            finite.
+
+    Example:
+        ```python
+        expected_maximum_sharpe(100, 1.0)  # 2.531 (the exact expectation is 2.508)
+        ```
+    """
+    n = _check_int(n_trials, "n_trials", 1)
+    return _expected_maximum(n, _check_non_negative(sharpe_std, "sharpe_std"))
+
+
+def deflated_sharpe_ratio(
+    returns: ArrayLike,
+    trial_sharpes: ArrayLike | None = None,
+    periods_per_year: float = 252,
+    *,
+    n_trials: int | None = None,
+    trial_sharpe_std: float | None = None,
+) -> float:
+    """Probabilistic Sharpe ratio against the best Sharpe ratio that luck explains.
+
+    When `returns` belong to the best of many backtests (seeds, hyperparameters, rules),
+    selection biases its Sharpe ratio upward. The deflated Sharpe ratio (DSR) of Bailey
+    and López de Prado (2014) is
+    `probabilistic_sharpe_ratio` with the benchmark set to `expected_maximum_sharpe` of
+    the trials: the probability that the selected strategy's true Sharpe ratio exceeds
+    what the best of that many skill-less trials would show.
+
+    Describe the trials either by `trial_sharpes`, the annualised Sharpe ratios of every
+    configuration tried (including the selected one), whose number and sample standard
+    deviation (ddof=1) are used; or by `n_trials` and `trial_sharpe_std` directly, e.g.
+    an effective number of independent trials when the trials are correlated. The
+    expected maximum is annualised like the trial Sharpe ratios and de-annualised with
+    `periods_per_year`, as `benchmark_sharpe` is in `probabilistic_sharpe_ratio`.
+
+    Args:
+        returns: Simple per-period returns of the selected strategy, shape (n,) with
+            n >= 2.
+        trial_sharpes: Annualised Sharpe ratios of all trials, shape (n_trials,).
+        periods_per_year: Number of return periods in a year.
+        n_trials: Number of independent trials, an int >= 1, instead of `trial_sharpes`.
+        trial_sharpe_std: Standard deviation of the trials' annualised Sharpe ratios
+            (non-negative), given with `n_trials`.
+
+    Returns:
+        The DSR, in [0, 1]. It falls as the number of trials or the spread of their
+        Sharpe ratios grows; for a single trial (or trials with identical Sharpe ratios)
+        it equals ``probabilistic_sharpe_ratio(returns)``.
+
+    Raises:
+        ValueError: If `trial_sharpes` is given together with `n_trials` or
+            `trial_sharpe_std`, if neither `trial_sharpes` nor both of them are given, or
+            if an input is invalid.
+
+    Example:
+        ```python
+        rng = np.random.default_rng(1)
+        trials = rng.normal(0.0, 0.01, size=(756, 50))  # 50 configurations, no skill
+        sharpes = [sharpe_ratio(trials[:, j]) for j in range(50)]
+        best = trials[:, int(np.argmax(sharpes))]
+        probabilistic_sharpe_ratio(best)       # 0.984: looks skilful on its own
+        deflated_sharpe_ratio(best, sharpes)   # 0.325: not once the 50 trials count
+        ```
+    """
+    x = _as_track_record(returns, "returns")
+    ppy = _check_positive(periods_per_year, "periods_per_year")
+    if trial_sharpes is not None:
+        if n_trials is not None or trial_sharpe_std is not None:
+            raise ValueError("pass either trial_sharpes or n_trials and trial_sharpe_std, not both")
+        trials = _as_series(trial_sharpes, "trial_sharpes")
+        n, std = trials.size, _sample_std(trials, offset=0.0)
+    elif n_trials is None or trial_sharpe_std is None:
+        raise ValueError(
+            "deflated_sharpe_ratio needs trial_sharpes, or both n_trials and trial_sharpe_std"
+        )
+    else:
+        n = _check_int(n_trials, "n_trials", 1)
+        std = _check_non_negative(trial_sharpe_std, "trial_sharpe_std")
+    benchmark = _expected_maximum(n, std) / math.sqrt(ppy)
+    sharpe, skew, kurt = _sharpe_moments(x)
+    return _probabilistic_sharpe(sharpe, benchmark, x.size, skew, kurt)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class OverfittingReport:
+    """Result of `probability_of_backtest_overfitting` (CSCV).
+
+    Each combination chooses half of the partitions as the in-sample set; the other half
+    is its out-of-sample set. The arrays have one entry per combination, in the order of
+    ``itertools.combinations(range(n_partitions), n_partitions // 2)`` for the
+    in-sample partitions. Performance values are in the units of the `metric` (the
+    per-period Sharpe ratio by default). When several strategies tie for the best
+    in-sample performance, each counts as selected with equal probability, and the
+    per-combination values are averages over them.
+
+    Attributes:
+        pbo: Probability of backtest overfitting: the fraction of combinations in which
+            the in-sample best is at or below the out-of-sample median (logit <= 0).
+        logits: ``log(w / (1 - w))`` for the out-of-sample relative rank
+            ``w = rank / (n_strategies + 1)`` of the in-sample best (rank 1 is the
+            worst; ties share their average rank), shape (n_combinations,).
+        is_performance: In-sample performance of the in-sample best, shape
+            (n_combinations,).
+        oos_performance: Out-of-sample performance of the in-sample best, shape
+            (n_combinations,).
+        degradation_slope: Slope of the least-squares line of `oos_performance` on
+            `is_performance`. Near or below zero when a better in-sample result does not
+            mean a better out-of-sample one. NaN if `is_performance` is constant.
+        degradation_intercept: Intercept of that line (NaN with the slope).
+        probability_of_loss: Fraction of combinations in which the in-sample best has an
+            out-of-sample performance below zero.
+        n_partitions: Number of partitions of the periods.
+        block_size: Periods per partition. The first
+            ``n_periods - n_partitions * block_size`` periods were left out.
+    """
+
+    pbo: float
+    logits: NDArray[np.float64]
+    is_performance: NDArray[np.float64]
+    oos_performance: NDArray[np.float64]
+    degradation_slope: float
+    degradation_intercept: float
+    probability_of_loss: float
+    n_partitions: int
+    block_size: int
+
+    @property
+    def n_combinations(self) -> int:
+        """Number of in-sample / out-of-sample combinations evaluated."""
+        return int(self.logits.size)
+
+    def __str__(self) -> str:
+        return _table(
+            [
+                ("combinations", str(self.n_combinations)),
+                ("probability of overfitting", _fmt_pct(self.pbo)),
+                ("probability of loss", _fmt_pct(self.probability_of_loss)),
+                ("degradation slope", _fmt_num(self.degradation_slope)),
+                ("degradation intercept", _fmt_num(self.degradation_intercept)),
+                ("partitions", str(self.n_partitions)),
+                ("periods per partition", str(self.block_size)),
+            ]
+        )
+
+
+def _midranks(values: NDArray[np.float64]) -> NDArray[np.float64]:
+    """1-based ranks along axis 1 of a 2-D array; tied values share their average rank."""
+    rows, n = values.shape
+    order = np.argsort(values, axis=1, kind="stable")
+    ordered = np.take_along_axis(values, order, axis=1)
+    position = np.broadcast_to(np.arange(n), (rows, n))
+    starts = np.ones((rows, n), dtype=bool)  # first position of each run of equal values
+    starts[:, 1:] = ordered[:, 1:] != ordered[:, :-1]
+    ends = np.ones((rows, n), dtype=bool)  # last position of each run
+    ends[:, :-1] = starts[:, 1:]
+    first = np.maximum.accumulate(np.where(starts, position, 0), axis=1)
+    last = np.minimum.accumulate(np.where(ends, position, n - 1)[:, ::-1], axis=1)[:, ::-1]
+    ranks = np.empty((rows, n), dtype=np.float64)
+    np.put_along_axis(ranks, order, (first + last) / 2.0 + 1.0, axis=1)
+    return ranks
+
+
+def _sum_over_axis1(values: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Sum over axis 1 by elementwise additions, one slice at a time.
+
+    Each element of the result is the same sequence of IEEE additions wherever its column
+    sits. numpy's reductions do not promise that (they group elements differently by
+    position), and the CSCV default metric must not depend on the order of the strategies.
+    """
+    total: NDArray[np.float64] = values[:, 0].copy()
+    for i in range(1, values.shape[1]):
+        total += values[:, i]
+    return total
+
+
+def _cscv_select(
+    ins: NDArray[np.float64], oos: NDArray[np.float64]
+) -> tuple[NDArray[np.float64], ...]:
+    """The in-sample best strategy of each row and how it does out of sample.
+
+    Returns its logit, overfitting (logit <= 0) and loss (out-of-sample value < 0)
+    indicators, and its in-sample and out-of-sample performance, shape (rows,) each. Tied
+    best strategies each count as selected with equal probability: the values are
+    averages over them. Their ranks and values are summed in sorted order, so the
+    floating-point results do not depend on the order of the strategies.
+    """
+    n = ins.shape[1]
+    best = ins.max(axis=1)
+    selected = ins == best[:, None]
+    count = selected.sum(axis=1)
+    midranks = _midranks(oos)  # half-integers, so comparisons and sums are exact
+    ranks = np.sort(np.where(selected, midranks, (n + 1.0) / 2.0), axis=1)
+    logits = (np.log(ranks) - np.log(n + 1.0 - ranks)).sum(axis=1)  # 0 at (n + 1) / 2
+    overfit = (selected & (2.0 * midranks <= n + 1.0)).sum(axis=1)
+    loss = (selected & (oos < 0.0)).sum(axis=1)
+    oos_best = np.sort(np.where(selected, oos, 0.0), axis=1).sum(axis=1)
+    return logits / count, overfit / count, loss / count, best, oos_best / count
+
+
+def _cscv_sharpe(
+    blocks: NDArray[np.float64],
+) -> Callable[[NDArray[np.intp]], NDArray[np.float64]]:
+    """Per-period Sharpe ratios of sets of blocks, combined from per-block statistics.
+
+    `blocks` has shape (n_partitions, block_size, n_strategies). The returned function
+    maps sets of block indices, shape (c, k), to the Sharpe ratio of each strategy over
+    the union of each set's blocks, shape (c, n_strategies), as `sharpe_ratio` with
+    ``periods_per_year=1`` computes it on the concatenated returns.
+    """
+    excess = _excess(blocks, 0.0)
+    size = blocks.shape[1]
+    means = _sum_over_axis1(excess) / size
+    m2 = _sum_over_axis1((excess - means[:, None, :]) ** 2)
+    scale = np.abs(excess).max(axis=1)
+
+    def sharpe(chosen: NDArray[np.intp]) -> NDArray[np.float64]:
+        block_means = means[chosen]  # (c, k, n_strategies)
+        mean = _sum_over_axis1(block_means) / chosen.shape[1]
+        rows = size * chosen.shape[1]
+        if rows < 2:
+            return np.zeros_like(mean)
+        # Exact pooling of the blocks' sums of squared deviations (no cancellation).
+        spread = _sum_over_axis1((block_means - mean[:, None, :]) ** 2)
+        sd = np.sqrt((_sum_over_axis1(m2[chosen]) + size * spread) / (rows - 1))
+        flat = sd <= _ROUNDING * (1.0 + scale[chosen].max(axis=1))
+        out: NDArray[np.float64] = np.divide(
+            mean, sd, out=np.zeros_like(mean), where=np.logical_not(flat)
+        )
+        return out
+
+    return sharpe
+
+
+def _cscv_metric(
+    metric: Callable[[NDArray[np.float64]], ArrayLike], blocks: NDArray[np.float64]
+) -> Callable[[NDArray[np.intp]], NDArray[np.float64]]:
+    """A user metric evaluated on the rows of each set of blocks, in time order."""
+    n = blocks.shape[2]
+
+    def evaluate(chosen: NDArray[np.intp]) -> NDArray[np.float64]:
+        out = np.empty((chosen.shape[0], n), dtype=np.float64)
+        for row, half in enumerate(chosen):
+            value = metric(blocks[half].reshape(-1, n))
+            try:
+                perf = np.asarray(value, dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"metric must return an array of numbers: {exc}") from exc
+            if perf.shape != (n,):
+                raise ValueError(
+                    f"metric must return one value per strategy, shape ({n},), "
+                    f"got shape {perf.shape}"
+                )
+            if not np.all(np.isfinite(perf)):
+                raise ValueError("metric must return finite values (no NaN or inf)")
+            out[row] = perf
+        return out
+
+    return evaluate
+
+
+def probability_of_backtest_overfitting(
+    returns: ArrayLike,
+    n_partitions: int = 16,
+    metric: Callable[[NDArray[np.float64]], ArrayLike] | None = None,
+) -> OverfittingReport:
+    """Probability that the in-sample best of many strategies disappoints out of sample.
+
+    Combinatorially symmetric cross-validation (CSCV; Bailey, Borwein, López de Prado and Zhu,
+    "The Probability of Backtest Overfitting", 2015) splits the periods (rows) into
+    `n_partitions` consecutive blocks of equal size. For each of the
+    ``C(n_partitions, n_partitions / 2)`` ways to choose half the blocks as the in-sample
+    set, with the other half as the out-of-sample set, it selects the strategy with the
+    best in-sample `metric` and records the out-of-sample relative rank
+    ``w = rank / (n_strategies + 1)`` of that strategy as a logit ``log(w / (1 - w))``.
+    The probability of backtest overfitting (PBO) is the fraction of combinations whose
+    logit is <= 0, i.e. in which the in-sample best is at or below the out-of-sample
+    median. Near 0, choosing the backtest winner carries over to new data; near 0.5 or
+    above, it is no better than choosing at random.
+
+    In-sample and out-of-sample sets always have the same number of periods. If the
+    number of periods is not a multiple of `n_partitions`, the first (oldest)
+    ``n_periods % n_partitions`` periods are left out so that the blocks are equal;
+    `OverfittingReport.block_size` gives the periods per block.
+
+    The result does not depend on the order of the strategies: when several share the
+    best in-sample performance, each counts as selected with equal probability (their
+    logits, overfitting indicators and out-of-sample performance are averaged), and
+    strategies tied out of sample share their average rank.
+
+    Args:
+        returns: Per-period returns of every strategy over the same periods, shape
+            (n_periods, n_strategies), with n_periods >= `n_partitions` and
+            n_strategies >= 2. Columns are the configurations tried (seeds,
+            hyperparameters, rules).
+        n_partitions: Number of blocks, an even int from 2 to 20. The default 16 gives
+            C(16, 8) = 12,870 combinations; each block should still hold enough periods
+            for the metric to be meaningful.
+        metric: Performance of every strategy over a set of periods, higher is better: a
+            callable that takes the rows of the chosen blocks in time order, shape
+            (t, n_strategies), and returns shape (n_strategies,) of finite floats.
+            Defaults to the per-period Sharpe ratio of each column,
+            ``mean / std(ddof=1)`` (0 for a constant column), as `sharpe_ratio` with
+            ``periods_per_year=1`` computes it; this default is evaluated from per-block
+            statistics, much faster than an equivalent callable.
+
+    Returns:
+        An `OverfittingReport` with the PBO, the logits, the in-sample and out-of-sample
+        performance of the selected strategy per combination, the slope of the
+        performance degradation and the probability of an out-of-sample loss.
+
+    Raises:
+        ValueError: If `returns` is not a finite 2-D array with at least two strategies
+            and `n_partitions` periods, if `n_partitions` is not an even int from 2 to
+            20, or if `metric` returns the wrong shape or non-finite values.
+        TypeError: If `metric` is neither callable nor None.
+
+    Example:
+        ```python
+        rng = np.random.default_rng(0)
+        noise = rng.normal(0.0, 0.01, size=(1000, 20))  # 20 skill-less strategies
+        probability_of_backtest_overfitting(noise).pbo  # 0.416: close to a coin flip
+        ```
+    """
+    x = _as_panel(returns, "returns")
+    s = _check_int(n_partitions, "n_partitions", 2)
+    if s % 2:
+        raise ValueError(f"n_partitions must be even, got {s}")
+    if s > _MAX_PARTITIONS:
+        raise ValueError(
+            f"n_partitions={s} gives {math.comb(s, s // 2):,} combinations; at most "
+            f"{_MAX_PARTITIONS} partitions ({math.comb(_MAX_PARTITIONS, _MAX_PARTITIONS // 2):,}"
+            " combinations) are supported"
+        )
+    if metric is not None and not callable(metric):
+        raise TypeError(f"metric must be callable or None, got {type(metric).__name__}")
+    n_periods, n = x.shape
+    if n_periods < s:
+        raise ValueError(f"returns has {n_periods} periods, fewer than n_partitions={s}")
+    size = n_periods // s
+    blocks = x[n_periods - s * size :].reshape(s, size, n)
+
+    # In lexicographic order, the complement of combination i is combination
+    # total - 1 - i (complementing reverses the order), so pairing i < total / 2 with its
+    # complement covers every combination once in sample and once out of sample.
+    halves = np.array(list(itertools.combinations(range(s), s // 2)), dtype=np.intp)
+    total = halves.shape[0]
+    perf = _cscv_sharpe(blocks) if metric is None else _cscv_metric(metric, blocks)
+
+    # Per combination: logit, overfitting and loss indicators, in- and out-of-sample
+    # performance of the in-sample best.
+    results = np.empty((5, total), dtype=np.float64)
+    chunk = max(1, _CSCV_CHUNK // (halves.shape[1] * n))
+    for start in range(0, total // 2, chunk):
+        first = np.arange(start, min(start + chunk, total // 2))
+        perf_first, perf_second = perf(halves[first]), perf(halves[total - 1 - first])
+        ins = np.concatenate((perf_first, perf_second))
+        oos = np.concatenate((perf_second, perf_first))
+        results[:, np.concatenate((first, total - 1 - first))] = _cscv_select(ins, oos)
+    logits, overfit, loss, is_perf, oos_perf = results
+
+    if _sample_std(is_perf, offset=0.0) == 0.0:
+        slope = intercept = math.nan
+    else:
+        is_mean, oos_mean = float(np.mean(is_perf)), float(np.mean(oos_perf))
+        dev = is_perf - is_mean
+        slope = float(dev @ (oos_perf - oos_mean)) / float(dev @ dev)
+        intercept = oos_mean - slope * is_mean
+    return OverfittingReport(
+        pbo=float(np.mean(overfit)),
+        logits=logits,
+        is_performance=is_perf,
+        oos_performance=oos_perf,
+        degradation_slope=slope,
+        degradation_intercept=intercept,
+        probability_of_loss=float(np.mean(loss)),
+        n_partitions=s,
+        block_size=size,
     )
 
 
