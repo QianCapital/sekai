@@ -145,6 +145,7 @@ nav:
       - Batched and differentiable environments: finance/batched.md
       - Performance metrics: finance/metrics.md
       - Benchmarks: finance/benchmarks.md
+      - Paper and live trading: finance/live.md
       - Order books: finance/order-book.md
   - Environments:
       - Catalog: environments/index.md

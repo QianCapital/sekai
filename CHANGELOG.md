@@ -162,6 +162,26 @@ All notable changes to sekai are documented here. The format follows
 - `LimitOrderBookEnv(latency=...)`: orders reach the book after a fixed or random delay,
   priced at decision time. The default `latency=0` behaves exactly as before.
 
+**Paper and live trading**
+
+- `sekai.envs.finance.LiveMarketEnv`: the `Market-v1` interface (observation builders,
+  action maps, rewards, next-close or same-close execution) over a `DataFeed` and a
+  `Broker`. Replaying a history through it with a `PaperBroker` reproduces `Market-v1` on
+  that history step for step (tested to about 1e-16, costs, borrow fees and delistings
+  included).
+- `sekai.finance.live`: `Bar`; the `DataFeed` protocol and `ReplayFeed` (bars from a
+  `MarketData` you own); the `Broker` protocol (`reset`, `execute(weights, bar, context)`,
+  `mark(bar)`), `AccountState` and `ExecutionReport`; `PaperBroker`, a simulated account
+  with sekai's accounting, cost and holding-cost models; `orders_for`, share quantities for
+  target weights in whole lots. sekai defines the interfaces and connects to no market or
+  data vendor.
+- `RiskLimits` and `GuardedBroker`: hard limits between any policy and any broker (caps on
+  each position, gross and net exposure and turnover, no shorts, and a drawdown kill switch
+  that liquidates and keeps the account flat), with every intervention in `events`.
+- `sekai.envs.finance.batch_market.cost_context`: the cost and holding-cost inputs, shared
+  by `BatchMarketEnv` and `LiveMarketEnv`.
+- Docs: "Paper and live trading", with a broker adapter sketch.
+
 ### Changed
 
 - `split_infos` (and so every native vector env) splits nested info mappings per env.

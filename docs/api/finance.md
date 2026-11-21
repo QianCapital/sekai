@@ -247,6 +247,32 @@ See [Holding costs](../finance/execution.md#holding-costs).
         - probability_of_backtest_overfitting
         - RecordPerformance
 
+## Paper and live trading
+
+`sekai.finance.live`. See [Paper and live trading](../finance/live.md).
+
+::: sekai.finance.live.Bar
+
+::: sekai.finance.live.DataFeed
+
+::: sekai.finance.live.ReplayFeed
+
+::: sekai.finance.live.Broker
+
+::: sekai.finance.live.PaperBroker
+
+::: sekai.finance.live.AccountState
+
+::: sekai.finance.live.ExecutionReport
+
+::: sekai.finance.live.orders_for
+
+::: sekai.finance.live.RiskLimits
+
+::: sekai.finance.live.RiskEvent
+
+::: sekai.finance.live.GuardedBroker
+
 ## Benchmarks
 
 `sekai.finance.benchmark`. See [Benchmarks](../finance/benchmarks.md).

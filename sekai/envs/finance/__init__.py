@@ -4,6 +4,7 @@ execution, and their natively vectorised versions, with an RGB renderer for each
 The reusable parts they are built from live in `sekai.finance`."""
 
 from sekai.envs.finance.batch_market import BatchMarketEnv, MarketVecEnv, make_market
+from sekai.envs.finance.live_env import LiveMarketEnv
 from sekai.envs.finance.lob_env import LimitOrderBookEnv, LimitOrderBookMarket
 from sekai.envs.finance.market import random_correlation, sample_window, simulate_gbm
 from sekai.envs.finance.market_env import MarketEnv, default_market
@@ -31,6 +32,7 @@ __all__ = [
     "BatchMarketEnv",
     "MarketVecEnv",
     "make_market",
+    "LiveMarketEnv",
     "LimitOrderBookEnv",
     "LimitOrderBookMarket",
     "MarketEnv",

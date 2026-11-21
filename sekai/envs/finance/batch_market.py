@@ -701,45 +701,18 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
 
     def _context(self, rows: Array, decision: Array, needs: frozenset[str]) -> dict[str, Any]:
         """Inputs of cost and holding models at the execution `rows`, per slot."""
-        B, panel = self.backend, self._panel
-        cols, _ = self._cols()
-        ctx: dict[str, Any] = {"assets": cols}
-        if "equity" in needs:
-            ctx["equity"] = self.capital * self._equity
-        if "volatility" in needs:
-            view = MarketView(
-                backend=B,
-                panel=panel,
-                paths=self._paths,
-                rows=decision,
-                slots=self._slots,
-                lookback=self._lookback,
-                episode_length=self._episode_length,
-                elapsed=self._t,
-                weights=self._weights,
-                equity=self._equity,
-                peak=self._peak,
-                pending=None,
-            )
-            avail = view.available(self._lookback)
-            window = B.where(avail, B.log1p(view.returns(self._lookback, fill=0.0)), 0.0)
-            count = B.sum(B.asfloat(avail, self._like), axis=-1)
-            mean = B.sum(window, axis=-1) / B.maximum(count, 1.0)
-            var = B.sum(B.where(avail, window - mean[..., None], 0.0) ** 2, axis=-1) / B.maximum(
-                count, 1.0
-            )
-            ctx["volatility"] = B.where(count >= 2, B.sqrt(B.maximum(var, 0.0)), float("nan"))
-        if "volume" in needs:
-            if "dollar_volume" in panel.fields:
-                ctx["volume"] = self._asset_at(panel.fields["dollar_volume"], rows)
-            else:
-                shares = self._asset_at(panel.fields["volume"], rows)
-                ctx["volume"] = shares * self._asset_at(panel.fields[self._close_field], rows)
-        if "spread" in needs:
-            ctx["spread"] = self._asset_at(panel.fields["spread"], rows)
-        if "borrow_rate" in needs:
-            ctx["borrow_rate"] = self._asset_at(panel.fields["borrow_rate"], rows)
-        return ctx
+        return cost_context(
+            backend=self.backend,
+            panel=self._panel,
+            paths=self._paths,
+            slots=self._slots,
+            rows=rows,
+            decision=decision,
+            lookback=self._lookback,
+            needs=needs,
+            equity=self.capital * self._equity,
+            close_field=self._close_field,
+        )
 
     def _exposures(self, names: Sequence[str], rows: Array) -> dict[str, Array]:
         B = self.backend
@@ -980,6 +953,73 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         )
 
 
+def cost_context(
+    *,
+    backend: Backend,
+    panel: MarketPanel,
+    paths: Array,
+    slots: Array,
+    rows: Array,
+    decision: Array,
+    lookback: int,
+    needs: frozenset[str],
+    equity: Array,
+    close_field: str = "close",
+) -> dict[str, Any]:
+    """The inputs of cost and holding models, per slot, that `needs` names.
+
+    Orders fill at `rows` (whose volume, spread and borrow fees apply); the volatility is
+    estimated over the `lookback` returns observed at the `decision` rows (the standard
+    deviation of log returns, NaN with fewer than two). `volume` is the traded value: the
+    `dollar_volume` field, else `volume` shares times the close. Shared by `BatchMarketEnv`
+    and `LiveMarketEnv`, so live and simulated trading price costs the same way.
+    """
+    B = backend
+    occupied = slots >= 0
+    cols = B.where(occupied, slots, 0)
+
+    def at(arr: Array) -> Array:
+        return arr[paths[:, None], rows[:, None], cols]
+
+    ctx: dict[str, Any] = {"assets": cols}
+    if "equity" in needs:
+        ctx["equity"] = equity
+    if "volatility" in needs:
+        view = MarketView(
+            backend=B,
+            panel=panel,
+            paths=paths,
+            rows=decision,
+            slots=slots,
+            lookback=lookback,
+            episode_length=0,
+            elapsed=None,
+            weights=B.zeros(tuple(slots.shape), like=panel.returns),
+            equity=equity,
+            peak=equity,
+            pending=None,
+        )
+        avail = view.available(lookback)
+        like = panel.returns
+        window = B.where(avail, B.log1p(view.returns(lookback, fill=0.0)), 0.0)
+        count = B.sum(B.asfloat(avail, like), axis=-1)
+        mean = B.sum(window, axis=-1) / B.maximum(count, 1.0)
+        var = B.sum(B.where(avail, window - mean[..., None], 0.0) ** 2, axis=-1) / B.maximum(
+            count, 1.0
+        )
+        ctx["volatility"] = B.where(count >= 2, B.sqrt(B.maximum(var, 0.0)), float("nan"))
+    if "volume" in needs:
+        if "dollar_volume" in panel.fields:
+            ctx["volume"] = at(panel.fields["dollar_volume"])
+        else:
+            ctx["volume"] = at(panel.fields["volume"]) * at(panel.fields[close_field])
+    if "spread" in needs:
+        ctx["spread"] = at(panel.fields["spread"])
+    if "borrow_rate" in needs:
+        ctx["borrow_rate"] = at(panel.fields["borrow_rate"])
+    return ctx
+
+
 def _accepts(fn: Any, name: str) -> bool:
     """Whether calling `fn` with the keyword argument `name` is allowed."""
     try:
@@ -1028,4 +1068,4 @@ def make_market(**kwargs: Any) -> UnbatchedEnv:
     return UnbatchedEnv(BatchMarketEnv(1, **kwargs))
 
 
-__all__ = ["BatchMarketEnv", "MarketVecEnv", "make_market", "EXECUTIONS"]
+__all__ = ["BatchMarketEnv", "MarketVecEnv", "make_market", "cost_context", "EXECUTIONS"]

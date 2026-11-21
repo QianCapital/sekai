@@ -561,7 +561,9 @@ actions. It takes every argument of `Market-v0` and adds:
   unshortable names, a drawdown stop.
 
 With `execution="close"` it reproduces `Market-v0` exactly. See
-[Batched and differentiable environments](../finance/batched.md) for the details.
+[Batched and differentiable environments](../finance/batched.md) for the details, and
+[Paper and live trading](../finance/live.md) for `LiveMarketEnv`, which gives a policy
+trained on it the same interface over a live data feed and a broker.
 
 ```python
 import sekai

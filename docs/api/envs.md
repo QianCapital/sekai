@@ -51,6 +51,10 @@ See [Finance](../environments/finance.md).
 
 ::: sekai.envs.finance.make_market
 
+::: sekai.envs.finance.LiveMarketEnv
+
+::: sekai.envs.finance.batch_market.cost_context
+
 ::: sekai.envs.finance.LimitOrderBookEnv
 
 ::: sekai.envs.finance.LimitOrderBookMarket
