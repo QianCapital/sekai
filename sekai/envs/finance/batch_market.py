@@ -129,6 +129,19 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         dt: Years per step (default: from the data's timestamps, the model, or 1/252).
         delisting_return: Return of an asset over the period in which it delists.
         max_drawdown: Terminate a lane when its drawdown reaches this (in (0, 1]).
+        flat_overnight: Hold no position from one trading session into the next: at the
+            last decision of a session the book is sold to cash at that close (costs
+            charged). Sessions come from `MarketData.sessions()` (calendar dates of
+            datetime timestamps, or a `session` series), or a panel's `session` series.
+            Needs `execution="close"` or `"next_close"`.
+        initial_margin: Equity required per unit of gross exposure to open positions (e.g.
+            0.5: at most 2x gross): orders above `1 / initial_margin` gross are scaled down.
+        maintenance_margin: Equity required per unit of gross exposure to keep positions
+            (e.g. 0.25): when price moves push gross exposure above
+            `1 / maintenance_margin`, the broker cuts every position in proportion, at that
+            close and at the cost of the trade, back to `1 / initial_margin` (default
+            initial margin: twice the maintenance margin, at most 1). `info["margin_call"]`
+            flags it.
         privileged_state: Add the simulation's latent state to info.
         backend: "numpy" or "torch".
         device: torch device.
@@ -168,6 +181,9 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         dt: float | None = None,
         delisting_return: float = 0.0,
         max_drawdown: float | None = None,
+        flat_overnight: bool = False,
+        initial_margin: float | None = None,
+        maintenance_margin: float | None = None,
         privileged_state: bool = False,
         backend: str | Backend = "numpy",
         device: Any = None,
@@ -198,6 +214,25 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             )
         if max_drawdown is not None and not 0.0 < max_drawdown <= 1.0:
             raise ValueError(f"max_drawdown must be in (0, 1], got {max_drawdown!r}.")
+        if flat_overnight and execution not in ("close", "next_close"):
+            raise ValueError(
+                "flat_overnight needs execution='close' or 'next_close' (with next-open or "
+                "VWAP fills, positions are held overnight by construction)."
+            )
+        if maintenance_margin is not None and initial_margin is None:
+            initial_margin = min(1.0, 2.0 * maintenance_margin)
+        for name, value in (
+            ("initial_margin", initial_margin),
+            ("maintenance_margin", maintenance_margin),
+        ):
+            if value is not None and not 0.0 < value <= 1.0:
+                raise ValueError(f"{name} must be in (0, 1], got {value!r}.")
+        if (
+            initial_margin is not None
+            and maintenance_margin is not None
+            and maintenance_margin > initial_margin
+        ):
+            raise ValueError("maintenance_margin cannot exceed initial_margin.")
         B = get_backend(backend)
         self._lookback = int(lookback)
         self._episode_length = int(episode_length)
@@ -239,6 +274,9 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 f"delisting_return must be >= -1 (a total loss), got {delisting_return!r}."
             )
         self.max_drawdown = max_drawdown
+        self.flat_overnight = flat_overnight
+        self.initial_margin = initial_margin
+        self.maintenance_margin = maintenance_margin
         self.privileged_state = privileged_state
         self.data = data
         self.scenarios: ScenarioGenerator | None = None
@@ -266,6 +304,16 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 device=device,
                 dtype=dtype,
             )
+            if flat_overnight:
+                sessions = np.asarray(data.sessions(), dtype=np.float64)[None]
+                panel = MarketPanel(
+                    returns=panel.returns,
+                    valid=panel.valid,
+                    fields=panel.fields,
+                    exogenous={**panel.exogenous, "session": B.asfloat(sessions, panel.returns)},
+                    timestamps=panel.timestamps,
+                    assets=panel.assets,
+                )
             ppy = data.periods_per_year
             self.dt = dt if dt is not None else (1.0 / ppy if ppy else 1 / 252)
         else:
@@ -324,6 +372,11 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             assets.add(self.shortable)
         if self.execution in _FILL_FIELD:
             assets |= {_FILL_FIELD[self.execution], close}
+            # Corporate actions on the fill day adjust the overnight move (if the data has them).
+            if data is not None:
+                assets |= {"split", "dividend"} & set(data.fields)
+        if self.flat_overnight and data is None:
+            market.add("session")  # from MarketData, computed from the timestamps
         return assets, market
 
     def _sample(
@@ -363,7 +416,12 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         cut = MarketPanel(
             returns=panel.returns[:, :W],
             valid=panel.valid[:, :W],
-            fields={k: v[:, :W] for k, v in panel.fields.items() if k in asset_fields},
+            fields={
+                k: v[:, :W]
+                for k, v in panel.fields.items()
+                if k in asset_fields
+                or (k in ("split", "dividend") and self.execution in _FILL_FIELD)
+            },
             exogenous={k: v[:, :W] for k, v in panel.exogenous.items()},
             timestamps=None if panel.timestamps is None else np.asarray(panel.timestamps)[..., :W],
             assets=panel.assets,
@@ -741,7 +799,14 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 close_now = close[p2, r[:, None], cols]
                 close_next = close[p2, nxt[:, None], cols]
                 priced = both & B.isfinite(fill_next) & B.isfinite(close_now)
-                move = B.where(priced, fill_next / B.where(priced, close_now, 1.0) - 1.0, 0.0)
+                value_next = fill_next  # a share's value at the fill, dividends and splits in
+                if "dividend" in panel.fields:
+                    cash = panel.fields["dividend"][p2, nxt[:, None], cols]
+                    value_next = value_next + B.where(B.isfinite(cash), cash, 0.0)
+                if "split" in panel.fields:
+                    ratio = panel.fields["split"][p2, nxt[:, None], cols]
+                    value_next = value_next * B.where(B.isfinite(ratio), ratio, 1.0)
+                move = B.where(priced, value_next / B.where(priced, close_now, 1.0) - 1.0, 0.0)
                 move = B.where(delisting, self.delisting_return, move)
                 overnight = 1.0 + B.sum(w * move, axis=-1)
                 alive = overnight > 0
@@ -754,6 +819,15 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 exec_rows = nxt
                 inside = valid_next & B.isfinite(fill_next) & B.isfinite(close_next)
                 ret = B.where(inside, close_next / B.where(inside, fill_next, 1.0) - 1.0, 0.0)
+            crossing = None
+            if self.flat_overnight:  # the next period crosses into a new session: go to cash
+                session = panel.exogenous["session"]
+                crossing = session[self._paths, nxt] != session[self._paths, r]
+                held = B.where(crossing[:, None], 0.0, held)
+            if self.initial_margin is not None:
+                gross = B.sum(B.abs(held), axis=-1, keepdims=True)
+                most = 1.0 / self.initial_margin
+                held = held * B.where(gross > most, most / B.where(gross > most, gross, 1.0), 1.0)
             trades = held - start
             turnover = B.sum(B.abs(trades), axis=-1)
             cost_ctx = self._context(exec_rows, r, self.cost_model.requires)
@@ -773,6 +847,26 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 drifted = B.where(delisting, 0.0, drifted)
             if overnight is not None:
                 growth = B.where(overnight > 0, overnight * growth, 0.0)
+            margin_call = None
+            if self.maintenance_margin is not None:
+                assert self.initial_margin is not None
+                gross = B.sum(B.abs(drifted), axis=-1)
+                margin_call = (gross * self.maintenance_margin > 1.0) & (growth > 0.0)
+                scale = B.where(
+                    margin_call, (1.0 / self.initial_margin) / B.where(margin_call, gross, 1.0), 1.0
+                )
+                forced = drifted * scale[:, None]
+                forced_ctx = self._context(nxt, r, self.cost_model.requires)
+                if not self._cost_takes_assets:
+                    forced_ctx.pop("assets")
+                forced_cost = B.asfloat(self.cost_model(forced - drifted, **forced_ctx), like)
+                forced_cost = B.where(margin_call, forced_cost, 0.0)
+                growth = B.where(forced_cost >= 1.0, 0.0, growth * (1.0 - forced_cost))
+                cost = cost + forced_cost
+                turnover = turnover + B.where(
+                    margin_call, B.sum(B.abs(forced - drifted), axis=-1), 0.0
+                )
+                drifted = B.where(margin_call[:, None], forced, drifted)
         wiped = growth <= 0.0
         previous = self._equity
         equity = B.where(frozen, previous, B.maximum(previous * growth, 0.0))
@@ -818,6 +912,10 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             info["variance"] = variance
             if exposures is not None:
                 info["exposures"] = exposures
+        if crossing is not None:
+            info["session_end"] = B.where(frozen, False, crossing)
+        if margin_call is not None:
+            info["margin_call"] = B.where(frozen, False, margin_call)
         return reward, terminated, truncated, info
 
     def _risk(self, weights: Array, rows: Array) -> tuple[Array, Array | None]:

@@ -136,6 +136,32 @@ All notable changes to sekai are documented here. The format follows
 - `BatchMarketEnv` replaces the paths of lanes that restart in new arrays (a panel never
   changes once built), so snapshots and returned observations can share it.
 
+**Market realism**
+
+- Corporate actions: with raw prices and `split` (new shares per old share) and `dividend`
+  (cash per share) fields, `MarketData.simple_returns()` gives total returns, which
+  `Market-v1` trades on (its next-open fills apply the fill day's actions to the overnight
+  move). `MarketData.adjusted()` returns a forward-adjusted total-return price index (no
+  future information in past prices) for the environments that read prices;
+  `has_corporate_actions`.
+- Trading sessions: `MarketData.sessions()` (calendar dates of datetime timestamps, or a
+  `session` series), and `BatchMarketEnv(flat_overnight=True)`, which sells the book at the
+  last decision of each session (`info["session_end"]`).
+- Margin: `BatchMarketEnv(initial_margin=..., maintenance_margin=...)` scales orders down
+  to `1 / initial_margin` gross, and when gross exposure drifts above
+  `1 / maintenance_margin` cuts every position back at that close, paying the cost
+  (`info["margin_call"]`).
+- Historical order-book replay (`sekai.finance.lob`): `MessageReplay` replays a historical
+  message stream (`OrderBookMessages`, `MessageType`) as background order flow around
+  agents' orders, with real queue priority, seeded from a `BookSnapshot` or a
+  `BookSnapshots` history; `read_lobster()` parses LOBSTER message and order-book files you
+  own, with NumPy alone. `LimitOrderBookEnv` and `LimitOrderBookMarket` take
+  `flow=MessageReplay(...)`, with episodes as windows of the message stream (`sampler=`,
+  `reset(options={"start": t})`) and `info["time"]`; agents' orders are held while the
+  replayed market is halted.
+- `LimitOrderBookEnv(latency=...)`: orders reach the book after a fixed or random delay,
+  priced at decision time. The default `latency=0` behaves exactly as before.
+
 ### Changed
 
 - `split_infos` (and so every native vector env) splits nested info mappings per env.

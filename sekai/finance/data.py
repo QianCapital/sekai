@@ -273,6 +273,14 @@ class MarketData:
         price = arrays[price_field]
         if validate and np.any(price[np.isfinite(price)] <= 0):
             raise ValueError("prices must be positive where they are defined (NaN = not listed).")
+        if validate and "split" in arrays:
+            ratios = arrays["split"]
+            if ratios.ndim != 2 or np.any(ratios[np.isfinite(ratios)] <= 0):
+                raise ValueError("the split field must be (T, N) and positive (NaN = no split).")
+        if validate and "dividend" in arrays:
+            cash = arrays["dividend"]
+            if cash.ndim != 2 or np.any(cash[np.isfinite(cash)] < 0):
+                raise ValueError("the dividend field must be (T, N) and >= 0 (NaN = none).")
 
         if timestamps is None:
             times: NDArray[Any] = np.arange(n_steps, dtype=np.int64)
@@ -478,14 +486,88 @@ class MarketData:
         return float((self.n_steps - 1) / (span / 365.25)) if span > 0 else None
 
     def simple_returns(self) -> NDArray[np.float64]:
-        """`(T, N)` simple returns of the prices, `prices[t] / prices[t - 1] - 1`; NaN in row 0
-        and wherever either price is missing (read-only, computed once)."""
+        """`(T, N)` simple returns of holding each asset over `(t - 1, t]`; NaN in row 0 and
+        wherever either price is missing (read-only, computed once).
+
+        Without corporate actions this is `prices[t] / prices[t - 1] - 1`. With a `split`
+        field (new shares per old share, effective at row t: 2.0 for a 2-for-1 split; NaN
+        means none) and a `dividend` field (cash per share, after any split, going ex at
+        row t; NaN means none), it is the total return of a holder:
+        `split[t] * (prices[t] + dividend[t]) / prices[t - 1] - 1`, so raw (unadjusted)
+        prices give the right returns.
+        """
         if self._returns is None:
-            out = np.full(self.prices.shape, np.nan)
+            price = self.prices
+            out = np.full(price.shape, np.nan)
+            now = price[1:]
+            if "dividend" in self._fields:
+                now = now + np.nan_to_num(self._fields["dividend"][1:], nan=0.0)
+            if "split" in self._fields:
+                ratio = self._fields["split"][1:]
+                now = now * np.where(np.isfinite(ratio), ratio, 1.0)
             with np.errstate(invalid="ignore", divide="ignore"):
-                out[1:] = self.prices[1:] / self.prices[:-1] - 1.0
+                out[1:] = now / price[:-1] - 1.0
             self._returns = _readonly(out)
         return self._returns
+
+    @property
+    def has_corporate_actions(self) -> bool:
+        """Whether the data has `split` or `dividend` fields (see `simple_returns`)."""
+        return "split" in self._fields or "dividend" in self._fields
+
+    def adjusted(self) -> MarketData:
+        """A copy whose prices are a total-return index, with the corporate-action fields removed.
+
+        Each listed stretch of an asset starts at its raw price and then moves with
+        `simple_returns()`, so splits no longer look like crashes and dividends are
+        reinvested. The index is built forwards from the first price, using only
+        corporate actions up to each row: unlike the usual back-adjustment, which rescales
+        history with later splits and dividends, it never puts future information in a
+        past price. Use it for environments that compute returns from prices
+        (`Trading-v0/v1`, `Portfolio-v0/v1`, `Market-v0`); `Market-v1` reads
+        `simple_returns()` and takes raw prices directly. Other fields are unchanged:
+        derive a share-count field such as `volume` into a traded value first
+        (`dollar_volume`, which `Market-v1`'s cost models prefer) if a split affects it.
+        """
+        price = self.prices
+        r = self.simple_returns()
+        index = np.array(price, copy=True)
+        for t in range(1, self.n_steps):
+            ok = np.isfinite(r[t]) & np.isfinite(index[t - 1])
+            index[t] = np.where(ok, index[t - 1] * (1.0 + r[t]), price[t])
+        fields = {k: v for k, v in self._fields.items() if k not in ("split", "dividend")}
+        fields[self.price_field] = index
+        return MarketData(
+            fields=fields,
+            timestamps=self._timestamps,
+            assets=self._assets,
+            exogenous=self._exogenous,
+            price_field=self.price_field,
+            warmup=self._warmup,
+        )
+
+    def sessions(self) -> NDArray[np.int64]:
+        """`(T,)` trading-session number of each row (0, 1, ...), for intraday data.
+
+        From the `session` exogenous series if there is one (any labels; a new session
+        starts wherever it changes), else from datetime timestamps (one session per
+        calendar date).
+
+        Raises:
+            ValueError: For numeric timestamps without a `session` series.
+        """
+        if "session" in self._exogenous:
+            labels = np.asarray(self._exogenous["session"]).reshape(self.n_steps, -1)[:, 0]
+        elif self.is_datetime:
+            labels = self._timestamps.astype("datetime64[D]").astype(np.int64)
+        else:
+            raise ValueError(
+                "Sessions need datetime timestamps or a 'session' exogenous series; these "
+                "timestamps are numeric."
+            )
+        change = np.concatenate([[False], labels[1:] != labels[:-1]])
+        out: NDArray[np.int64] = np.cumsum(change).astype(np.int64)
+        return out
 
     def log_returns(self) -> NDArray[np.float64]:
         """`(T, N)` log returns of the prices; NaN in row 0 and wherever either price is missing."""

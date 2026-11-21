@@ -14,7 +14,7 @@ that a learned policy has to beat.
 | [`Market-v1`](#market-v1) | the same, with explicit execution timing, hard constraints, holding costs and risk models; batched on NumPy or torch | as `Market-v0`, or any scenario generator | as `Market-v0` |
 | [`MarketMaking-v0`](#marketmaking-v0) | quote a bid and an ask | Avellaneda & Stoikov (2008) | `avellaneda_stoikov_action()` |
 | [`OptimalExecution-v0`](#optimalexecution-v0) | liquidate a large position | Almgren & Chriss (2000) | `almgren_chriss_actions()` |
-| [`LimitOrderBook-v0`](#limitorderbook-v0) | quote and trade in a limit order book | zero-intelligence order flow | inventory-skewed quotes |
+| [`LimitOrderBook-v0`](#limitorderbook-v0) | quote and trade in a limit order book | zero-intelligence order flow, or your historical messages | inventory-skewed quotes |
 
 [`LimitOrderBookMarket`](#limitorderbookmarket) puts several agents in one order book.
 The first four have [native vector versions](#native-vector-environments) that step
@@ -826,7 +826,7 @@ $\phi$ = `inventory_penalty` per squared lot per unit of time.
 | `action_mask()` | a tuple of per-dimension `int8` masks: at the long inventory limit no bid and no market buy, at the short limit no ask and no market sell |
 | Reward | change in mark-to-market wealth (ticks) minus the inventory penalty |
 | Termination | at the end of the session (`n_steps` = `session_length / decision_interval` decisions); the clock is observed |
-| `info` | `timestamp` (session time), `dt` (the time the step covered: `decision_interval`, or less on a final, shorter step), `mid_price`, `spread`, `inventory`, `cash`, `wealth`, `fills` (the agent's fills this step) |
+| `info` | `timestamp` (session time), `dt` (the time the step covered: `decision_interval`, or less on a final, shorter step), `mid_price`, `spread`, `inventory`, `cash`, `wealth`, `fills` (the agent's fills this step); with a replay also `time`, the book's time on the messages' clock |
 
 | Key | Space | Content |
 |---|---|---|
@@ -836,9 +836,9 @@ $\phi$ = `inventory_penalty` per squared lot per unit of time.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `flow` | `ZeroIntelligenceFlow()` | background order flow |
-| `mid_price` | `10_000` | initial mid price in ticks |
-| `session_length` | `300.0` | session length, in the flow's time units |
+| `flow` | `ZeroIntelligenceFlow()` | background order flow: simulated, or a [`MessageReplay`](../finance/order-book.md#historical-replay) of historical messages |
+| `mid_price` | `10_000` | initial mid price in ticks (simulated flow) |
+| `session_length` | `300.0` | session length, in the flow's time units (seconds for a replay) |
 | `decision_interval` | `1.0` | time between decisions ($\Delta$) |
 | `levels` | `5` | book levels observed |
 | `max_quote_offset` | `5` | farthest quote level $K$ |
@@ -847,6 +847,23 @@ $\phi$ = `inventory_penalty` per squared lot per unit of time.
 | `inventory_penalty` | `0.01` | $\phi$, per squared lot per unit of time |
 | `max_trades` | `16` | recent trades in the observation |
 | `warmup` | `20.0` | time the book evolves before the session starts |
+| `latency` | `0.0` | time an action takes to reach the book, in $[0, \Delta]$: a number, or a function of the env's random generator for a random latency ([latency](../finance/order-book.md#latency)) |
+| `sampler` | `"random"` | with a replay, which window of the message stream each episode is: `"sequential"`, an int, or an [`EpisodeSampler`](../finance/data.md#episode-samplers) |
+
+**Historical order flow.** With `flow=MessageReplay(messages, snapshots=...)` (from your own
+LOBSTER files, through `read_lobster`) the agent trades against replayed historical orders,
+with realistic queue positions; the [replay model and its biases](../finance/order-book.md#the-replay-model)
+are on the order-book page. Each episode is a window of the message stream: the book takes
+its historical state `warmup` before the first decision, `sampler` places the windows on a
+grid of $\Delta$ from the first message, and `reset(options={"start": t})` makes the first
+decision at time `t` (a float or `Time(t)` on the messages' clock; an int is a grid
+position). `info["time"]` then reports the book's time on that clock. While the replayed
+market is halted, the agent's orders are not sent.
+
+**Latency.** With `latency` $\ell > 0$, an action decided at time $t$ reaches the book at
+$t + \ell$, after the background events up to then; its prices are fixed at decision time,
+so quotes go stale and cancels can come too late. Observations are still taken at decision
+time ([`DelayObservation`](../guide/time.md#latency) delays them).
 
 ```python
 lob = sekai.make("LimitOrderBook-v0")
@@ -909,9 +926,11 @@ its traders `"trader_0"`, `"trader_1"`, ...; trader $i$ decides every
 `decision_intervals[i]` units of time (one value for all, or one per trader), each wait
 multiplied by a random factor in $[1 - \text{jitter}, 1 + \text{jitter}]$. The other
 arguments (`flow`, `mid_price`, `session_length`, `levels`, `max_quote_offset`,
-`order_size`, `max_inventory`, `inventory_penalty`, `max_trades`, `warmup`) are as for
-`LimitOrderBook-v0`, and so are each trader's observation, action, `action_mask(agent)` and
-reward.
+`order_size`, `max_inventory`, `inventory_penalty`, `max_trades`, `warmup`, `sampler`) are
+as for `LimitOrderBook-v0`, and so are each trader's observation, action,
+`action_mask(agent)` and reward. With a `MessageReplay` as `flow`, the windows of the message
+stream lie on a grid of the shortest decision interval. There is no `latency`: every
+trader's orders reach the book at once.
 
 Each `step(actions)` takes actions from exactly the traders whose turn it is, checks them all
 (an invalid one raises `InvalidAction` before any is carried out, so the failed step changes

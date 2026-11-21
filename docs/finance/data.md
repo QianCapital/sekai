@@ -150,6 +150,42 @@ explicitly first: `frame.tz_convert("UTC").tz_localize(None)` to work in UTC, or
 `frame.tz_localize(None)` to keep the local wall-clock times. Keep event times for
 `asof_join` in the same convention.
 
+## Corporate actions
+
+Give `MarketData` raw (unadjusted) prices with a `split` field (new shares per old share,
+effective at a row: `2.0` for a 2-for-1 split, `0.5` for a 1-for-2 reverse split) and a
+`dividend` field (cash per share, after any split, going ex at a row), NaN where there is
+none, and `simple_returns()` gives a holder's total return,
+`split[t] * (prices[t] + dividend[t]) / prices[t - 1] - 1`, rather than the price change:
+a split no longer looks like a crash and dividends count. `Market-v1` trades on these
+returns directly (and its next-open fills apply the fill day's corporate actions to the
+overnight move), so raw prices with these fields behave exactly like adjusted prices.
+
+The environments that compute returns from prices (`Trading`, `Portfolio`, `Market-v0`)
+need adjusted prices instead: `data.adjusted()` replaces the prices with a total-return
+index and drops the two fields. The index is built forwards from each asset's first price,
+using only corporate actions up to each row; the usual back-adjustment rescales history
+with later events, which puts future information in past prices. Share counts in other
+fields (`volume`) are left as they are: turn them into traded values (`dollar_volume`,
+which `Market-v1`'s cost models prefer) before a split makes them inconsistent.
+
+```python
+prices = np.array([[100.0], [102.0], [51.5], [52.0], [51.0]])
+split = np.array([[np.nan], [np.nan], [2.0], [np.nan], [np.nan]])  # 2-for-1 at row 2
+dividend = np.array([[np.nan], [np.nan], [np.nan], [np.nan], [0.5]])  # 0.50 ex at row 4
+raw = MarketData(prices, fields={"split": split, "dividend": dividend})
+print(raw.simple_returns()[:, 0].round(4))  # [    nan  0.02    0.0098  0.0097 -0.0096]
+print(raw.adjusted().prices[:, 0])  # [100. 102. 103. 104. 103.]
+```
+
+## Trading sessions
+
+`data.sessions()` numbers the trading sessions of each row: one per calendar date of
+datetime timestamps, or wherever a `session` exogenous series changes (for sessions that
+cross midnight, or numeric timestamps). `Market-v1` uses it for `flat_overnight=True`, which
+sells the book to cash at the last decision of every session, so no position is carried
+into the next one.
+
 ## Slicing and selection
 
 The examples below use a synthetic history of five assets over 2,520 weekdays (the

@@ -71,7 +71,10 @@ period in which the order fills, and the volatility of the window the decision o
 ## Where the data comes from
 
 **Your history.** `data=` takes a `MarketData` (see [Market data](data.md)), with every
-feature, cost and risk input as a field. Episodes are windows of it, placed by `sampler=`
+feature, cost and risk input as a field. Raw prices with `split` and `dividend` fields
+trade on total returns ([corporate actions](data.md#corporate-actions)), and a
+[memory-mapped](data.md#saving-and-memory-mapping) `MarketData` is shared by every worker
+process instead of copied. Episodes are windows of it, placed by `sampler=`
 (each lane gets `sampler.spawn()`) or by `reset(options={"start": ...})`. sekai never
 fetches or sells market data: you load yours into a `MarketData` from files or databases
 you have access to.
@@ -167,6 +170,23 @@ idiosyncratic variances `(T, N)` as fields, the factor covariance `(T, k, k)` as
 market-wide series) and adds the ex-ante `variance` of each step's book to the info and
 to the reward's `StepOutcome`, so `SimpleReturn() - 2.0 * PortfolioVariance()` is a
 mean-variance objective on the risk the book takes, not on the noise of its returns.
+
+## Account rules
+
+Besides costs and financing, a lane's account can follow the rules a broker enforces:
+
+- `initial_margin=0.5`: equity needed per unit of gross exposure to open positions, so
+  orders above `1 / initial_margin` gross (2x here) are scaled down;
+- `maintenance_margin=0.25`: equity needed to keep them. When price moves push gross
+  exposure above `1 / maintenance_margin`, every position is cut in proportion at that
+  close, paying the cost of the trade, back to `1 / initial_margin`; `info["margin_call"]`
+  flags it. The initial margin defaults to twice the maintenance margin (at most 1);
+- `max_drawdown=0.2`: a risk stop that ends a lane's episode at a 20% drawdown;
+- `flat_overnight=True`: no position from one trading session into the next. The book is
+  sold to cash at the last decision of each session ([`MarketData.sessions()`](data.md#trading-sessions)),
+  and `info["session_end"]` flags it;
+- `shortable="shortable"` and `holding_cost=BorrowFee()`: names that cannot be shorted, and
+  each name's borrow fee, from the data.
 
 ## What the agent observes
 

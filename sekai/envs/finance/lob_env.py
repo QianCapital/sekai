@@ -1,10 +1,11 @@
 """Limit-order-book environments: one agent, or several agents trading in one book.
 
 Both run on `sekai.finance.lob`: a price-time priority matching engine with
-background order flow (limit orders, market orders and cancellations arriving
-as Poisson events). Time is continuous and event-driven: between two decisions
-the book evolves through however many events occur, the agent's resting
-orders keep their queue position until they fill or are moved, and the
+background order flow, either simulated (limit orders, market orders and
+cancellations arriving as Poisson events) or replayed from a historical message
+stream (`MessageReplay`). Time is continuous and event-driven: between two
+decisions the book evolves through however many events occur, the agent's
+resting orders keep their queue position until they fill or are moved, and the
 observation reports what happened in between (recent trades as a padded,
 variable-size set).
 
@@ -17,8 +18,9 @@ action asks.
 
 from __future__ import annotations
 
+import math
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from fractions import Fraction
 from typing import Any, ClassVar
 
@@ -31,7 +33,9 @@ from sekai.core.multi_agent import MultiAgentEnv
 from sekai.core.result import MAResetResult, MAStepResult, ResetResult, StepResult
 from sekai.envs.finance._common import check_number, check_numbers, episode_over
 from sekai.error import InvalidAction, ResetRequired
-from sekai.finance.lob import Fill, OrderBook, Side, ZeroIntelligenceFlow
+from sekai.finance.data import Time
+from sekai.finance.lob import Fill, MessageReplay, Order, OrderBook, Side, ZeroIntelligenceFlow
+from sekai.finance.sampling import EpisodeSampler, as_sampler, sample_start
 from sekai.spaces.box import Box
 from sekai.spaces.dict import Dict
 from sekai.spaces.masked_box import MaskedBox
@@ -40,6 +44,16 @@ from sekai.spaces.multi_discrete import MultiDiscrete
 SELL, HOLD, BUY = 0, 1, 2
 # Decision times closer than this count as simultaneous (the traders then act together).
 _COINCIDENT = Fraction(1, 10**9)
+# A planned quote that keeps the resting one (planned prices are >= 1 tick).
+_KEEP = 0
+# Tolerance, in time units, for rounding in clock arithmetic: the episode windows cut
+# from a replayed message stream, and an order arriving at the next decision time.
+_TIME_TOLERANCE = 1e-9
+
+# An action priced when it is decided, for orders that reach the book later: the market
+# order's side (or None), then for the bid and the ask the price to quote (None: no
+# quote, _KEEP: keep the resting quote).
+_Plan = tuple[Side | None, int | None, int | None]
 
 
 class _Trader:
@@ -73,7 +87,7 @@ class _LOBCore:
     def __init__(
         self,
         *,
-        flow: ZeroIntelligenceFlow | None,
+        flow: ZeroIntelligenceFlow | MessageReplay | None,
         mid_price: int,
         session_length: float,
         levels: int,
@@ -83,6 +97,8 @@ class _LOBCore:
         inventory_penalty: float,
         max_trades: int,
         warmup: float,
+        sampler: str | int | EpisodeSampler = "random",
+        slot: float = 1.0,
     ) -> None:
         if mid_price < 2 * (max_quote_offset + levels):
             raise ValueError("mid_price must leave room for the quotes.")
@@ -90,7 +106,12 @@ class _LOBCore:
             raise ValueError("levels, max_quote_offset, order_size and max_inventory must be >= 1.")
         if max_trades < 1:
             raise ValueError("max_trades must be >= 1.")
-        self.flow = flow if flow is not None else ZeroIntelligenceFlow()
+        # A replay keeps the position of the book it drives, so each env replays its own.
+        self.flow: ZeroIntelligenceFlow | MessageReplay
+        if isinstance(flow, MessageReplay):
+            self.flow = flow.spawn()
+        else:
+            self.flow = flow if flow is not None else ZeroIntelligenceFlow()
         self.mid_price = mid_price
         self.session_length = check_number("session_length", session_length, ">0")
         self.levels = levels
@@ -103,6 +124,24 @@ class _LOBCore:
         self.book = OrderBook()
         self.trades: deque[tuple[float, int, int]] = deque(maxlen=max_trades)
         self.t0 = 0.0
+        # The episodes of a replay are windows of its message stream on a grid of `slot`
+        # (the decision interval): window k seeds the book at start_time + k * slot and
+        # makes its first decision `warmup` later.
+        self.sampler = as_sampler(sampler)
+        self.slot = float(slot)
+        self.episode_slots = math.ceil(self.session_length / self.slot - 1e-9)
+        self.n_starts = 0
+        if isinstance(self.flow, MessageReplay):
+            replay = self.flow
+            span = replay.end_time - replay.start_time
+            room = span - self.warmup - self.session_length
+            if room < -_TIME_TOLERANCE:
+                raise ValueError(
+                    f"The messages span {span:g} time units ({replay.start_time:.9g} to "
+                    f"{replay.end_time:.9g}) but an episode needs warmup + session_length = "
+                    f"{self.warmup + self.session_length:g}."
+                )
+            self.n_starts = math.floor(max(room, 0.0) / self.slot + _TIME_TOLERANCE) + 1
 
     # Spaces -----------------------------------------------------------------
 
@@ -119,12 +158,71 @@ class _LOBCore:
 
     # Episode ----------------------------------------------------------------
 
-    def start(self, rng: np.random.Generator) -> None:
-        self.flow.initialise(self.book, rng, mid=self.mid_price)
-        if self.warmup > 0:
-            self.flow.advance(self.book, rng, self.warmup)
+    def start(self, rng: np.random.Generator, options: dict[str, Any] | None = None) -> None:
+        flow = self.flow
+        if isinstance(flow, MessageReplay):
+            seed_time = self._seed_time(flow, rng, options)
+            flow.initialise(self.book, rng, start=seed_time)
+            if self.warmup > 0:
+                flow.advance(self.book, rng, seed_time + self.warmup)
+        else:
+            if options and options.get("start") is not None:
+                raise ValueError(
+                    "options['start'] needs a replayed message stream (flow=MessageReplay(...)); "
+                    "simulated order flow has no history to start in."
+                )
+            flow.initialise(self.book, rng, mid=self.mid_price)
+            if self.warmup > 0:
+                flow.advance(self.book, rng, self.warmup)
         self.t0 = self.book.time
         self.trades.clear()
+
+    def _seed_time(
+        self, replay: MessageReplay, rng: np.random.Generator, options: dict[str, Any] | None
+    ) -> float:
+        """When the next episode's book is seeded: `warmup` before its first decision.
+
+        `options["start"]` places the first decision: an int is a position on the grid
+        of windows, a float or `Time(t)` a time on the messages' clock.
+        """
+        begin = replay.start_time
+        option = options.get("start") if options else None
+        if option is None:
+            k = sample_start(
+                self.sampler,
+                rng,
+                n_starts=self.n_starts,
+                episode_length=self.episode_slots,
+                lookback=0,
+            )
+            return begin + k * self.slot
+        first = begin + self.warmup  # the earliest first decision
+        last = replay.end_time - self.session_length  # the latest
+        if isinstance(option, bool | np.bool_):
+            raise TypeError(f"options['start'] must be a position or a time, got {option!r}.")
+        if isinstance(option, int | np.integer):
+            if not 0 <= option < self.n_starts:
+                raise ValueError(
+                    f"start {option} is outside the valid positions 0..{self.n_starts - 1} "
+                    f"(first decisions at {first:.9g} + k * {self.slot:g}). An int is a "
+                    "position on that grid; for a time, pass a float or Time(t)."
+                )
+            return begin + int(option) * self.slot
+        value = option.value if isinstance(option, Time) else option
+        decision = check_number("options['start']", value)
+        if not first - _TIME_TOLERANCE <= decision <= last + _TIME_TOLERANCE:
+            raise ValueError(
+                f"start {option!r} is outside the valid first-decision times "
+                f"{first:.9g}..{last:.9g}: an episode needs warmup={self.warmup:g} of "
+                f"history before its first decision and session_length="
+                f"{self.session_length:g} after it."
+            )
+        return max(decision - self.warmup, begin)
+
+    @property
+    def halted(self) -> bool:
+        """Whether the replayed market is halted (traders' orders are then not sent)."""
+        return isinstance(self.flow, MessageReplay) and self.flow.halted
 
     @property
     def elapsed(self) -> float:
@@ -205,6 +303,18 @@ class _LOBCore:
             if resting is not None:
                 self.book.cancel(resting.order_id)
             return None, []
+        price = self._level_price(side, level, resting)
+        if resting is not None and self._keeps(side, level, resting, price):
+            return resting.order_id, []  # at the requested level: keep the queue position
+        if resting is not None:
+            self.book.cancel(resting.order_id)
+        return self._place(trader, side, max(price, 1))
+
+    def _level_price(self, side: Side, level: int, resting: Order | None) -> int:
+        """The price of a quote at `level` (>= 1), measured from the other traders' best.
+
+        `resting` is the trader's own quote on `side`, or None; it does not count.
+        """
         best = self._best_excluding(side, resting)
         if best is None:  # no other quotes on this side: one tick inside the opposite best
             opposite = self.book.best_ask() if side is Side.BID else self.book.best_bid()
@@ -213,18 +323,107 @@ class _LOBCore:
             else:
                 ref = float(self.book.last_price or self.mid_price)
                 best = int(np.floor(ref)) if side is Side.BID else int(np.ceil(ref))
-        price = best - (level - 1) if side is Side.BID else best + (level - 1)
-        if resting is not None and (
+        return best - (level - 1) if side is Side.BID else best + (level - 1)
+
+    def _keeps(self, side: Side, level: int, resting: Order | None, price: int) -> bool:
+        """Whether a resting quote is already at the requested level (and so stays put)."""
+        return resting is not None and (
             resting.price == price or (level == 1 and resting.price == self._best(side))
-        ):
-            return resting.order_id, []  # at the requested level: keep the queue position
-        if resting is not None:
-            self.book.cancel(resting.order_id)
-        order_id, fills = self.book.limit(side, max(price, 1), self.order_size, trader.owner)
+        )
+
+    def _place(self, trader: _Trader, side: Side, price: int) -> tuple[int | None, list[Fill]]:
+        """Send a limit order of `order_size` for the trader and book its fills."""
+        order_id, fills = self.book.limit(side, price, self.order_size, trader.owner)
         for fill in fills:  # a quote at the best price can meet another trader's order
             trader.record(fill)
         self.note_trades(fills)
         return order_id, fills
+
+    # Latency: an action priced when it is decided, carried out when it reaches the book.
+
+    def plan(self, trader: _Trader, decision: tuple[int, int, int]) -> _Plan:
+        """Price a parsed decision from the book the trader observes now.
+
+        The orders reach the book later (`execute`), so their prices are fixed now, as an
+        order message's are: a bid placed at the best price may arrive behind a new best
+        bid, or cross a falling ask and trade at once. The quotes are planned as if the
+        market order fills; `execute` checks the inventory limits again on arrival.
+        """
+        bid_level, ask_level, market = decision
+        size, limit = self.order_size, self.max_inventory
+        buy = market == BUY and trader.inventory + size <= limit
+        sell = market == SELL and trader.inventory - size >= -limit
+        inventory = trader.inventory + size * (int(buy) - int(sell))
+        bid_level = bid_level if inventory + size <= limit else 0
+        ask_level = ask_level if inventory - size >= -limit else 0
+        bid = self._plan_quote(Side.BID, bid_level, trader.bid_id, cancelled=sell)
+        ask = self._plan_quote(Side.ASK, ask_level, trader.ask_id, cancelled=buy)
+        return (Side.BID if buy else Side.ASK if sell else None), bid, ask
+
+    def _plan_quote(
+        self, side: Side, level: int, current: int | None, *, cancelled: bool
+    ) -> int | None:
+        """The price to quote on `side`: None for no quote, _KEEP to keep the resting one.
+
+        `cancelled` marks a quote that the action's market order cancels first
+        (self-trade prevention): it is placed again, at the back of its queue.
+        """
+        if level == 0:
+            return None
+        resting = self.book.get(current) if current is not None else None
+        price = self._level_price(side, level, resting)
+        if not cancelled and self._keeps(side, level, resting, price):
+            return _KEEP
+        return max(price, 1)
+
+    def execute(self, trader: _Trader, plan: _Plan) -> list[Fill]:
+        """Carry out a planned action as it reaches the book; returns the trader's fills.
+
+        In the order of `apply`: the market order (after cancelling the trader's own
+        quote on the opposite side), then the bid and the ask. A quote planned to stay
+        is left alone, even if it filled meanwhile (no order was sent for it); a quote
+        that moves or goes is cancelled if it still rests, which it may not (a fill can
+        beat the cancel). The inventory limits are checked against the inventory on
+        arrival.
+        """
+        market, bid, ask = plan
+        size, limit = self.order_size, self.max_inventory
+        fills: list[Fill] = []
+        if market is Side.BID and trader.inventory + size <= limit:
+            trader.ask_id = self._cancel(trader.ask_id)  # self-trade prevention
+            _, fills = self.book.market(Side.BID, size, trader.owner)
+        elif market is Side.ASK and trader.inventory - size >= -limit:
+            trader.bid_id = self._cancel(trader.bid_id)  # self-trade prevention
+            _, fills = self.book.market(Side.ASK, size, trader.owner)
+        for fill in fills:
+            trader.record(fill)
+        self.note_trades(fills)
+        can_buy = trader.inventory + size <= limit
+        can_sell = trader.inventory - size >= -limit
+        trader.bid_id, bid_fills = self._send(
+            trader, Side.BID, bid if can_buy else None, trader.bid_id
+        )
+        trader.ask_id, ask_fills = self._send(
+            trader, Side.ASK, ask if can_sell else None, trader.ask_id
+        )
+        return fills + bid_fills + ask_fills
+
+    def _send(
+        self, trader: _Trader, side: Side, target: int | None, current: int | None
+    ) -> tuple[int | None, list[Fill]]:
+        """Bring the trader's quote on `side` to its planned target, as the orders arrive."""
+        if target == _KEEP:
+            return current, []
+        resting = self.book.get(current) if current is not None else None
+        if target is None:
+            if resting is not None:
+                self.book.cancel(resting.order_id)
+            return None, []
+        if resting is not None:
+            if resting.price == target:
+                return resting.order_id, []
+            self.book.cancel(resting.order_id)
+        return self._place(trader, side, target)
 
     def _best(self, side: Side) -> int | None:
         """The best price on `side`, the trader's own orders included."""
@@ -286,7 +485,7 @@ class _LOBCore:
 
     def info(self, trader: _Trader, fills: int) -> dict[str, Any]:
         mid = self.mid()
-        return {
+        info: dict[str, Any] = {
             "timestamp": self.elapsed,
             "mid_price": mid,
             "spread": self.book.spread(),
@@ -295,16 +494,20 @@ class _LOBCore:
             "wealth": trader.wealth(mid),
             "fills": fills,
         }
+        if isinstance(self.flow, MessageReplay):
+            info["time"] = self.book.time  # on the messages' clock
+        return info
 
 
 class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
-    """Make markets or trade in a simulated limit order book, against background order flow.
+    """Make markets or trade in a limit order book, against simulated or historical order flow.
 
     Every `decision_interval` units of time the agent chooses where to rest a
     bid and an ask (or not to quote), and whether to send a market order. In
     between, background traders submit limit orders, market orders and
-    cancellations as Poisson events (`sekai.finance.ZeroIntelligenceFlow`),
-    which may fill the agent's resting quotes. A quote left at the same price
+    cancellations as Poisson events (`sekai.finance.ZeroIntelligenceFlow`), or
+    a historical message stream is replayed (`sekai.finance.MessageReplay`);
+    either may fill the agent's resting quotes. A quote left at the same price
     keeps its place in the queue; moving it sends it to the back.
 
     A decision runs in this order: the market order, if any, after cancelling the
@@ -338,12 +541,37 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
       after it raises `ResetRequired`.
     - **info**: `timestamp` (session time), `dt` (the time the step covered:
       `decision_interval`, or less on a final, shorter step), `mid_price`, `spread`,
-      `inventory`, `cash`, `wealth`, `fills` (agent fills this step).
+      `inventory`, `cash`, `wealth`, `fills` (agent fills this step); with a replay,
+      also `time`, the book's time on the messages' clock.
+
+    **Historical replay.** With `flow=MessageReplay(...)` the background flow is a
+    historical message stream (`sekai.finance.read_lobster` loads LOBSTER files) and
+    each episode is a window of it: the book is seeded with its historical state
+    `warmup` before the first decision, and the session's messages are replayed
+    around the agent's orders (the replay model and its biases are in
+    `MessageReplay`). `sampler` places the windows on a grid of `decision_interval`
+    starting at the first message (position k seeds the book at
+    `start_time + k * decision_interval`); `reset(options={"start": t})` makes the
+    first decision at time `t` (a float or `Time(t)`), or at grid position `t` (an
+    int). While the replayed market is halted, the agent's orders are not sent.
+
+    **Latency.** An action decided at time t reaches the book at `t + latency`: the
+    background flow runs up to that time first (messages stamped at or before it come
+    first), then the action's cancels and orders are applied. Its prices are fixed at
+    decision time, from the book the agent observed, so a quote can arrive behind a
+    new best price or cross the spread, and a cancel can arrive after the fill it
+    meant to avoid; a quote the action keeps is left alone. Inventory limits are
+    checked on arrival. Observations are taken at decision time; to delay them too,
+    wrap the env in `sekai.DelayObservation`. With `latency=0` (the default) an action
+    is carried out at once, its quotes priced after its market order.
 
     Args:
-        flow: Background order flow (default `ZeroIntelligenceFlow()`).
-        mid_price: Initial mid price in ticks.
-        session_length: Length of the trading session (time units of the flow rates).
+        flow: Background order flow: a `ZeroIntelligenceFlow` (default
+            `ZeroIntelligenceFlow()`) or a `MessageReplay` of historical messages (the
+            env replays its own copy).
+        mid_price: Initial mid price in ticks (simulated flow only).
+        session_length: Length of the trading session (time units of the flow rates;
+            seconds for a replay).
         decision_interval: Time between decisions.
         levels: Book levels observed.
         max_quote_offset: Farthest quote level K.
@@ -352,6 +580,16 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         inventory_penalty: Running penalty per squared lot of inventory per unit of time.
         max_trades: Recent trades kept in the observation.
         warmup: Time the book evolves before the session starts.
+        latency: Time an action takes to reach the book, in `[0, decision_interval]`:
+            a number, or a function of the env's `numpy.random.Generator` drawn for
+            every action (random latency; a draw outside that range raises ValueError).
+        sampler: How a replay's episode windows are chosen: "random" (default),
+            "sequential", a fixed int position, or a `sekai.finance.EpisodeSampler`
+            (see `sekai.finance.sampling`). Unused with simulated flow.
+
+    Raises:
+        ValueError: For an invalid parameter, a constant latency longer than
+            `decision_interval`, or a replay too short for `warmup + session_length`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
@@ -360,7 +598,7 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     def __init__(
         self,
         *,
-        flow: ZeroIntelligenceFlow | None = None,
+        flow: ZeroIntelligenceFlow | MessageReplay | None = None,
         mid_price: int = 10_000,
         session_length: float = 300.0,
         decision_interval: float = 1.0,
@@ -371,8 +609,22 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         inventory_penalty: float = 0.01,
         max_trades: int = 16,
         warmup: float = 20.0,
+        latency: float | Callable[[np.random.Generator], float] = 0.0,
+        sampler: str | int | EpisodeSampler = "random",
     ) -> None:
         decision_interval = check_number("decision_interval", decision_interval, ">0")
+        self._latency_fn: Callable[[np.random.Generator], float] | None = None
+        if callable(latency):
+            self._latency_fn = latency
+            self.latency: float | Callable[[np.random.Generator], float] = latency
+        else:
+            delay = check_number("latency", latency, ">=0")
+            if delay > decision_interval:
+                raise ValueError(
+                    f"latency ({delay:g}) must not exceed decision_interval "
+                    f"({decision_interval:g}): an action reaches the book before the next one."
+                )
+            self.latency = delay
         self.core = _LOBCore(
             flow=flow,
             mid_price=mid_price,
@@ -384,6 +636,8 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
             inventory_penalty=inventory_penalty,
             max_trades=max_trades,
             warmup=warmup,
+            sampler=sampler,
+            slot=decision_interval,
         )
         self.decision_interval = float(decision_interval)
         self.n_steps = int(np.ceil(session_length / decision_interval - 1e-9))
@@ -415,7 +669,7 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         self, *, seed: SeedType = None, options: dict[str, Any] | None = None
     ) -> ResetResult[dict[str, Any]]:
         self._set_rng(seed)
-        self.core.start(self.rng)
+        self.core.start(self.rng, options)
         self.trader = _Trader(self.AGENT)
         self._started = True
         self._k = 0
@@ -430,15 +684,22 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         core = self.core
         decision = core.parse(action, self._act_space)
         before = self.trader.wealth(core.mid())
-        n_fills = len(core.apply(self.trader, decision))
-        self._k += 1
-        until = core.t0 + min(self._k * self.decision_interval, core.session_length)
-        fills = core.flow.advance(core.book, self.rng, until)
-        core.note_trades(fills)
-        for fill in fills:
-            if self.AGENT in (fill.maker_owner, fill.taker_owner):
-                self.trader.record(fill)
-                n_fills += 1
+        delay = self._latency()
+        if delay == 0.0:  # carried out at once
+            n_fills = 0 if core.halted else len(core.apply(self.trader, decision))
+            self._k += 1
+            until = core.t0 + min(self._k * self.decision_interval, core.session_length)
+        else:  # priced now, carried out when it reaches the book (if before the close)
+            plan = core.plan(self.trader, decision)
+            self._k += 1
+            until = core.t0 + min(self._k * self.decision_interval, core.session_length)
+            arrival = core.book.time + delay
+            n_fills = 0
+            if arrival <= until + _TIME_TOLERANCE:  # a latency <= decision_interval, rounded
+                n_fills += self._run_flow(min(arrival, until))
+                if not core.halted:
+                    n_fills += len(core.execute(self.trader, plan))
+        n_fills += self._run_flow(until)
         # The time the step covered, from the schedule (exact, not a difference of clock
         # readings): decision_interval, or what is left of the session on a shorter last step.
         left = Fraction(core.session_length) - (self._k - 1) * Fraction(self.decision_interval)
@@ -453,6 +714,36 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
             truncated=False,
             info=info,
         )
+
+    def _latency(self) -> float:
+        """The latency of the next action: the constant, or a validated draw."""
+        if self._latency_fn is None:
+            assert isinstance(self.latency, float)
+            return self.latency
+        value = self._latency_fn(self.rng)
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            delay = math.nan
+        if not (math.isfinite(delay) and 0.0 <= delay <= self.decision_interval):
+            raise ValueError(
+                f"latency() returned {value!r}; a latency must be a finite number in "
+                f"[0, decision_interval] = [0, {self.decision_interval:g}] (cap long draws, "
+                f"e.g. min(draw, {self.decision_interval:g}))."
+            )
+        return delay
+
+    def _run_flow(self, until: float) -> int:
+        """Advance the background flow to `until` and book the agent's fills (returns how many)."""
+        core = self.core
+        fills = core.flow.advance(core.book, self.rng, until)
+        core.note_trades(fills)
+        n_fills = 0
+        for fill in fills:
+            if self.AGENT in (fill.maker_owner, fill.taker_owner):
+                self.trader.record(fill)
+                n_fills += 1
+        return n_fills
 
 
 class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]):
@@ -482,13 +773,20 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
     end of the session every trader is terminated (and `agents` is empty); `step()`
     then raises `ResetRequired`.
 
+    With `flow=MessageReplay(...)` the traders trade against historical order flow, in
+    windows of the message stream chosen as in LimitOrderBookEnv (`sampler`, and
+    `reset(options={"start": ...})`), on a grid of the shortest decision interval; while
+    the replayed market is halted, no trader's orders are sent. Orders reach the book
+    at once: this environment has no `latency`.
+
     Args:
         n_agents: Number of traders, named "trader_0", "trader_1", ...
         decision_intervals: Each trader's time between decisions (one value for all,
             or one per trader).
         jitter: Each wait is multiplied by a random factor in [1 - jitter, 1 + jitter].
-        flow: Background order flow (default `ZeroIntelligenceFlow()`).
-        mid_price: Initial mid price in ticks.
+        flow: Background order flow: a `ZeroIntelligenceFlow` (default
+            `ZeroIntelligenceFlow()`) or a `MessageReplay` of historical messages.
+        mid_price: Initial mid price in ticks (simulated flow only).
         session_length: Length of the trading session.
         levels: Book levels observed.
         max_quote_offset: Farthest quote level K.
@@ -497,6 +795,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
         inventory_penalty: Running penalty per squared lot of inventory per unit of time.
         max_trades: Recent trades kept in each observation.
         warmup: Time the book evolves before the session starts.
+        sampler: How a replay's episode windows are chosen (as in LimitOrderBookEnv).
     """
 
     def __init__(
@@ -505,7 +804,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
         *,
         decision_intervals: float | Sequence[float] = 1.0,
         jitter: float = 0.0,
-        flow: ZeroIntelligenceFlow | None = None,
+        flow: ZeroIntelligenceFlow | MessageReplay | None = None,
         mid_price: int = 10_000,
         session_length: float = 300.0,
         levels: int = 5,
@@ -515,6 +814,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
         inventory_penalty: float = 0.01,
         max_trades: int = 16,
         warmup: float = 20.0,
+        sampler: str | int | EpisodeSampler = "random",
     ) -> None:
         if n_agents < 1:
             raise ValueError("n_agents must be >= 1.")
@@ -534,6 +834,8 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
             inventory_penalty=inventory_penalty,
             max_trades=max_trades,
             warmup=warmup,
+            sampler=sampler,
+            slot=float(intervals.min()),
         )
         self.intervals = intervals.copy()
         self.jitter = jitter
@@ -570,7 +872,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
         self, *, seed: SeedType = None, options: dict[str, Any] | None = None
     ) -> MAResetResult[dict[str, Any], str]:
         self._set_rng(seed)
-        self.core.start(self.rng)
+        self.core.start(self.rng, options)
         self.agents = list(self.possible_agents)
         self.traders = {a: _Trader(i) for i, a in enumerate(self.possible_agents)}
         self.next_decision = np.zeros(len(self.possible_agents))
@@ -601,7 +903,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
         owners = {t.owner: a for a, t in self.traders.items()}
         for agent in self.acting:
             trader = self.traders[agent]
-            own_fills = core.apply(trader, decisions[agent])
+            own_fills = [] if core.halted else core.apply(trader, decisions[agent])
             n_fills[agent] += len(own_fills)
             for fill in own_fills:  # book the other side for a trader whose quote was hit
                 maker = owners.get(fill.maker_owner)

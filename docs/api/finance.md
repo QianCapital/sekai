@@ -297,6 +297,23 @@ See [Holding costs](../finance/execution.md#holding-costs).
 
 ::: sekai.finance.lob.ZeroIntelligenceFlow
 
+### Historical replay
+
+`sekai.finance.lob_replay` (re-exported from `sekai.finance.lob` and `sekai.finance`). See
+[Historical replay](../finance/order-book.md#historical-replay).
+
+::: sekai.finance.lob_replay.MessageReplay
+
+::: sekai.finance.lob_replay.OrderBookMessages
+
+::: sekai.finance.lob_replay.MessageType
+
+::: sekai.finance.lob_replay.BookSnapshot
+
+::: sekai.finance.lob_replay.BookSnapshots
+
+::: sekai.finance.lob_replay.read_lobster
+
 ## Rendering
 
 `sekai.finance.rendering`: charts for [dashboards](../guide/rendering.md#dashboards-for-your-own-environments)

@@ -25,7 +25,8 @@
   overfitting, and the `RecordPerformance` wrapper.
 - `benchmark`: reproducible evaluation tasks, classical baselines and comparisons.
 - `universe`: `SlotMap`, stable slots for a changing set of instruments.
-- `lob`: a limit order book matching engine and zero-intelligence order flow.
+- `lob`: a limit order book matching engine, zero-intelligence order flow, and the
+  replay of historical message streams (LOBSTER files) as background flow.
 - `rendering`: charts for dashboards of market environments (prices with positions
   and trades, order-book depth, changing universes).
 
@@ -107,7 +108,20 @@ from sekai.finance.metrics import (
     probability_of_backtest_overfitting,
 )
 from sekai.finance.universe import SlotMap
-from sekai.finance.lob import BACKGROUND, Fill, Order, OrderBook, Side, ZeroIntelligenceFlow
+from sekai.finance.lob import (
+    BACKGROUND,
+    BookSnapshot,
+    BookSnapshots,
+    Fill,
+    MessageReplay,
+    MessageType,
+    Order,
+    OrderBook,
+    OrderBookMessages,
+    Side,
+    ZeroIntelligenceFlow,
+    read_lobster,
+)
 from sekai.finance.rendering import OrderBookChart, PriceChart, UniverseChart
 from sekai.finance import account, costs, data, features, lob, metrics, rewards, sampling
 from sekai.finance import rendering, simulators, universe
@@ -197,6 +211,12 @@ __all__ = [
     "Side",
     "BACKGROUND",
     "ZeroIntelligenceFlow",
+    "MessageReplay",
+    "MessageType",
+    "OrderBookMessages",
+    "BookSnapshot",
+    "BookSnapshots",
+    "read_lobster",
     # Rendering
     "PriceChart",
     "OrderBookChart",

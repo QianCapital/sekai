@@ -11,6 +11,10 @@ queue, while per-level volumes are always exact.
 `ZeroIntelligenceFlow` drives a book with Poisson limit, market and cancel orders. It
 provides the background liquidity that event-driven market environments, single- or
 multi-agent, trade against.
+
+`MessageReplay` drives a book with a historical message stream instead (with
+`OrderBookMessages`, `BookSnapshot`, `BookSnapshots` and the LOBSTER reader
+`read_lobster`); they live in `sekai.finance.lob_replay` and are re-exported here.
 """
 
 from __future__ import annotations
@@ -27,7 +31,20 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["Side", "BACKGROUND", "Order", "Fill", "OrderBook", "ZeroIntelligenceFlow"]
+__all__ = [
+    "Side",
+    "BACKGROUND",
+    "Order",
+    "Fill",
+    "OrderBook",
+    "ZeroIntelligenceFlow",
+    "MessageType",
+    "OrderBookMessages",
+    "BookSnapshot",
+    "BookSnapshots",
+    "MessageReplay",
+    "read_lobster",
+]
 
 
 class Side(enum.IntEnum):
@@ -714,3 +731,14 @@ def _as_side(side: Any) -> Side:
         except ValueError:
             pass
     raise ValueError(f"side must be Side.BID (1) or Side.ASK (-1), got {side!r}.")
+
+
+# Historical replay builds on the classes above, so it is imported last.
+from sekai.finance.lob_replay import (  # noqa: E402
+    BookSnapshot,
+    BookSnapshots,
+    MessageReplay,
+    MessageType,
+    OrderBookMessages,
+    read_lobster,
+)
