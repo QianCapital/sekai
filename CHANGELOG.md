@@ -17,7 +17,8 @@ All notable changes to sekai are documented here. The format follows
   `BatchMarketEnv(n, ..., backend="torch", device="cuda")` a batch of tensors on a device
   whose rewards are differentiable in the actions (`env.differentiable = True`), for
   training policies by backpropagating through the market. With `execution="close"` it
-  reproduces `Market-v0` step for step.
+  reproduces `Market-v0` step for step on the same history (`data=`); simulated markets are
+  drawn per lane, so their paths differ from `Market-v0`'s.
 - Explicit execution timing, `execution=`: `"next_close"` (the default of `Market-v1`: an
   order placed on the close of t fills at the close of t + 1, and the observation includes
   the pending order), `"next_open"` / `"next_vwap"` (fills at the next open or VWAP, from

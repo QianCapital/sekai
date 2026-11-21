@@ -560,7 +560,8 @@ actions. It takes every argument of `Market-v0` and adds:
   financing on gross, a factor risk model (ex-ante variance in the info and the reward),
   unshortable names, a drawdown stop.
 
-With `execution="close"` it reproduces `Market-v0` exactly. See
+With `execution="close"` it reproduces `Market-v0` exactly on the same history (`data=`); a
+simulated market (`model=`, or the default) is drawn differently, so its paths differ. See
 [Batched and differentiable environments](../finance/batched.md) for the details, and
 [Paper and live trading](../finance/live.md) for `LiveMarketEnv`, which gives a policy
 trained on it the same interface over a live data feed and a broker.
