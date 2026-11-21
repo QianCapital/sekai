@@ -1,0 +1,25 @@
+Qian Capital trademarks and artwork
+===================================
+
+sekai's code is licensed under the Apache License, Version 2.0 (see LICENSE), and the
+glyph atlases in sekai/rendering/fonts/ under the SIL Open Font License 1.1 (see
+sekai/rendering/fonts/OFL.txt). Neither licence covers the Qian Capital name and logo.
+
+"Qian Capital", the Q mark and the QIAN CAPITAL wordmark are trademarks of Qian
+Capital, and the logo artwork (in sekai/rendering/assets/ and docs/assets/brand/) is
+Qian Capital's. They are not licensed under the Apache License 2.0 or the SIL Open Font
+License: section 6 of the Apache License grants no permission to use them beyond
+describing where sekai comes from.
+
+Qian Capital permits you to:
+
+  * show them as sekai draws them in its own dashboards (the finance renderers in
+    sekai.envs.finance), including in figures and recordings of those dashboards; and
+  * redistribute them unmodified, as part of sekai.
+
+Anything else needs written permission from Qian Capital (opensource@qiancapital.com),
+for example: changing the marks, drawing them anywhere else (such as in a dashboard or
+layout of your own, with branding=True or sekai.rendering.brand), or using them in a way
+that suggests Qian Capital endorses you, your work or your results.
+
+To draw sekai's dashboards without the marks, pass branding=False.

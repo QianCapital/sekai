@@ -25,8 +25,9 @@ recording is a wrapper you add or remove without touching the environment.
 </div>
 
 The finance environments are drawn as dashboards: the market, the agent's positions and
-trades, and its results, as the episode unfolds. They are drawn in the Qian Capital house
-style unless you pass `branding=False` (see [Branding](#branding)); the tabs show both.
+trades, and its results, as the episode unfolds. Their header is drawn in the Qian Capital
+house style unless you pass `branding=False` (see [Branding](#branding)); the tabs show
+both.
 
 === "Qian Capital (default)"
 
@@ -113,8 +114,8 @@ charts underneath.
 | `LimitOrderBookMarketRenderer` | `LimitOrderBookMarket` | the same, with every trader in its own colour, over session time |
 
 All of them take `width=720` and `height=450` (text and marks scale with the frame),
-`theme="light"` or `"dark"` (see [Themes](#themes)), `branding=True` (the Qian Capital house
-style; `False` draws a plain, unbranded dashboard, see [Branding](#branding)) and
+`theme="light"` or `"dark"` (see [Themes](#themes)), `branding=True` (the Qian Capital
+header; `False` draws the plain header of sekai 0.2, see [Branding](#branding)) and
 `window=None` (an int shows only the latest steps, a scrolling chart for long episodes);
 the two order-book renderers also
 take `levels=8`, the price ticks shown on each side of the mid. Like the classic-control
@@ -277,8 +278,8 @@ works as a clock (`LimitOrderBookMarketRenderer` uses session time); with `step=
 render counts as a step and you call `renderer.reset()` between episodes. `horizon=` fixes
 the end of the time axis so the episode draws from left to right; by default it is the
 env's `episode_length` or `n_steps`, else the `max_episode_steps` of its spec, else the axis
-grows with the episode. `window=` shows only the latest steps, and `branding=False` draws a
-plain, unbranded header and palette (see [Branding](#branding)).
+grows with the episode. `window=` shows only the latest steps. A dashboard you build has the
+plain header (`branding=False` is its default; see [Branding](#branding)).
 
 **Layout.** The positional arguments are stacked top to bottom. A list (or `Row(...)`) puts
 charts side by side, `Column(...)` stacks them inside a row, and each chart's `width=` and
@@ -371,20 +372,27 @@ pair, as do the `up` and `down` colours. Charts never rely on colour alone eithe
 triangles pointing up or down, bids sit below asks, and every chart with two or more series
 has a legend.
 
+`sekai.rendering.PLAIN_LIGHT` and `PLAIN_DARK`, by name `theme="plain-light"` and
+`"plain-dark"`, are unbranded palettes, for frames with nothing of the house style: a
+near-white or charcoal surface, neutral grey ink, a blue accent and a brand-neutral
+categorical palette (blue, orange, aqua, yellow, magenta, green, violet, red), checked for
+colour-vision deficiency in the same way.
+
 ```python
 from sekai.rendering import DARK, LIGHT
 
 renderer = TradingRenderer(theme="dark")
 blue_up = LIGHT.with_colors(up="#2a78d6", down="#d95926")  # a blue/orange polarity pair
 renderer = TradingRenderer(theme=blue_up)
+renderer = TradingRenderer(theme="plain-light", branding=False)  # no house style at all
 ```
 
 ### Branding
 
-Dashboards are drawn in the Qian Capital house style by default: the gold Q mark beside
-the header, the QIAN CAPITAL wordmark over a title set in Hedvig Letters Serif (the heading
-face of these pages), the Qian Capital palettes, and the episode's progress drawn as a rule
-of gold metal that fills as the episode goes on.
+sekai's finance renderers draw their header in the Qian Capital house style by default:
+the gold Q mark beside the QIAN CAPITAL wordmark, over a title set in Hedvig Letters Serif
+(the heading face of these pages), and the episode's progress drawn as a rule of gold metal
+that fills as the episode goes on.
 
 === "Branded (default)"
 
@@ -402,24 +410,30 @@ of gold metal that fills as the episode goes on.
 
     ![Trading-v0 drawn plain, dark theme](../assets/branding_plain_dark.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
-`branding=False`, on any finance renderer or `Dashboard`, turns all of that off: the header
-is plain (a BDO Grotesk title, no mark, wordmark or gold), and `theme="light"` and `"dark"`
-become the unbranded palettes `PLAIN_LIGHT` and `PLAIN_DARK`, with a near-white or charcoal
-surface, neutral grey ink, a blue accent and a brand-neutral categorical palette (blue,
-orange, aqua, yellow, magenta, green, violet, red). They were checked for colour-vision
-deficiency in the same way as the house palettes. A `Theme` you pass is used as it is,
-branded or not, so `TradingRenderer(theme=DARK, branding=False)` keeps the house colours
-without the marks.
+`branding=False` draws the plain header that sekai 0.2 drew, a BDO Grotesk title with the
+progress bar in the theme's accent, and the frames are the same as 0.2's, pixel for pixel.
+Branding changes the header only: `theme="light"` and `"dark"` are the Qian Capital palettes
+either way (for unbranded colours, pass `theme="plain-light"` or `"plain-dark"`, see
+[Themes](#themes)).
 
 ```python
-renderer = TradingRenderer(branding=False)                # plain, light
-renderer = TradingRenderer(theme="dark", branding=False)  # plain, dark
+renderer = TradingRenderer(branding=False)                # plain header, light
+renderer = TradingRenderer(theme="dark", branding=False)  # plain header, dark
 ```
 
-`sekai.rendering.brand` draws the marks (`draw_mark`, `draw_wordmark`, `draw_rule`) if you lay
-out a branded frame of your own. The Qian Capital name and logo are trademarks of Qian
-Capital: they ship with sekai for its dashboards, and the Apache License does not grant
-permission to use them otherwise.
+Frames too small for the wordmark to be read (narrower than 515 pixels or lower than 322)
+get the plain header, with the gold rule, and so does a header whose title and numbers
+would not fit beside the mark (from then until the episode ends, so that it does not change
+back and forth). A `Dashboard` you build has the plain header (`branding=False` is its
+default), and draws exactly what sekai 0.2 drew.
+
+The Qian Capital name and logo are trademarks of Qian Capital, and the artwork is not
+covered by sekai's Apache License (nor by the SIL Open Font License of its fonts). The
+[TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) file lets you show
+them as sekai draws them in its own dashboards, the finance renderers, including in figures
+and recordings of them, and redistribute them unmodified as part of sekai. Anything else,
+such as branding a dashboard of your own (with `branding=True` or the drawing functions in
+`sekai.rendering.brand`), needs written permission from Qian Capital.
 
 ## Canvas
 

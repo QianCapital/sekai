@@ -33,7 +33,7 @@ import numbers
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal, TypeAlias
+from typing import Any, ClassVar, Literal, NamedTuple, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
@@ -65,6 +65,10 @@ ColorSpec: TypeAlias = ColorLike | int | None
 """A colour: a theme role ("accent", "up", ...), hex string, RGB tuple, or palette slot."""
 
 ROLES = ("text", "price", "accent", "neutral", "up", "down", "highlight", "text_muted")
+
+# A branded header's wordmark has capitals 7 px tall at 720 x 450. Below this they cannot
+# be read, and the header is drawn plain (with the gold progress rule).
+_MIN_WORDMARK_CAPS = 5.0
 
 
 def read(env: Any, source: Source) -> Any:
@@ -191,6 +195,10 @@ class Stat:
 class _History:
     """The recorded samples of one environment's current episode."""
 
+    # Set once a branded header did not fit: the rest of the episode is drawn plain, so the
+    # header does not switch back and forth as the numbers change width.
+    plain_header: bool = False
+
     def __init__(self) -> None:
         self.steps: list[float] = []
         self.values: dict[str, list[Any]] = {}
@@ -211,6 +219,18 @@ class _History:
             del self.steps[:cut]
             for series in self.values.values():
                 del series[:cut]
+
+
+class _StatColumn(NamedTuple):
+    """A stat laid out in the header: its column's edges and the text it shows."""
+
+    stat: Stat
+    left: float
+    right: float
+    text: str
+    delta_text: str | None  # its change since the episode began
+    delta_up: bool
+    delta_w: float  # the width the change takes, right of the value
 
 
 def _snapshot(value: Any) -> Any:
@@ -496,12 +516,18 @@ class Dashboard(BaseRenderer):
         heights: Relative heights of the top-level items (default: their own `height`).
         width: Frame width in pixels.
         height: Frame height in pixels.
-        theme: "light", "dark" or a `Theme`.
-        branding: Draw in the Qian Capital house style: the gold mark and wordmark,
-            a serif title and a gold progress rule, with "light" and "dark" the Qian
-            Capital palettes. False draws a plain header and makes "light" and "dark"
-            the unbranded palettes (`PLAIN_LIGHT`, `PLAIN_DARK`); a `Theme` is used
-            as given either way.
+        theme: "light" or "dark" (the Qian Capital palettes), "plain-light" or
+            "plain-dark" (unbranded palettes), or a `Theme`.
+        branding: Draw the header in the Qian Capital house style, as sekai's finance
+            renderers do by default: the gold Q mark beside the QIAN CAPITAL wordmark
+            over a serif title, and the progress rule in gold metal. Off by default; it
+            changes the header, not the theme. Frames too small for the wordmark to be
+            read (its capitals under 5 pixels: narrower than 515 or lower than 322
+            pixels) and headers whose title and stats would not fit beside the mark get
+            the plain header, with the gold rule. The Qian Capital name and logo are
+            Qian Capital's trademarks, which the TRADEMARKS file that comes with sekai
+            lets you show in sekai's own dashboards: branding a dashboard of your own
+            needs Qian Capital's permission.
         step: The episode clock, which is also the time axis (default:
             `elapsed_steps`; any number works, e.g. a session time); None counts renders.
         horizon: The clock's value at the end of an episode, which fixes the time axis
@@ -510,6 +536,10 @@ class Dashboard(BaseRenderer):
             `n_steps`, else the `max_episode_steps` of its spec).
         window: Show only the latest `window` steps (a scrolling chart).
     """
+
+    # A dashboard restored from a state saved before `branding` existed (sekai 0.2) has no
+    # `branding` of its own: it reads this, and keeps the plain look it had.
+    branding: bool = False
 
     def __init__(
         self,
@@ -521,7 +551,7 @@ class Dashboard(BaseRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
-        branding: bool = True,
+        branding: bool = False,
         step: Source | None = "elapsed_steps",
         horizon: float | Source | None = "auto",
         window: int | None = None,
@@ -537,7 +567,7 @@ class Dashboard(BaseRenderer):
         self.width = width
         self.height = height
         self.branding = bool(branding)
-        self.theme = get_theme(theme, branding=self.branding)
+        self.theme = get_theme(theme)
         self.step = step
         self.horizon = horizon
         self.window = window
@@ -670,7 +700,7 @@ class Dashboard(BaseRenderer):
         theme, s = self.theme, self.scale
         canvas = Canvas(self.width, self.height, theme.background, antialias=True)
         frame = Box(0, 0, self.width, self.height).inset(18 * s, 14 * s, 18 * s, 14 * s)
-        head = (52 if self.branding else 40) * s
+        head = (52 if self._marks_legible() else 40) * s
         header = Box(frame.left, frame.top - head, frame.right, frame.top)
         body = frame.inset(top=header.height + 18 * s)
         horizon = self._horizon(env)
@@ -709,32 +739,26 @@ class Dashboard(BaseRenderer):
             panel.draw(canvas, box, view)
         return canvas.to_array()
 
-    def _header(
-        self, canvas: Canvas, box: Box, env: Any, history: _History, horizon: float | None
-    ) -> None:
-        theme, s = self.theme, self.scale
-        title = self._title(env)
-        sub = None
-        if self.subtitle is not None:
-            sub = self.subtitle if isinstance(self.subtitle, str) else read(env, self.subtitle)
-        if self.branding:
-            # The mark beside the wordmark over a serif title, as on Qian Capital's pages.
-            left = box.left + brand.draw_mark(canvas, box.left, box.top, 42 * s) + 11 * s
-            brand.draw_wordmark(canvas, left, box.top - 4 * s, 7 * s)
-            canvas.text(
-                left, box.top - 21 * s, title, theme.text, size=19 * s, serif=True, valign="middle"
-            )
-            sub_y, stats_y = box.top - 37 * s, box.top - 8 * s
-        else:
-            left = box.left
-            canvas.text(
-                left, box.top - 13 * s, title, theme.text, size=16 * s, bold=True, valign="middle"
-            )
-            sub_y, stats_y = box.top - 31 * s, box.top
-        if sub:
-            canvas.text(left, sub_y, str(sub), theme.text_muted, size=10.5 * s, valign="middle")
-        # Stats, right-aligned: label over value, with an optional change since the start.
-        right = box.right
+    def _marks_legible(self) -> bool:
+        """Whether the header is branded and the frame large enough to read the wordmark."""
+        return self.branding and 7 * self.scale >= _MIN_WORDMARK_CAPS
+
+    def _marks_fit(self, box: Box, title: str, sub: Any, stats_left: float | None) -> bool:
+        """Whether the marks, the title and the subtitle fit left of the stats (or the box)."""
+        s = self.scale
+        left = box.left + float(brand.mark(42 * s).shape[1]) + 11 * s
+        widest = max(
+            text_width(title, 19 * s, serif=True),
+            text_width(str(sub), 10.5 * s) if sub else 0.0,
+            float(brand.wordmark(7 * s)[0].shape[1]),
+        )
+        limit = box.right if stats_left is None else stats_left - 16 * s
+        return left + widest <= limit
+
+    def _stat_columns(self, history: _History, right: float) -> list[_StatColumn]:
+        """The stats laid out leftwards from `right`, rightmost first."""
+        s = self.scale
+        columns: list[_StatColumn] = []
         for i in reversed(range(len(self.stats))):
             stat = self.stats[i]
             values = history.values.get(f"stat{i}", [])
@@ -755,6 +779,40 @@ class Dashboard(BaseRenderer):
             label_w = text_width(stat.label, 10 * s)
             column = max(width + delta_w, label_w)
             left = right - column
+            columns.append(_StatColumn(stat, left, right, text, delta_text, delta_up, delta_w))
+            right = left - 24 * s
+        return columns
+
+    def _header(
+        self, canvas: Canvas, box: Box, env: Any, history: _History, horizon: float | None
+    ) -> None:
+        theme, s = self.theme, self.scale
+        title = self._title(env)
+        sub = None
+        if self.subtitle is not None:
+            sub = self.subtitle if isinstance(self.subtitle, str) else read(env, self.subtitle)
+        columns = self._stat_columns(history, box.right)
+        marks = self._marks_legible() and not history.plain_header
+        if marks and not self._marks_fit(box, title, sub, columns[-1].left if columns else None):
+            marks, history.plain_header = False, True  # plain for the rest of the episode
+        if marks:
+            # The mark beside the wordmark over a serif title, as on Qian Capital's pages.
+            left = box.left + brand.draw_mark(canvas, box.left, box.top, 42 * s) + 11 * s
+            brand.draw_wordmark(canvas, left, box.top - 4 * s, 7 * s)
+            canvas.text(
+                left, box.top - 21 * s, title, theme.text, size=19 * s, serif=True, valign="middle"
+            )
+            sub_y, stats_y = box.top - 37 * s, box.top - 8 * s
+        else:
+            left = box.left
+            canvas.text(
+                left, box.top - 13 * s, title, theme.text, size=16 * s, bold=True, valign="middle"
+            )
+            sub_y, stats_y = box.top - 31 * s, box.top
+        if sub:
+            canvas.text(left, sub_y, str(sub), theme.text_muted, size=10.5 * s, valign="middle")
+        # Stats, right-aligned: label over value, with an optional change since the start.
+        for stat, _, right, text, delta_text, delta_up, delta_w in columns:
             canvas.text(
                 right,
                 stats_y - 6 * s,
@@ -787,7 +845,6 @@ class Dashboard(BaseRenderer):
                     size=10 * s,
                     valign="middle",
                 )
-            right = left - 24 * s
         # Episode progress: a hairline track along the bottom of the header.
         track_y = box.bottom - 6 * s
         canvas.rect(box.left, track_y, box.right, track_y + 2 * s, theme.grid, radius=1 * s)

@@ -294,7 +294,13 @@ If you use sekai in research, please cite it using the metadata in
 
 ## License
 
-Apache 2.0. See [LICENSE](https://github.com/QianCapital/sekai/blob/master/LICENSE).
+Apache 2.0. See [LICENSE](https://github.com/QianCapital/sekai/blob/master/LICENSE). The
+glyph atlases the renderers draw text with are under the SIL Open Font License
+([OFL.txt](https://github.com/QianCapital/sekai/blob/master/sekai/rendering/fonts/OFL.txt)).
+The Qian Capital name and logo, which the finance dashboards show, are trademarks of Qian
+Capital and covered by neither licence: see
+[TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) for what they may
+be used for.
 
 <div align="center">
 <sub>sekai · 世界 — Qian Capital</sub>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -30,7 +31,7 @@ from sekai.rendering import (
     get_theme,
     text_width,
 )
-from sekai.rendering.brand import _resample
+from sekai.rendering.brand import _resample, _weights
 from sekai.rendering.charts import (
     MINUS,
     Box,
@@ -222,9 +223,9 @@ class TestTheme:
             assert len(theme.series) == 8 and len(set(theme.series)) == 8
             assert theme.color(8) == theme.neutral
             assert not set(theme.series) & set(LIGHT.series + DARK.series)
-        assert get_theme("light", branding=False) is PLAIN_LIGHT
-        assert get_theme("dark", branding=False) is PLAIN_DARK
-        assert get_theme(LIGHT, branding=False) is LIGHT  # a Theme is used as given
+            assert get_theme(theme.name) is theme  # by their own names
+        assert get_theme("plain-light") is PLAIN_LIGHT and get_theme("plain-dark") is PLAIN_DARK
+        assert get_theme("light") is LIGHT  # the names of 0.2 keep their palettes
 
     def test_with_colors(self) -> None:
         custom = LIGHT.with_colors(up="#2a78d6", series=["#000000"])
@@ -275,6 +276,45 @@ class TestBrand:
             out = _resample(red, size, size)
             assert out.shape == (size, size, 4)
             assert (out[..., 0] == 200).all() and (np.abs(out[..., 3].astype(int) - 128) <= 1).all()
+
+    @pytest.mark.parametrize(("height", "width"), [(5, 9), (13, 4), (31, 17), (64, 50)])
+    def test_resampling_is_the_weighted_sum(self, height: int, width: int) -> None:
+        # Summing only the input pixels each output pixel covers gives the product of the
+        # full weight matrices with the image (in premultiplied alpha).
+        rng = np.random.default_rng(height)
+        image = rng.integers(0, 256, size=(23, 31, 4)).astype(np.uint8)
+        image[3:7, 5:9, 3] = 0  # some transparent pixels
+        pixels = image / 255.0
+        premultiplied = np.concatenate([pixels[..., :3] * pixels[..., 3:], pixels[..., 3:]], -1)
+        rows, cols = _weights(23, height), _weights(31, width)
+        full = np.einsum("ij,jkc,lk->ilc", rows, premultiplied, cols)
+        out = _resample(image, height, width).astype(np.float64) / 255.0
+        np.testing.assert_allclose(out[..., 3], full[..., 3], atol=0.5 / 255 + 1e-9)
+        opaque = full[..., 3] > 0.05
+        color = full[..., :3][opaque] / full[..., 3:][opaque]
+        np.testing.assert_allclose(out[..., :3][opaque], color, atol=0.5 / 255 + 1e-9)
+
+    def test_images_are_read_only(self) -> None:
+        # They are cached and drawn in every frame: changing one must not be possible.
+        canvas = Canvas(60, 50)
+        brand.draw_mark(canvas, 0, 50, 42)
+        before = canvas.to_array()
+        with pytest.raises(ValueError, match="read-only"):
+            brand.mark(42)[..., 3] = 0
+        with pytest.raises(ValueError, match="read-only"):
+            brand.wordmark(7)[0][...] = 0
+        again = Canvas(60, 50)
+        brand.draw_mark(again, 0, 50, 42)
+        assert np.array_equal(again.to_array(), before) and golden(before).sum() > 20
+
+    def test_first_images_are_quick(self) -> None:
+        # Resampling reads only the pixels each output pixel covers: a size never drawn
+        # before takes milliseconds (these took about 4 s with the full product).
+        start = time.perf_counter()
+        for height in (113, 151, 167):  # sizes no other test draws, so not cached
+            brand.mark(height)
+            brand.wordmark(height / 5)
+        assert time.perf_counter() - start < 2.0
 
     def test_gold_metal(self) -> None:
         metal = brand.gold_metal(101)
@@ -393,9 +433,7 @@ def walk_dashboard(**kwargs: Any) -> Dashboard:
             BarChart("weights", labels=["Asset", "Cash"], title="Weights"),
         ),
         stats=[Stat("Equity", "equity", "{:.3f}", delta="relative")],
-        width=360,
-        height=225,
-        **kwargs,
+        **{"width": 360, "height": 225, **kwargs},
     )
 
 
@@ -475,19 +513,47 @@ class TestDashboard:
     @pytest.mark.parametrize("theme", ["light", "dark"])
     def test_branding(self, theme: str) -> None:
         env = Walk(episode_length=4)
-        branded = run(env, walk_dashboard(theme=theme), 4)[-1]
-        plain = run(env, walk_dashboard(theme=theme, branding=False), 4)[-1]
-        assert walk_dashboard().branding  # the default
-        assert tuple(branded[0, 0]) == get_theme(theme).background
-        assert tuple(plain[0, 0]) == get_theme(theme, branding=False).background
-        # The header (with its progress rule) ends 38 rows down when branded, 32 when not.
-        assert golden(branded[:38]).sum() > 150  # the mark, the wordmark and the gold rule
-        assert golden(plain[:32]).sum() == 0
+        size = {"width": 720, "height": 450}
+        branded = run(env, walk_dashboard(theme=theme, branding=True, **size), 4)[-1]
+        plain = run(env, walk_dashboard(theme=theme, **size), 4)[-1]
+        assert not walk_dashboard().branding  # a dashboard you build is plain by default
+        # Branding changes the header, not the theme.
+        assert tuple(branded[0, 0]) == tuple(plain[0, 0]) == get_theme(theme).background
+        # The header's progress rule ends 72 rows down when branded, 60 when not (the
+        # charts start 12 rows lower); the mark is 42 x 29 pixels at its top left.
+        assert golden(branded[14:56, 18:47]).sum() > 50  # the mark
+        assert golden(branded[:72]).sum() > golden(branded[14:56, 18:47]).sum() + 1000  # rule
+        assert golden(plain[:60]).sum() == 0
 
     def test_a_theme_without_branding(self) -> None:
         frame = run(Walk(), walk_dashboard(theme=DARK, branding=False), 2)[-1]
         assert tuple(frame[0, 0]) == DARK.background
         assert golden(frame[:32]).sum() == 0
+
+    def test_small_frames_get_the_plain_header(self) -> None:
+        # At 360 x 225 the wordmark could not be read: a branded dashboard draws the plain
+        # header, laid out as without branding, and only its progress rule is gold.
+        env = Walk(episode_length=4)
+        branded = run(env, walk_dashboard(branding=True), 4)
+        plain = run(env, walk_dashboard(), 4)
+        assert np.array_equal(branded[0], plain[0])  # no progress yet
+        for a, b in zip(branded[1:], plain[1:]):
+            rows = np.flatnonzero((a != b).any(axis=(1, 2)))
+            assert rows.size and rows.max() - rows.min() <= 2 and rows.max() < 33  # the rule
+            assert golden(a[rows]).sum() > 0 and golden(b[rows]).sum() == 0
+
+    def test_a_header_that_does_not_fit_is_plain_for_the_episode(self) -> None:
+        # A stat that grows wide at step 2 leaves no room for the marks beside the title:
+        # the header is drawn plain from then on (not back and forth), until a new episode.
+        note = Stat("Note", "elapsed_steps", lambda v: "a long note, " * 9 if v == 2 else "-")
+        renderer = Dashboard(LineChart("price"), title="Walk", stats=[note], branding=True)
+        env = Walk(episode_length=5)
+        frames = run(env, renderer, 5)
+        marked = [bool(golden(frame[14:56, 18:47]).sum() > 50) for frame in frames]
+        assert marked == [True, True, False, False, False, False]
+        assert golden(frames[-1][70:72]).sum() > 1000  # the rule is still gold
+        env.reset(seed=1)
+        assert golden(renderer.render(env)[14:56, 18:47]).sum() > 50
 
     def test_sources(self) -> None:
         env = sekai.wrappers.TimeLimit(Walk(), 5)

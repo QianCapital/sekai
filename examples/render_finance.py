@@ -2,10 +2,11 @@
 
 Each finance environment has a renderer in `sekai.envs.finance` (TradingRenderer,
 PortfolioRenderer, ...). Here each one runs with a simple baseline policy, recorded
-with RecordFrames. The renderers draw in the Qian Capital house style; `branding=False`
-draws a plain, unbranded dashboard instead, and each episode is saved both ways
-(`finance_trading.gif`, `finance_trading_plain.gif`, ...), followed by stills of the
-last Trading-v0 frame in each style and theme. Needs Pillow: pip install "sekai[render]".
+with RecordFrames. The renderers draw their header in the Qian Capital house style;
+`branding=False` draws the plain header of sekai 0.2 instead, and each episode is saved
+both ways (`finance_trading.gif`, `finance_trading_plain.gif`, ...), followed by stills
+of the last Trading-v0 frame in each style and theme. Needs Pillow:
+pip install "sekai[render]".
 
 Pass a directory to keep the images (this is how the documentation's animations are
 made):

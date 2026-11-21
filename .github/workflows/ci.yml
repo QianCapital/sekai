@@ -131,3 +131,25 @@ jobs:
           /tmp/wheel-env/bin/pip install dist/*.whl
           cd /tmp && /tmp/wheel-env/bin/python -c "import sekai; print(sekai.__version__); sekai.make('CartPole-v1')"
           /tmp/wheel-env/bin/sekai list
+      - name: Render from the installed wheel (its glyph atlases and brand artwork)
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-env/bin/python - <<'EOF'
+          from importlib.metadata import files, metadata
+
+          import sekai
+          from sekai.envs.finance import TradingRenderer
+          from sekai.rendering import brand
+
+          assert "wheel-env" in sekai.__file__, sekai.__file__
+          env = sekai.make("Trading-v0", episode_length=10)
+          env.reset(seed=0)
+          env.step(2)
+          branded = TradingRenderer().render(env)  # serif atlas and brand artwork
+          plain = TradingRenderer(branding=False).render(env)  # grotesk atlas only
+          assert branded.shape == plain.shape == (450, 720, 3) and (branded != plain).any()
+          assert brand.mark(42)[..., 3].max() > 200
+          assert {"LICENSE", "OFL.txt", "TRADEMARKS"} <= {f.name for f in files("sekai")}
+          assert "LicenseRef-Qian-Capital-Trademarks" in metadata("sekai")["License-Expression"]
+          print("rendered branded and plain frames with", sekai.__file__)
+          EOF

@@ -12,7 +12,8 @@ itself does not):
     python tools/build_brand_assets.py
 
 It reads docs/assets/brand/qian-capital.png and writes
-sekai/rendering/assets/qian-capital.npz.
+sekai/rendering/assets/qian-capital.npz. The logo is Qian Capital's trademark and
+artwork, not licensed with sekai's code: see TRADEMARKS for what it may be used for.
 """
 
 from __future__ import annotations

@@ -13,9 +13,10 @@ same kind of renderer for your own environment.
     env.save("trading.gif")
 
 Every renderer takes `width`, `height` (pixels; text and marks scale with the
-frame), `theme` ("light", "dark" or a `sekai.rendering.Theme`), `branding` (True, the
-default, draws in the Qian Capital house style; False draws a plain, unbranded
-dashboard) and `window` (show only the latest steps).
+frame), `theme` ("light", "dark", the unbranded "plain-light" and "plain-dark", or a
+`sekai.rendering.Theme`), `branding` (True, the default, draws the header in the Qian
+Capital house style; False draws the plain header of sekai 0.2, frame for frame) and
+`window` (show only the latest steps).
 """
 
 from __future__ import annotations

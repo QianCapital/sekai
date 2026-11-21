@@ -8,9 +8,10 @@ dynamic = ["version"]
 description = "A modern, flexible RL environment framework for complex and financial market environments"
 readme = "README.md"
 # The glyph atlases in sekai/rendering/fonts are SIL Open Font License data (BDO Grotesk,
-# Hedvig Letters Serif).
-license = "Apache-2.0 AND OFL-1.1"
-license-files = ["LICENSE", "sekai/rendering/fonts/OFL.txt"]
+# Hedvig Letters Serif). The Qian Capital logo in sekai/rendering/assets is under neither
+# licence: TRADEMARKS says what it may be used for.
+license = "Apache-2.0 AND OFL-1.1 AND LicenseRef-Qian-Capital-Trademarks"
+license-files = ["LICENSE", "sekai/rendering/fonts/OFL.txt", "TRADEMARKS"]
 authors = [{ name = "Qian Capital", email = "opensource@qiancapital.com" }]
 requires-python = ">=3.10"
 keywords = [

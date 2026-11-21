@@ -7,8 +7,9 @@
   that follow an environment through an episode; `sekai.finance.rendering` adds
   market charts.
 - `Theme`, `LIGHT`, `DARK`: colours by role, with validated categorical palettes (the
-  Qian Capital palettes; `PLAIN_LIGHT` and `PLAIN_DARK` are the unbranded ones).
-- `brand`: the Qian Capital mark, wordmark and gold rule of branded dashboards.
+  Qian Capital palettes; `PLAIN_LIGHT` and `PLAIN_DARK` are unbranded ones).
+- `brand`: the Qian Capital mark, wordmark and gold rule of branded dashboards (the
+  marks are Qian Capital's trademarks, not licensed with the code: see TRADEMARKS).
 - `charts`: the layout, tick, number-format and plot helpers charts are drawn with.
 """
 

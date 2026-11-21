@@ -106,8 +106,8 @@ NumPy-only RGB renderers.
     ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
-Each is drawn by its renderer in `sekai.envs.finance`, in the Qian Capital house style or
-plain with `branding=False` ([Rendering](../guide/rendering.md#branding)).
+Each is drawn by its renderer in `sekai.envs.finance`, with the Qian Capital header or, with
+`branding=False`, the plain one of sekai 0.2 ([Rendering](../guide/rendering.md#branding)).
 
 | Environment | You control | The baseline to beat |
 |---|---|---|

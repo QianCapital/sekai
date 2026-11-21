@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,10 @@ from sekai.envs.finance import (
 )
 from sekai.envs.finance.rendering import _chosen_position, _ExecutionPrice, _TraderPrice
 from sekai.finance import OrderBook, OrderBookChart, PriceChart, Side, UniverseChart
-from sekai.rendering import LIGHT, Dashboard, LineChart, RecordFrames, Series
+from sekai.rendering import LIGHT, Canvas, Dashboard, LineChart, RecordFrames, Series, dashboard
 from sekai.rendering.dashboard import View, _History
+from sekai.rendering.text import face
+from tests.data.render_reference import RENDERERS, finance_frames, finance_renderer
 
 SMALL = {"width": 360, "height": 225}
 
@@ -87,7 +90,7 @@ def test_needs_a_reset(renderer_cls: Any) -> None:
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_themes_and_sizes(theme: str, branding: bool) -> None:
     env = sekai.make("Trading-v0", episode_length=10)
-    background = sekai.rendering.get_theme(theme, branding=branding).background
+    background = sekai.rendering.get_theme(theme).background  # branded or not
     for width, height in ((720, 450), (1440, 900), (320, 200)):
         renderer = TradingRenderer(width=width, height=height, theme=theme, branding=branding)
         frame = episode(env, renderer)[-1]
@@ -205,6 +208,94 @@ def _view(renderer: Dashboard, env: Any, panel: Any) -> View:
     history = renderer._histories[env.unwrapped]
     prefix = f"{renderer.panels.index(panel)}:"
     return View(env, history, prefix, LIGHT, 1.0, (0, 1), False, 0)
+
+
+def test_branded_by_default() -> None:
+    # sekai's own renderers are branded; a dashboard you build is plain unless asked.
+    renderers = [cls() for _, _, cls in CASES] + [LimitOrderBookMarketRenderer()]
+    assert all(renderer.branding for renderer in renderers)
+    assert not Dashboard(LineChart("price")).branding
+
+
+# ----------------------------------------------------------------------
+# The branded header leaves its text room
+# ----------------------------------------------------------------------
+
+
+Item = tuple[str, str, float, float, float, float]  # kind, text, left, right, bottom, top
+
+
+class _Recorder(Canvas):
+    """A canvas that notes the box of every text and image drawn on it."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.items: list[Item] = []
+
+    def text(self, x: float, y: float, text: str, color: Any, **kwargs: Any) -> float:
+        width = super().text(x, y, text, color, **kwargs)
+        align, valign = kwargs.get("align", "left"), kwargs.get("valign", "baseline")
+        font = face(kwargs.get("size", 12), kwargs.get("bold", False), kwargs.get("serif", False))
+        left = x - width if align == "right" else x - width / 2 if align == "center" else x
+        shift = {"middle": font.cap_height / 2, "top": font.cap_height, "bottom": -font.descent}
+        baseline = y - shift.get(valign, 0.0)
+        self.items.append(
+            (align, text, left, left + width, baseline - font.descent, baseline + font.ascent)
+        )
+        return width
+
+    def image(self, image: Any, *box: float, **kwargs: Any) -> None:
+        super().image(image, *box, **kwargs)
+        left, bottom, right, top = box
+        self.items.append(("image", "", left, right, bottom, top))
+
+
+def _header_overlaps(canvas: _Recorder, scale: float) -> tuple[bool, set[tuple[str, str]]]:
+    """Whether a frame's header has the marks, and which of its texts overlap a stat.
+
+    The header draws the marks, the title and the subtitle, then the stats (their labels
+    right-aligned), then the progress rule; the charts start lower down.
+    """
+    header = [item for item in canvas.items if item[4] + item[5] > 2 * (canvas.height - 60 * scale)]
+    split = next((i for i, item in enumerate(header) if item[0] == "right"), len(header))
+    left, stats = header[:split], [item for item in header[split:] if item[0] != "image"]
+    hits = {
+        (a[1], b[1])
+        for a in left
+        for b in stats
+        if a[3] > b[2] + 0.5 and b[3] > a[2] + 0.5 and a[5] > b[4] and b[5] > a[4]
+    }
+    return any(item[0] == "image" for item in left), hits
+
+
+@pytest.mark.parametrize("name", RENDERERS)
+def test_branded_headers_overlap_nothing_new(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    # Where the marks fit, nothing in the header overlaps. Where they do not (small frames,
+    # long titles), the header is the plain one, which overlaps only where it does without
+    # branding (as in sekai 0.2.0, which had no room for every number in the smallest frames).
+    made: list[_Recorder] = []
+
+    def canvas(*args: Any, **kwargs: Any) -> _Recorder:
+        made.append(_Recorder(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(dashboard, "Canvas", canvas)
+    marked = set()
+    sizes = [(1280, 720), (720, 450), (600, 375), (515, 322), (480, 300), (400, 250), (320, 200)]
+    for size in sizes:
+        drawn: dict[bool, list[tuple[bool, set[tuple[str, str]]]]] = {}
+        for branding in (True, False):
+            made.clear()
+            renderer = finance_renderer(name, "light", size, branding=branding)
+            for _ in itertools.islice(finance_frames(name, renderer), 6):
+                pass
+            drawn[branding] = [_header_overlaps(c, renderer.scale) for c in made]
+        for (marks, hits), (_, plain) in zip(drawn[True], drawn[False]):
+            if marks:
+                marked.add(size)
+            assert not hits if marks else hits <= plain, (size, hits)
+    assert {(1280, 720), (720, 450), (600, 375)} <= marked  # where the wordmark can be read
+    assert not marked & {(480, 300), (400, 250), (320, 200)}  # where it cannot
 
 
 @pytest.mark.parametrize("branding", [True, False])
