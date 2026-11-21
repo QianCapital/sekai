@@ -138,6 +138,11 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def __dir__() -> list[str]:
+    # The 0.2 names are listed, as they were, though served (with a warning) on access.
+    return sorted({*globals(), "BackendOps", "default_backend", "protocol", "numpy_backend"})
+
+
 __all__ = [
     "Array",
     "Backend",
