@@ -120,8 +120,6 @@ All notable changes to sekai are documented here. The format follows
   each holding a copy (on a 154 MB history, 25 MB of private memory per `Market-v1`
   worker instead of 264 MB). `memory_mapped`, `simple_returns()` (cached), and
   `validate=False` to skip the checks that read every value.
-- `MarketData` no longer copies read-only float64 arrays (read-only memory maps, another
-  `MarketData`'s arrays), so slices and splits share memory with their source.
 - `env.snapshot()` / `env.restore(snapshot)` on every `Env`, wrapper stack, in-process
   `VecEnv` and `BatchEnv`: the state, random generators included, restored in place, so the
   same actions give the same results (tree search, "what if" analysis, checkpoints; a
@@ -195,6 +193,15 @@ All notable changes to sekai are documented here. The format follows
 - `split_infos` (and so every native vector env) splits nested info mappings per env.
 - `Market-v0` refuses a `features=` field with several values per asset with a clear
   `ValueError` (such fields are new).
+- Given torch tensors, `project_weights`, `settle`, `turnover`, the cost models and
+  `StepOutcome.from_growth` (so the rewards) return tensors in the tensors' dtype and
+  device; 0.2 returned float64 NumPy arrays. NumPy inputs give the same float64 results as
+  before. To keep the old behaviour, convert tensors first (`sekai.backend.to_numpy`).
+  These functions are annotated as returning `Any`, so type checkers no longer infer NumPy
+  arrays from them.
+- `MarketData` keeps the read-only float64 arrays it is given (read-only memory maps,
+  another `MarketData`'s arrays) instead of copying them, so slices and splits share
+  memory with their source. Writeable arrays are still copied.
 - The finance core now goes through `sekai.backend`, which costs small single
   environments a little: on one core, `Trading-v0` makes about 12% fewer steps per second
   than in 0.2, `Portfolio-v0` about 7% fewer, and cost models about 13% fewer calls.
