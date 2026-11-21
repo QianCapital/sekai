@@ -188,7 +188,26 @@ All notable changes to sekai are documented here. The format follows
   by `BatchMarketEnv` and `LiveMarketEnv`.
 - Docs: "Paper and live trading", with a broker adapter sketch.
 
+**Qian Capital-branded dashboards**
+
+- Every finance renderer and `Dashboard` takes `branding=True`: the gold Q mark beside the
+  header, the QIAN CAPITAL wordmark over a Hedvig Letters Serif title, and the episode's
+  progress as a gold-metal rule. `branding=False` draws a plain header and makes
+  `theme="light"` / `"dark"` the new unbranded palettes `sekai.rendering.PLAIN_LIGHT` /
+  `PLAIN_DARK` (neutral surface and ink, blue accent, a brand-neutral categorical palette
+  checked for colour-vision deficiency); a `Theme` you pass is used as given either way.
+  `get_theme(name, branding=...)` resolves the names.
+- `sekai.rendering.brand`: `draw_mark`, `draw_wordmark` and `draw_rule`, for branded frames
+  of your own.
+- `Canvas.text(..., serif=True)` and `text_width(..., serif=True)` set text in Hedvig
+  Letters Serif (one weight, 9 to 32 px), shipped as a second glyph atlas under the SIL Open
+  Font License (`tools/build_font_atlas.py` builds both).
+
 ### Changed
+
+- Dashboards are branded by default, so their header is 12 px taller at 720 x 450 and the
+  charts slightly shorter; pass `branding=False` for the previous plain header (in the
+  unbranded palettes; `theme=sekai.rendering.LIGHT` keeps the house colours).
 
 - `split_infos` (and so every native vector env) splits nested info mappings per env.
 - `Market-v0` refuses a `features=` field with several values per asset with a clear

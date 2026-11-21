@@ -47,10 +47,13 @@ def episode(env: Any, renderer: Any, seed: int = 0) -> list[np.ndarray]:
     return frames
 
 
+@pytest.mark.parametrize("branding", [True, False])
 @pytest.mark.parametrize(("env_id", "kwargs", "renderer_cls"), CASES)
-def test_renders_an_episode(env_id: str, kwargs: dict[str, Any], renderer_cls: Any) -> None:
+def test_renders_an_episode(
+    env_id: str, kwargs: dict[str, Any], renderer_cls: Any, branding: bool
+) -> None:
     env = sekai.make(env_id, **kwargs)
-    frames = episode(env, renderer_cls(**SMALL))
+    frames = episode(env, renderer_cls(branding=branding, **SMALL))
     assert len(frames) >= 2
     for frame in frames:
         assert frame.shape == (225, 360, 3) and frame.dtype == np.uint8
@@ -80,13 +83,16 @@ def test_needs_a_reset(renderer_cls: Any) -> None:
         renderer_cls().render(env)
 
 
+@pytest.mark.parametrize("branding", [True, False])
 @pytest.mark.parametrize("theme", ["light", "dark"])
-def test_themes_and_sizes(theme: str) -> None:
+def test_themes_and_sizes(theme: str, branding: bool) -> None:
     env = sekai.make("Trading-v0", episode_length=10)
+    background = sekai.rendering.get_theme(theme, branding=branding).background
     for width, height in ((720, 450), (1440, 900), (320, 200)):
-        frame = episode(env, TradingRenderer(width=width, height=height, theme=theme))[-1]
+        renderer = TradingRenderer(width=width, height=height, theme=theme, branding=branding)
+        frame = episode(env, renderer)[-1]
         assert frame.shape == (height, width, 3)
-        assert tuple(frame[0, 0]) == sekai.rendering.get_theme(theme).background
+        assert tuple(frame[0, 0]) == background
 
 
 def test_record_frames_and_gif(tmp_path: Path) -> None:
@@ -201,9 +207,10 @@ def _view(renderer: Dashboard, env: Any, panel: Any) -> View:
     return View(env, history, prefix, LIGHT, 1.0, (0, 1), False, 0)
 
 
-def test_limit_order_book_market() -> None:
+@pytest.mark.parametrize("branding", [True, False])
+def test_limit_order_book_market(branding: bool) -> None:
     env = LimitOrderBookMarket(n_agents=3, decision_intervals=[1.0, 1.5, 2.0], session_length=15)
-    renderer = LimitOrderBookMarketRenderer(**SMALL)
+    renderer = LimitOrderBookMarketRenderer(branding=branding, **SMALL)
     env.reset(seed=0)
     frames = [renderer.render(env)]
     rng = np.random.default_rng(0)

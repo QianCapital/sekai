@@ -13,8 +13,9 @@ same kind of renderer for your own environment.
     env.save("trading.gif")
 
 Every renderer takes `width`, `height` (pixels; text and marks scale with the
-frame), `theme` ("light", "dark" or a `sekai.rendering.Theme`) and `window`
-(show only the latest steps).
+frame), `theme` ("light", "dark" or a `sekai.rendering.Theme`), `branding` (True, the
+default, draws in the Qian Capital house style; False draws a plain, unbranded
+dashboard) and `window` (show only the latest steps).
 """
 
 from __future__ import annotations
@@ -173,6 +174,7 @@ class TradingRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         super().__init__(
@@ -198,6 +200,7 @@ class TradingRenderer(_EnvRenderer):
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
         )
 
@@ -237,9 +240,17 @@ class PortfolioRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
-        super().__init__(width=width, height=height, theme=theme, window=window, subtitle=_market)
+        super().__init__(
+            width=width,
+            height=height,
+            theme=theme,
+            branding=branding,
+            window=window,
+            subtitle=_market,
+        )
         self._names: tuple[str, ...] | None = None
 
     def check(self, env: Any) -> None:
@@ -332,6 +343,7 @@ class MarketRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         equity = LineChart(
@@ -361,6 +373,7 @@ class MarketRenderer(_EnvRenderer):
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
         )
 
@@ -394,6 +407,7 @@ class MarketMakingRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         super().__init__(
@@ -431,6 +445,7 @@ class MarketMakingRenderer(_EnvRenderer):
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
         )
 
@@ -574,6 +589,7 @@ class OptimalExecutionRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         super().__init__(
@@ -598,6 +614,7 @@ class OptimalExecutionRenderer(_EnvRenderer):
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
         )
 
@@ -668,6 +685,7 @@ class LimitOrderBookRenderer(_EnvRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         price = _TraderPrice(
@@ -725,6 +743,7 @@ class LimitOrderBookRenderer(_EnvRenderer):
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
         )
 
@@ -756,12 +775,14 @@ class LimitOrderBookMarketRenderer(Dashboard):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         window: int | None = None,
     ) -> None:
         super().__init__(
             width=width,
             height=height,
             theme=theme,
+            branding=branding,
             window=window,
             step=lambda env: env.core.elapsed,
             horizon=lambda env: env.core.session_length,

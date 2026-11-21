@@ -2,9 +2,12 @@
 
 Each finance environment has a renderer in `sekai.envs.finance` (TradingRenderer,
 PortfolioRenderer, ...). Here each one runs with a simple baseline policy, recorded
-with RecordFrames. Needs Pillow: pip install "sekai[render]".
+with RecordFrames. The renderers draw in the Qian Capital house style; `branding=False`
+draws a plain, unbranded dashboard instead, and each episode is saved both ways
+(`finance_trading.gif`, `finance_trading_plain.gif`, ...), followed by stills of the
+last Trading-v0 frame in each style and theme. Needs Pillow: pip install "sekai[render]".
 
-Pass a directory to keep the GIFs (this is how the documentation's animations are
+Pass a directory to keep the images (this is how the documentation's animations are
 made):
 
     python examples/render_finance.py docs/assets
@@ -15,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 import sekai
 from sekai.envs.finance import (
@@ -34,15 +38,22 @@ out.mkdir(parents=True, exist_ok=True)
 size = {"width": 600, "height": 375}
 
 
-def record(name, env, renderer, policy, seed):
+def run(make_env, renderer, policy, seed):
     """Run one episode with `policy(base_env)`, recording a frame per step."""
-    env = RecordFrames(env, renderer)
+    env = RecordFrames(make_env(), renderer)
     result = env.reset(seed=seed)
     while not result.done:
         result = env.step(policy(env.unwrapped))
-    path = env.save(out / f"finance_{name}.gif")
-    print(f"{name}: {len(env.frames)} frames -> {path}")
-    env.close()
+    return env
+
+
+def record(name, make_env, renderer_cls, policy, seed):
+    """Save one episode drawn branded (the default) and plain (`branding=False`)."""
+    for branding, suffix in ((True, ""), (False, "_plain")):
+        env = run(make_env, renderer_cls(branding=branding, **size), policy, seed)
+        path = env.save(out / f"finance_{name}{suffix}.gif")
+        print(f"{name}{suffix}: {len(env.frames)} frames -> {path}")
+        env.close()
 
 
 def momentum(env):
@@ -71,45 +82,43 @@ def skewed_quotes(env):
     return np.array([1 + (inventory > 2), 1 + (inventory < -2), 1])
 
 
-record(
-    "trading",
-    sekai.make("Trading-v0", episode_length=120),
-    TradingRenderer(**size),
-    momentum,
-    seed=3,
-)
+def make_trading():
+    return sekai.make("Trading-v0", episode_length=120)
+
+
+record("trading", make_trading, TradingRenderer, momentum, seed=3)
 record(
     "portfolio",
-    sekai.make("Portfolio-v0", episode_length=120),
-    PortfolioRenderer(**size),
+    lambda: sekai.make("Portfolio-v0", episode_length=120),
+    PortfolioRenderer,
     momentum_tilt,
     seed=2,
 )
 record(
     "market",
-    sekai.make("Market-v0", episode_length=160),
-    MarketRenderer(**size),
+    lambda: sekai.make("Market-v0", episode_length=160),
+    MarketRenderer,
     equal_weight,
     seed=11,
 )
 record(
     "market_making",
-    sekai.make("MarketMaking-v0", n_steps=120),
-    MarketMakingRenderer(**size),
+    lambda: sekai.make("MarketMaking-v0", n_steps=120),
+    MarketMakingRenderer,
     lambda env: env.avellaneda_stoikov_action(),
     seed=0,
 )
 record(
     "optimal_execution",
-    sekai.make("OptimalExecution-v0", risk_aversion=2e-6),
-    OptimalExecutionRenderer(**size),
+    lambda: sekai.make("OptimalExecution-v0", risk_aversion=2e-6),
+    OptimalExecutionRenderer,
     lambda env: env.almgren_chriss_actions()[env.elapsed_steps],
     seed=0,
 )
 record(
     "limit_order_book",
-    sekai.make("LimitOrderBook-v0", session_length=120),
-    LimitOrderBookRenderer(**size),
+    lambda: sekai.make("LimitOrderBook-v0", session_length=120),
+    LimitOrderBookRenderer,
     skewed_quotes,
     seed=1,
 )
@@ -129,3 +138,14 @@ while market.agents:
     frames.append(renderer.render(market))
 path = save_gif(frames, out / "finance_order_book_market.gif", fps=10)
 print(f"order_book_market: {len(frames)} frames -> {path}")
+
+# The last frame of the Trading-v0 episode in each style and theme, as stills.
+for theme in ("light", "dark"):
+    for branding, style in ((True, "branded"), (False, "plain")):
+        env = run(
+            make_trading, TradingRenderer(theme=theme, branding=branding, **size), momentum, 3
+        )
+        path = out / f"branding_{style}_{theme}.png"
+        Image.fromarray(env.frames[-1]).save(path, optimize=True)
+        env.close()
+        print(f"still: {path}")

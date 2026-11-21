@@ -7,7 +7,8 @@ name = "sekai"
 dynamic = ["version"]
 description = "A modern, flexible RL environment framework for complex and financial market environments"
 readme = "README.md"
-# The glyph atlas in sekai/rendering/fonts is SIL Open Font License data (BDO Grotesk).
+# The glyph atlases in sekai/rendering/fonts are SIL Open Font License data (BDO Grotesk,
+# Hedvig Letters Serif).
 license = "Apache-2.0 AND OFL-1.1"
 license-files = ["LICENSE", "sekai/rendering/fonts/OFL.txt"]
 authors = [{ name = "Qian Capital", email = "opensource@qiancapital.com" }]
@@ -94,7 +95,12 @@ where = ["."]
 include = ["sekai*"]
 
 [tool.setuptools.package-data]
-sekai = ["py.typed", "rendering/fonts/*.npz", "rendering/fonts/OFL.txt"]
+sekai = [
+    "py.typed",
+    "rendering/fonts/*.npz",
+    "rendering/fonts/OFL.txt",
+    "rendering/assets/*.npz",
+]
 
 # ---------------------------------------------------------------------------
 # Testing

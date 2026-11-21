@@ -1,11 +1,14 @@
-"""Text for `Canvas`: a typeface rasterised ahead of time, so drawing text needs only NumPy.
+"""Text for `Canvas`: typefaces rasterised ahead of time, so drawing text needs only NumPy.
 
 The glyphs are BDO Grotesk (the typeface of sekai's documentation, SIL Open Font License
 1.1; see `fonts/OFL.txt`), stored as anti-aliased coverage masks in `fonts/bdo-grotesk.npz`
 at pixel sizes 9 to 32 in a regular and a bold (semibold) weight, with advances and
 kerning. Other sizes snap to the nearest stored one; sizes above 32 are resampled from
 32. Digits are tabular (all the same width), so a number that changes from frame to frame
-keeps its width. `tools/build_font_atlas.py` rebuilds the atlas.
+keeps its width. `serif=True` sets text in Hedvig Letters Serif instead, the documentation's
+heading face (also OFL 1.1, `fonts/hedvig-letters-serif.npz`, one weight, sizes 9 to 32,
+proportional digits), which the Qian Capital-branded dashboards title with.
+`tools/build_font_atlas.py` rebuilds the atlases.
 
 The character set is printable ASCII plus the minus sign, middle dot, em and en dashes,
 ellipsis, degree, plus-minus and multiplication signs, euro, pound and yen, bullet, the
@@ -23,7 +26,7 @@ from importlib import resources
 import numpy as np
 from numpy.typing import NDArray
 
-_ATLAS = "fonts/bdo-grotesk.npz"
+_ATLASES = {False: "fonts/bdo-grotesk.npz", True: "fonts/hedvig-letters-serif.npz"}
 # The largest stored size; bigger text is resampled from it.
 _MAX_STORED = 32
 
@@ -45,42 +48,45 @@ class Glyph:
     advance: float
 
 
-@functools.lru_cache(maxsize=1)
-def _atlas() -> dict[str, NDArray[np.generic]]:
-    source = resources.files("sekai.rendering").joinpath(_ATLAS)
+@functools.lru_cache(maxsize=2)
+def _atlas(serif: bool = False) -> dict[str, NDArray[np.generic]]:
+    source = resources.files("sekai.rendering").joinpath(_ATLASES[serif])
     with source.open("rb") as f, np.load(f) as archive:
         return {name: archive[name] for name in archive.files}
 
 
-def font_sizes() -> tuple[int, ...]:
-    """The pixel sizes stored in the atlas (text at other sizes snaps to the nearest)."""
-    return tuple(int(s) for s in _atlas()["sizes"])
+def font_sizes(serif: bool = False) -> tuple[int, ...]:
+    """The pixel sizes stored in an atlas (text at other sizes snaps to the nearest)."""
+    return tuple(int(s) for s in _atlas(serif)["sizes"])
 
 
 class Face:
-    """The typeface at one pixel size and weight: glyphs, metrics, kerning and layout.
+    """A typeface at one pixel size and weight: glyphs, metrics, kerning and layout.
 
-    Get one with `face(size, bold)`, which caches them.
+    Get one with `face(size, bold, serif)`, which caches them.
 
     Attributes:
         size: The pixel size (the em height).
-        bold: Whether this is the bold weight.
+        bold: Whether this is the bold weight (the serif has only one weight).
+        serif: Whether this is the serif (Hedvig Letters Serif) rather than BDO Grotesk.
         ascent: Pixels from the baseline to the top of the tallest glyphs.
         descent: Pixels from the baseline to the bottom of the descenders.
         cap_height: Height of capital letters above the baseline.
         x_height: Height of lowercase letters such as x.
     """
 
-    def __init__(self, size: int, bold: bool) -> None:
-        atlas = _atlas()
+    def __init__(self, size: int, bold: bool, serif: bool = False) -> None:
+        atlas = _atlas(serif)
+        bold = bold and not serif
         weight = "bold" if bold else "regular"
-        stored = min(font_sizes(), key=lambda s: (abs(s - size), s))
+        stored = min(font_sizes(serif), key=lambda s: (abs(s - size), s))
         if size > _MAX_STORED:
             stored = _MAX_STORED
         scale = size / stored if size > _MAX_STORED else 1.0
         key = f"{weight}_{stored}"
         self.size = size if size > _MAX_STORED else stored
         self.bold = bold
+        self.serif = serif
         ascent, descent, cap, x = (float(v) * scale for v in atlas[f"{key}_metrics"])
         self.ascent, self.descent, self.cap_height, self.x_height = ascent, descent, cap, x
 
@@ -139,18 +145,21 @@ class Face:
 
 
 @functools.lru_cache(maxsize=64)
-def _face(size: int, bold: bool) -> Face:
-    return Face(size, bold)
+def _face(size: int, bold: bool, serif: bool) -> Face:
+    return Face(size, bold, serif)
 
 
-def face(size: float = 12, bold: bool = False) -> Face:
-    """The typeface at a pixel size (rounded, at least 1) and weight, cached."""
-    return _face(max(round(size), 1), bool(bold))
+def face(size: float = 12, bold: bool = False, serif: bool = False) -> Face:
+    """The typeface at a pixel size (rounded, at least 1) and weight, cached.
+
+    `serif` selects Hedvig Letters Serif, which has one weight (`bold` is ignored).
+    """
+    return _face(max(round(size), 1), bool(bold) and not serif, bool(serif))
 
 
-def text_width(text: str, size: float = 12, bold: bool = False) -> float:
-    """The width in pixels of `text` drawn by `Canvas.text` at this size and weight."""
-    return face(size, bold).width(text)
+def text_width(text: str, size: float = 12, bold: bool = False, serif: bool = False) -> float:
+    """The width in pixels of `text` drawn by `Canvas.text` at this size, weight and face."""
+    return face(size, bold, serif).width(text)
 
 
 def _resample(mask: NDArray[np.float32], scale: float) -> NDArray[np.float32]:

@@ -86,32 +86,28 @@ NumPy-only RGB renderers.
 
 ## Finance
 
-<div class="sk-dashboards" markdown>
-<figure markdown>
-![Trading-v0](../assets/finance_trading.gif){ loading=lazy }
-<figcaption>Trading-v0</figcaption>
-</figure>
-<figure markdown>
-![Portfolio-v0](../assets/finance_portfolio.gif){ loading=lazy }
-<figcaption>Portfolio-v0</figcaption>
-</figure>
-<figure markdown>
-![Market-v0](../assets/finance_market.gif){ loading=lazy }
-<figcaption>Market-v0</figcaption>
-</figure>
-<figure markdown>
-![MarketMaking-v0](../assets/finance_market_making.gif){ loading=lazy }
-<figcaption>MarketMaking-v0</figcaption>
-</figure>
-<figure markdown>
-![OptimalExecution-v0](../assets/finance_optimal_execution.gif){ loading=lazy }
-<figcaption>OptimalExecution-v0</figcaption>
-</figure>
-<figure markdown>
-![LimitOrderBook-v0](../assets/finance_limit_order_book.gif){ loading=lazy }
-<figcaption>LimitOrderBook-v0</figcaption>
-</figure>
-</div>
+=== "Qian Capital (default)"
+
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    { .sk-dashboards }
+
+=== "Plain (branding=False)"
+
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    { .sk-dashboards }
+
+Each is drawn by its renderer in `sekai.envs.finance`, in the Qian Capital house style or
+plain with `branding=False` ([Rendering](../guide/rendering.md#branding)).
 
 | Environment | You control | The baseline to beat |
 |---|---|---|

@@ -1,12 +1,16 @@
-The glyph atlas in this directory (bdo-grotesk.npz) contains glyphs of BDO Grotesk,
-rasterised at fixed pixel sizes by tools/build_font_atlas.py in the sekai repository
-(the variable font pinned at weights 400 and 600, digits mapped to the font's tabular
-figures). It is a Modified Version of the Font Software and, like the font, is licensed
-under the SIL Open Font License, Version 1.1, reproduced below. The rest of sekai is
-licensed under the Apache License, Version 2.0.
+The glyph atlases in this directory contain glyphs rasterised at fixed pixel sizes by
+tools/build_font_atlas.py in the sekai repository: bdo-grotesk.npz of BDO Grotesk (the
+variable font pinned at weights 400 and 600, digits mapped to the font's tabular
+figures) and hedvig-letters-serif.npz of Hedvig Letters Serif (the variable font pinned
+at its only optical size, 24). Each is a Modified Version of its Font Software and, like
+the fonts, is licensed under the SIL Open Font License, Version 1.1, reproduced below.
+The rest of sekai is licensed under the Apache License, Version 2.0.
 
 BDO Grotesk
 Copyright (c) 2017 by Lokal Container (https://lokalcontainer.org)
+
+Hedvig Letters Serif
+Copyright 2023 The Hedvig Letters Project Authors (https://github.com/KanonFoundry/HedvigLetters)
 
 The license is also available with a FAQ at: https://openfontlicense.org
 

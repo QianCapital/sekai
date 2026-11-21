@@ -25,37 +25,31 @@ recording is a wrapper you add or remove without touching the environment.
 </div>
 
 The finance environments are drawn as dashboards: the market, the agent's positions and
-trades, and its results, as the episode unfolds.
+trades, and its results, as the episode unfolds. They are drawn in the Qian Capital house
+style unless you pass `branding=False` (see [Branding](#branding)); the tabs show both.
 
-<div class="sk-dashboards" markdown>
-<figure markdown>
-![Trading-v0](../assets/finance_trading.gif){ loading=lazy }
-<figcaption>TradingRenderer</figcaption>
-</figure>
-<figure markdown>
-![Portfolio-v0](../assets/finance_portfolio.gif){ loading=lazy }
-<figcaption>PortfolioRenderer</figcaption>
-</figure>
-<figure markdown>
-![Market-v0](../assets/finance_market.gif){ loading=lazy }
-<figcaption>MarketRenderer</figcaption>
-</figure>
-<figure markdown>
-![MarketMaking-v0](../assets/finance_market_making.gif){ loading=lazy }
-<figcaption>MarketMakingRenderer</figcaption>
-</figure>
-<figure markdown>
-![OptimalExecution-v0](../assets/finance_optimal_execution.gif){ loading=lazy }
-<figcaption>OptimalExecutionRenderer</figcaption>
-</figure>
-<figure markdown>
-![LimitOrderBook-v0](../assets/finance_limit_order_book.gif){ loading=lazy }
-<figcaption>LimitOrderBookRenderer</figcaption>
-</figure>
-</div>
+=== "Qian Capital (default)"
+
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    { .sk-dashboards }
+
+=== "Plain (branding=False)"
+
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    { .sk-dashboards }
 
 *These GIFs were produced by the renderers on this page, with `RecordFrames` and
-`save_gif()`; the finance ones by
+`save_gif()`; the finance ones, in both styles, by
 [`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).*
 
 ## The Renderer protocol
@@ -119,8 +113,10 @@ charts underneath.
 | `LimitOrderBookMarketRenderer` | `LimitOrderBookMarket` | the same, with every trader in its own colour, over session time |
 
 All of them take `width=720` and `height=450` (text and marks scale with the frame),
-`theme="light"` or `"dark"` (see [Themes](#themes)) and `window=None` (an int shows only
-the latest steps, a scrolling chart for long episodes); the two order-book renderers also
+`theme="light"` or `"dark"` (see [Themes](#themes)), `branding=True` (the Qian Capital house
+style; `False` draws a plain, unbranded dashboard, see [Branding](#branding)) and
+`window=None` (an int shows only the latest steps, a scrolling chart for long episodes);
+the two order-book renderers also
 take `levels=8`, the price ticks shown on each side of the mid. Like the classic-control
 renderers they accept a wrapped or unwrapped env and raise `TypeError` for the wrong kind.
 They draw at 10 to 20 ms a frame.
@@ -281,7 +277,8 @@ works as a clock (`LimitOrderBookMarketRenderer` uses session time); with `step=
 render counts as a step and you call `renderer.reset()` between episodes. `horizon=` fixes
 the end of the time axis so the episode draws from left to right; by default it is the
 env's `episode_length` or `n_steps`, else the `max_episode_steps` of its spec, else the axis
-grows with the episode. `window=` shows only the latest steps.
+grows with the episode. `window=` shows only the latest steps, and `branding=False` draws a
+plain, unbranded header and palette (see [Branding](#branding)).
 
 **Layout.** The positional arguments are stacked top to bottom. A list (or `Row(...)`) puts
 charts side by side, `Column(...)` stacks them inside a row, and each chart's `width=` and
@@ -382,6 +379,48 @@ blue_up = LIGHT.with_colors(up="#2a78d6", down="#d95926")  # a blue/orange polar
 renderer = TradingRenderer(theme=blue_up)
 ```
 
+### Branding
+
+Dashboards are drawn in the Qian Capital house style by default: the gold Q mark beside
+the header, the QIAN CAPITAL wordmark over a title set in Hedvig Letters Serif (the heading
+face of these pages), the Qian Capital palettes, and the episode's progress drawn as a rule
+of gold metal that fills as the episode goes on.
+
+=== "Branded (default)"
+
+    ![Trading-v0 drawn branded, light theme](../assets/branding_branded_light.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
+=== "branding=False"
+
+    ![Trading-v0 drawn plain, light theme](../assets/branding_plain_light.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
+=== "Branded, dark"
+
+    ![Trading-v0 drawn branded, dark theme](../assets/branding_branded_dark.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
+=== "branding=False, dark"
+
+    ![Trading-v0 drawn plain, dark theme](../assets/branding_plain_dark.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+
+`branding=False`, on any finance renderer or `Dashboard`, turns all of that off: the header
+is plain (a BDO Grotesk title, no mark, wordmark or gold), and `theme="light"` and `"dark"`
+become the unbranded palettes `PLAIN_LIGHT` and `PLAIN_DARK`, with a near-white or charcoal
+surface, neutral grey ink, a blue accent and a brand-neutral categorical palette (blue,
+orange, aqua, yellow, magenta, green, violet, red). They were checked for colour-vision
+deficiency in the same way as the house palettes. A `Theme` you pass is used as it is,
+branded or not, so `TradingRenderer(theme=DARK, branding=False)` keeps the house colours
+without the marks.
+
+```python
+renderer = TradingRenderer(branding=False)                # plain, light
+renderer = TradingRenderer(theme="dark", branding=False)  # plain, dark
+```
+
+`sekai.rendering.brand` draws the marks (`draw_mark`, `draw_wordmark`, `draw_rule`) if you lay
+out a branded frame of your own. The Qian Capital name and logo are trademarks of Qian
+Capital: they ship with sekai for its dashboards, and the Apache License does not grant
+permission to use them otherwise.
+
 ## Canvas
 
 `sekai.rendering.Canvas` is a tiny, dependency-free RGB raster. The origin is at the
@@ -401,15 +440,16 @@ and joins), as the dashboards do.
 | `polyline(points, color, width=1.0, dash=None)` | connected segments; a NaN point leaves a gap |
 | `fill_between(x, y1, y2, color)` | the area between two curves sampled at increasing `x` |
 | `image(array, left, bottom, right, top)` | an RGB or RGBA image scaled into a box, each pixel a crisp block (heatmaps, matrices) |
-| `text(x, y, text, color, size=12, bold=False, align="left", valign="baseline")` | a line of text; returns its width |
+| `text(x, y, text, color, size=12, bold=False, align="left", valign="baseline", serif=False)` | a line of text; returns its width |
 
 Every shape also takes `alpha=` (opacity in [0, 1]), and `with canvas.clip(left, bottom,
 right, top):` restricts drawing to a rectangle. Text is set in BDO Grotesk, the typeface of
 these pages, from glyphs rasterised ahead of time at 9 to 32 pixels (other sizes snap to the
 nearest; larger ones are scaled) in a regular and a bold weight, with kerning and tabular
-digits, so numbers that change from frame to frame keep their width. The glyphs ship with
-sekai under the SIL Open Font License; `sekai.rendering.text_width(text, size, bold)`
-measures text before you draw it.
+digits, so numbers that change from frame to frame keep their width; `serif=True` sets it in
+Hedvig Letters Serif, the heading face, in one weight. The glyphs ship with sekai under the
+SIL Open Font License; `sekai.rendering.text_width(text, size, bold, serif)` measures text
+before you draw it.
 
 `sekai.rendering.rotate(points, angle, origin=(0, 0))` rotates points counter-clockwise, for
 drawing rotated bodies.

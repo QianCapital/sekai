@@ -12,6 +12,8 @@ import sekai
 from sekai.rendering import (
     DARK,
     LIGHT,
+    PLAIN_DARK,
+    PLAIN_LIGHT,
     BarChart,
     Canvas,
     Column,
@@ -24,9 +26,11 @@ from sekai.rendering import (
     StackedArea,
     Stat,
     Theme,
+    brand,
     get_theme,
     text_width,
 )
+from sekai.rendering.brand import _resample
 from sekai.rendering.charts import (
     MINUS,
     Box,
@@ -173,6 +177,16 @@ class TestText:
         assert face(60).size == 60 and face(60).cap_height > face(32).cap_height * 1.7
         assert text_width("Bold", 14, bold=True) > text_width("Bold", 14)
 
+    def test_serif(self) -> None:
+        assert 9 in font_sizes(serif=True) and 32 in font_sizes(serif=True)
+        serif = face(19, serif=True)
+        assert serif.serif and not serif.bold
+        assert face(19, bold=True, serif=True) is serif  # one weight
+        assert text_width("Trading-v0", 19, serif=True) != text_width("Trading-v0", 19)
+        c = Canvas(120, 30)
+        width = c.text(4, 10, "Qian", BLACK, size=19, serif=True)
+        assert width == text_width("Qian", 19, serif=True) and ink(c).sum() > 10
+
     def test_digits_are_tabular(self) -> None:
         assert text_width("1111", 12) == text_width("8888", 12) == text_width("0000", 12)
 
@@ -203,6 +217,15 @@ class TestTheme:
         with pytest.raises(ValueError, match="theme"):
             get_theme("neon")
 
+    def test_plain_themes(self) -> None:
+        for theme in (PLAIN_LIGHT, PLAIN_DARK):
+            assert len(theme.series) == 8 and len(set(theme.series)) == 8
+            assert theme.color(8) == theme.neutral
+            assert not set(theme.series) & set(LIGHT.series + DARK.series)
+        assert get_theme("light", branding=False) is PLAIN_LIGHT
+        assert get_theme("dark", branding=False) is PLAIN_DARK
+        assert get_theme(LIGHT, branding=False) is LIGHT  # a Theme is used as given
+
     def test_with_colors(self) -> None:
         custom = LIGHT.with_colors(up="#2a78d6", series=["#000000"])
         assert isinstance(custom, Theme) and custom.up == (42, 120, 214)
@@ -220,6 +243,55 @@ class TestTheme:
         assert resolve_color(LIGHT, "#000000", 0) == BLACK
         with pytest.raises(ValueError, match="role"):
             resolve_color(LIGHT, "teal", 0)
+
+
+def golden(frame: np.ndarray) -> np.ndarray:
+    """Where a frame shows the brand's gold: warm, between bronze and pale gold."""
+    r, g, b = (frame[..., k].astype(np.int64) for k in range(3))
+    return (r > 120) & (r - g >= 12) & (r - g <= 70) & (g - b >= 25)
+
+
+class TestBrand:
+    @pytest.mark.parametrize("height", [24, 42, 84, 320])
+    def test_mark(self, height: int) -> None:
+        image = brand.mark(height)
+        assert image.shape[0] == height and image.shape[2] == 4 and image.dtype == np.uint8
+        assert image[..., 3].max() > 200 and image[0, 0, 3] < 8
+        assert golden(image[..., :3][image[..., 3] > 128]).mean() > 0.8
+
+    @pytest.mark.parametrize("cap_height", [5.0, 7.0, 14.0])
+    def test_wordmark_capitals(self, cap_height: float) -> None:
+        image, baseline = brand.wordmark(cap_height)
+        rows = (image[..., 3] > 128).sum(axis=1)
+        caps = np.flatnonzero(rows > 0.15 * rows.max())
+        assert caps[-1] < baseline <= caps[-1] + 2
+        assert caps.size == pytest.approx(cap_height, abs=1.5)
+        assert image.shape[1] > 10 * cap_height  # "QIAN CAPITAL", widely spaced
+
+    def test_resampling_keeps_colour(self) -> None:
+        red = np.zeros((40, 40, 4), dtype=np.uint8)
+        red[..., 0], red[..., 3] = 200, 128
+        for size in (7, 40, 90):
+            out = _resample(red, size, size)
+            assert out.shape == (size, size, 4)
+            assert (out[..., 0] == 200).all() and (np.abs(out[..., 3].astype(int) - 128) <= 1).all()
+
+    def test_gold_metal(self) -> None:
+        metal = brand.gold_metal(101)
+        first, last = brand.GOLD_METAL[0][1], brand.GOLD_METAL[-1][1]
+        assert np.abs(metal[0] - np.array(first)).max() <= 2
+        assert np.abs(metal[-1] - np.array(last)).max() <= 2
+        assert metal[45].astype(int).sum() > metal[0].astype(int).sum() + 100  # the shine
+
+    def test_rule(self) -> None:
+        c = Canvas(40, 10)
+        brand.draw_rule(c, 2, 3, 12.5, 5, span=40)
+        pixels = c.to_array()
+        rows = pixels[10 - 5 : 10 - 3]
+        assert (rows[:, 2:12] == brand.gold_metal(40)[0:10]).all()  # the first quarter
+        assert (rows[:, 12] != WHITE).all() and (rows[:, 12] != rows[:, 11]).any()  # half
+        assert (pixels[:, 13:] == WHITE).all() and (pixels[:, :2] == WHITE).all()
+        assert (pixels[: 10 - 5] == WHITE).all() and (pixels[10 - 3 :] == WHITE).all()
 
 
 class TestChartHelpers:
@@ -399,6 +471,23 @@ class TestDashboard:
         light = run(Walk(), walk_dashboard(), 2)[-1]
         dark = run(Walk(), walk_dashboard(theme="dark"), 2)[-1]
         assert tuple(light[0, 0]) == LIGHT.background and tuple(dark[0, 0]) == DARK.background
+
+    @pytest.mark.parametrize("theme", ["light", "dark"])
+    def test_branding(self, theme: str) -> None:
+        env = Walk(episode_length=4)
+        branded = run(env, walk_dashboard(theme=theme), 4)[-1]
+        plain = run(env, walk_dashboard(theme=theme, branding=False), 4)[-1]
+        assert walk_dashboard().branding  # the default
+        assert tuple(branded[0, 0]) == get_theme(theme).background
+        assert tuple(plain[0, 0]) == get_theme(theme, branding=False).background
+        # The header (with its progress rule) ends 38 rows down when branded, 32 when not.
+        assert golden(branded[:38]).sum() > 150  # the mark, the wordmark and the gold rule
+        assert golden(plain[:32]).sum() == 0
+
+    def test_a_theme_without_branding(self) -> None:
+        frame = run(Walk(), walk_dashboard(theme=DARK, branding=False), 2)[-1]
+        assert tuple(frame[0, 0]) == DARK.background
+        assert golden(frame[:32]).sum() == 0
 
     def test_sources(self) -> None:
         env = sekai.wrappers.TimeLimit(Walk(), 5)

@@ -38,6 +38,7 @@ from typing import Any, ClassVar, Literal, TypeAlias
 import numpy as np
 from numpy.typing import NDArray
 
+from sekai.rendering import brand
 from sekai.rendering.canvas import Canvas
 from sekai.rendering.charts import (
     Box,
@@ -496,6 +497,11 @@ class Dashboard(BaseRenderer):
         width: Frame width in pixels.
         height: Frame height in pixels.
         theme: "light", "dark" or a `Theme`.
+        branding: Draw in the Qian Capital house style: the gold mark and wordmark,
+            a serif title and a gold progress rule, with "light" and "dark" the Qian
+            Capital palettes. False draws a plain header and makes "light" and "dark"
+            the unbranded palettes (`PLAIN_LIGHT`, `PLAIN_DARK`); a `Theme` is used
+            as given either way.
         step: The episode clock, which is also the time axis (default:
             `elapsed_steps`; any number works, e.g. a session time); None counts renders.
         horizon: The clock's value at the end of an episode, which fixes the time axis
@@ -515,6 +521,7 @@ class Dashboard(BaseRenderer):
         width: int = 720,
         height: int = 450,
         theme: Theme | str = "light",
+        branding: bool = True,
         step: Source | None = "elapsed_steps",
         horizon: float | Source | None = "auto",
         window: int | None = None,
@@ -529,7 +536,8 @@ class Dashboard(BaseRenderer):
         self.stats = tuple(stats)
         self.width = width
         self.height = height
-        self.theme = get_theme(theme)
+        self.branding = bool(branding)
+        self.theme = get_theme(theme, branding=self.branding)
         self.step = step
         self.horizon = horizon
         self.window = window
@@ -662,7 +670,8 @@ class Dashboard(BaseRenderer):
         theme, s = self.theme, self.scale
         canvas = Canvas(self.width, self.height, theme.background, antialias=True)
         frame = Box(0, 0, self.width, self.height).inset(18 * s, 14 * s, 18 * s, 14 * s)
-        header = Box(frame.left, frame.top - 40 * s, frame.right, frame.top)
+        head = (52 if self.branding else 40) * s
+        header = Box(frame.left, frame.top - head, frame.right, frame.top)
         body = frame.inset(top=header.height + 18 * s)
         horizon = self._horizon(env)
         self._header(canvas, header, env, history, horizon)
@@ -705,20 +714,25 @@ class Dashboard(BaseRenderer):
     ) -> None:
         theme, s = self.theme, self.scale
         title = self._title(env)
-        canvas.text(
-            box.left, box.top - 13 * s, title, theme.text, size=16 * s, bold=True, valign="middle"
-        )
+        sub = None
         if self.subtitle is not None:
             sub = self.subtitle if isinstance(self.subtitle, str) else read(env, self.subtitle)
-            if sub:
-                canvas.text(
-                    box.left,
-                    box.top - 31 * s,
-                    str(sub),
-                    theme.text_muted,
-                    size=10.5 * s,
-                    valign="middle",
-                )
+        if self.branding:
+            # The mark beside the wordmark over a serif title, as on Qian Capital's pages.
+            left = box.left + brand.draw_mark(canvas, box.left, box.top, 42 * s) + 11 * s
+            brand.draw_wordmark(canvas, left, box.top - 4 * s, 7 * s)
+            canvas.text(
+                left, box.top - 21 * s, title, theme.text, size=19 * s, serif=True, valign="middle"
+            )
+            sub_y, stats_y = box.top - 37 * s, box.top - 8 * s
+        else:
+            left = box.left
+            canvas.text(
+                left, box.top - 13 * s, title, theme.text, size=16 * s, bold=True, valign="middle"
+            )
+            sub_y, stats_y = box.top - 31 * s, box.top
+        if sub:
+            canvas.text(left, sub_y, str(sub), theme.text_muted, size=10.5 * s, valign="middle")
         # Stats, right-aligned: label over value, with an optional change since the start.
         right = box.right
         for i in reversed(range(len(self.stats))):
@@ -743,7 +757,7 @@ class Dashboard(BaseRenderer):
             left = right - column
             canvas.text(
                 right,
-                box.top - 6 * s,
+                stats_y - 6 * s,
                 stat.label,
                 theme.text_muted,
                 size=10 * s,
@@ -752,7 +766,7 @@ class Dashboard(BaseRenderer):
             )
             canvas.text(
                 right - delta_w,
-                box.top - 24 * s,
+                stats_y - 24 * s,
                 text,
                 theme.text,
                 size=15 * s,
@@ -764,10 +778,10 @@ class Dashboard(BaseRenderer):
                 good = delta_up == stat.higher_is_better
                 color = theme.up if good else theme.down
                 tx = right - delta_w + 9 * s
-                triangle(canvas, tx, box.top - 24 * s, 3 * s, color, delta_up)
+                triangle(canvas, tx, stats_y - 24 * s, 3 * s, color, delta_up)
                 canvas.text(
                     tx + 5 * s,
-                    box.top - 24 * s,
+                    stats_y - 24 * s,
                     delta_text,
                     theme.text_secondary,
                     size=10 * s,
@@ -779,7 +793,10 @@ class Dashboard(BaseRenderer):
         canvas.rect(box.left, track_y, box.right, track_y + 2 * s, theme.grid, radius=1 * s)
         if horizon:
             done = min(max(history.steps[-1] / horizon, 0.0), 1.0)
-            if done > 0:
+            if done > 0 and self.branding:  # gold metal, uncovered as the episode goes on
+                end = box.left + done * box.width
+                brand.draw_rule(canvas, box.left, track_y, end, track_y + 2 * s, span=box.width)
+            elif done > 0:
                 canvas.rect(
                     box.left,
                     track_y,

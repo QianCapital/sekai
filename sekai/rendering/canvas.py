@@ -456,6 +456,7 @@ class Canvas:
         align: HAlign = "left",
         valign: VAlign = "baseline",
         alpha: float = 1.0,
+        serif: bool = False,
     ) -> float:
         """Draw a line of text and return its width in pixels.
 
@@ -463,9 +464,10 @@ class Canvas:
         `valign` places `y` at the baseline, the middle of the capital letters,
         their top, or the bottom of the descenders. The typeface is BDO Grotesk
         at sizes 9-32 px (other sizes snap to the nearest; larger ones are
-        scaled), regular or bold, with tabular digits; see `sekai.rendering.text`.
+        scaled), regular or bold, with tabular digits; `serif=True` sets it in
+        Hedvig Letters Serif (one weight) instead. See `sekai.rendering.text`.
         """
-        typeface = face(size, bold)
+        typeface = face(size, bold, serif)
         placed, width = typeface.layout(text)
         if align == "center":
             x -= width / 2

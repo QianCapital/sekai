@@ -48,7 +48,25 @@ charts under [Finance](finance.md#rendering).
 
 ::: sekai.rendering.theme.DARK
 
+::: sekai.rendering.theme.PLAIN_LIGHT
+
+::: sekai.rendering.theme.PLAIN_DARK
+
 ::: sekai.rendering.get_theme
+
+## Branding
+
+::: sekai.rendering.brand
+    options:
+      show_root_heading: false
+      members:
+        - draw_mark
+        - draw_wordmark
+        - draw_rule
+        - mark
+        - wordmark
+        - gold_metal
+        - GOLD_METAL
 
 ## Chart helpers
 

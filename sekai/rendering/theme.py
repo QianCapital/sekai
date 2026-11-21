@@ -14,6 +14,13 @@ and for normal vision (adjacent slots at least 15.6 apart), each against its own
 surface. The polarity pairs are separated for protanopes and deuteranopes as well,
 and charts pair them with shape and position (triangles up and down, bids below
 asks), so colour is never the only cue.
+
+`PLAIN_LIGHT` and `PLAIN_DARK` are the unbranded themes that dashboards use with
+`branding=False`: a neutral grey surface and ink, a blue accent, and a brand-neutral
+categorical palette (blue, orange, aqua, yellow, magenta, green, violet, red; adjacent
+slots at least 8.4 apart for protanopes and deuteranopes, 19.3 for normal vision). The
+accent, the polarity pair and the highlight stay at least 9.1 apart from each other in
+every pair under colour-vision deficiency, in both modes.
 """
 
 from __future__ import annotations
@@ -170,17 +177,72 @@ DARK = _theme(
 )
 """Forest-ink surface, gold-white ink: the Qian Capital dark palette."""
 
+PLAIN_LIGHT = _theme(
+    "plain-light",
+    # blue, orange, aqua, yellow, magenta, green, violet, red
+    ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"),
+    background="#fcfcfb",
+    grid="#e1e0d9",
+    axis="#c3c2b7",
+    text="#0b0b0b",
+    text_secondary="#52514e",
+    text_muted="#757470",
+    price="#0b0b0b",
+    accent="#2a78d6",
+    neutral="#a3a29c",
+    up="#1baf7a",
+    down="#b8322f",
+    highlight="#eda100",
+)
+"""Near-white surface, black ink, blue accent: the unbranded light palette."""
+
+PLAIN_DARK = _theme(
+    "plain-dark",
+    ("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"),
+    background="#1a1a19",
+    grid="#2c2c2a",
+    axis="#383835",
+    text="#f0efec",
+    text_secondary="#c3c2b7",
+    text_muted="#898781",
+    price="#f0efec",
+    accent="#3987e5",
+    neutral="#6f6e69",
+    up="#2bbf8a",
+    down="#c8403f",
+    highlight="#e0a100",
+)
+"""Charcoal surface, off-white ink, blue accent: the unbranded dark palette."""
+
 THEMES = {"light": LIGHT, "dark": DARK}
+PLAIN_THEMES = {"light": PLAIN_LIGHT, "dark": PLAIN_DARK}
 
 
-def get_theme(theme: Theme | str) -> Theme:
-    """A Theme, or the built-in one named "light" or "dark"."""
+def get_theme(theme: Theme | str, *, branding: bool = True) -> Theme:
+    """A Theme, or the built-in one named "light" or "dark".
+
+    The names give the Qian Capital palettes (`LIGHT`, `DARK`), or with `branding=False`
+    the unbranded ones (`PLAIN_LIGHT`, `PLAIN_DARK`). A Theme is returned as it is.
+    """
     if isinstance(theme, Theme):
         return theme
     try:
-        return THEMES[theme]
+        return (THEMES if branding else PLAIN_THEMES)[theme]
     except KeyError:
         raise ValueError(f"Unknown theme {theme!r}; use 'light', 'dark' or a Theme.") from None
 
 
-__all__ = ["DARK", "LIGHT", "THEMES", "Color", "ColorLike", "Theme", "get_theme", "mix", "rgb"]
+__all__ = [
+    "DARK",
+    "LIGHT",
+    "PLAIN_DARK",
+    "PLAIN_LIGHT",
+    "PLAIN_THEMES",
+    "THEMES",
+    "Color",
+    "ColorLike",
+    "Theme",
+    "get_theme",
+    "mix",
+    "rgb",
+]
