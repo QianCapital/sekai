@@ -216,7 +216,7 @@ files (`read_lobster` parses the LOBSTER format, below), or build the arrays you
 | `OrderBookMessages(time, event, order_id, size, price, side)` | the message stream, one NumPy array per field, validated (sorted times, known events, positive sizes, distinct submitted ids...) and read-only |
 | `MessageType` | `SUBMIT` (1), `CANCEL` (2, partial), `DELETE` (3), `EXECUTE` (4, visible), `EXECUTE_HIDDEN` (5), `CROSS` (6, auction), `HALT` (7): LOBSTER's event types |
 | `BookSnapshot(bid_prices, bid_sizes, ask_prices, ask_sizes)` | the visible book at one moment, best level first (the layout of `OrderBook.depth`) |
-| `BookSnapshots(...)` | the visible book after every message, `(n, levels)` arrays (a LOBSTER orderbook file); `snapshots[i]` is a `BookSnapshot` |
+| `BookSnapshots(...)` | the visible book after every message, `(n, levels)` arrays (a LOBSTER orderbook file); `snapshots[i]` is a `BookSnapshot`; rows may be crossed or locked, as around halts (`crossed` marks them) |
 
 Prices are integer ticks and `side` is the side of the order a message is about, so the
 execution of a bid (`side=1`) is a sale. `MessageReplay(messages, snapshot=None,
@@ -225,7 +225,9 @@ message (empty if `None`), and `initialise(book, start=t)` sets the book to its 
 every message stamped at or before time `t` by replaying them; with `snapshots` it is
 seeded from the row of the last of those messages instead, in O(levels). A snapshot
 enters the book as one `BACKGROUND` order per price level, ahead of every later order at
-that price.
+that price. A crossed or locked row (best bid at or above the best ask, as a recorded book
+can be during a halt) is not the state an `OrderBook` can be in, so a replay starting there
+is seeded from the last uncrossed row before it and replays the messages since.
 
 ```python
 from sekai.finance import BookSnapshot, MessageReplay, MessageType, OrderBookMessages
@@ -311,7 +313,9 @@ Replaying a fixed history around an agent is an approximation, with known biases
   at strictly better prices.
 - **No crossed books.** An `OrderBook` matches at once, so orders submitted during a halt
   that cross trade immediately instead of in the reopening auction; episodes spanning a
-  halt are approximate.
+  halt are approximate. An episode that starts while the recorded book is crossed starts
+  from the last uncrossed snapshot before then, with the messages since replayed onto it:
+  the book a replay of the whole history would give.
 
 ### Loading LOBSTER files
 
@@ -326,7 +330,10 @@ files you own with NumPy alone (pandas is not needed) and returns
   execution, the side of the resting order).
 - **Orderbook file**: the visible book after each message, `levels` blocks of ask price,
   ask size, bid price, bid size; empty levels hold the dummy prices 9999999999 (ask) and
-  -9999999999 (bid) with size 0, and are read as price 0, size 0.
+  -9999999999 (bid) with size 0, and are read as price 0, size 0. Rows around halts and
+  auctions can be crossed or locked (the best bid at or above the best ask): they are read
+  as they are and marked in `snapshots.crossed`, and a replay never seeds a book from one
+  (above).
 
 Prices become integer ticks of `tick_size` dollars, and visible orders must lie on that
 grid. Hidden executions may not (at the midpoint, say), so their prices are rounded away
@@ -400,7 +407,8 @@ stream: `sampler=` places the windows on a grid of `decision_interval` from the 
 message, and `reset(options={"start": t})` makes the first decision at time `t` (a float or
 `Time(t)`; an int is a grid position), as with the
 [episode samplers](data.md#episode-samplers) of the historical environments;
-`info["time"]` is then the book's time on the messages' clock. With `latency=` the agent's
+`info["time"]` is then the book's time on the messages' clock. (Simulated flow has no
+history to start in, and ignores `start`, as it did in 0.2.) With `latency=` the agent's
 orders reach the book later ([above](#latency)). A market order first cancels the agent's
 own resting quote on the opposite side (a buy cancels its ask, a sell its bid), so the agent
 never trades with itself: self-trade prevention, as in the cancel-resting mode of most

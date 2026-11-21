@@ -235,6 +235,11 @@ class BookSnapshots:
     starts at any time in O(levels), from the row before that time, instead of replaying
     every earlier message.
 
+    Unlike a `BookSnapshot`, a row may be crossed or locked (best bid at or above the best
+    ask), as real order books are around halts and auctions; `crossed` marks those rows.
+    Such a row cannot seed a book (an `OrderBook` would match it), so `snapshots[i]`
+    raises for it, and a `MessageReplay` seeds from the last uncrossed row instead.
+
     Attributes:
         bid_prices: Bid prices in ticks, `(n, levels)`.
         bid_sizes: Bid sizes, `(n, levels)`.
@@ -243,7 +248,8 @@ class BookSnapshots:
 
     Raises:
         ValueError: If the arrays are not 2-D integers of matching shapes, or a row breaks
-            the rules of a `BookSnapshot` (the message names the first such row).
+            a rule of a `BookSnapshot` other than the order of the two sides (the message
+            names the first such row).
     """
 
     bid_prices: NDArray[np.int64]
@@ -263,17 +269,36 @@ class BookSnapshots:
         """Price levels per side in each row."""
         return int(self.bid_prices.shape[1])
 
+    @property
+    def crossed(self) -> NDArray[np.bool_]:
+        """`(n,)` the rows whose best bid is at or above their best ask (crossed or locked)."""
+        if not self.levels:
+            return np.zeros(len(self), dtype=np.bool_)
+        quoted = (self.bid_sizes[:, 0] > 0) & (self.ask_sizes[:, 0] > 0)
+        out: NDArray[np.bool_] = quoted & (self.bid_prices[:, 0] >= self.ask_prices[:, 0])
+        return out
+
     def __len__(self) -> int:
         return len(self.bid_prices)
 
     def __getitem__(self, index: int) -> BookSnapshot:
-        """Row `index` (negative indices count from the end) as a `BookSnapshot`."""
-        return BookSnapshot(
+        """Row `index` (negative indices count from the end) as a `BookSnapshot`.
+
+        Raises:
+            ValueError: If the row is crossed or locked (see `crossed`).
+        """
+        row = (
             self.bid_prices[index],
             self.bid_sizes[index],
             self.ask_prices[index],
             self.ask_sizes[index],
         )
+        if self.levels and row[1][0] > 0 and row[3][0] > 0 and row[0][0] >= row[2][0]:
+            raise ValueError(
+                f"row {index} is crossed or locked (best bid {int(row[0][0])} >= best ask "
+                f"{int(row[2][0])}): a BookSnapshot, the state of a book, cannot be."
+            )
+        return BookSnapshot(*row)
 
     def __repr__(self) -> str:
         return f"BookSnapshots({len(self)} rows, levels={self.levels})"
@@ -332,7 +357,9 @@ class MessageReplay:
       far from the touch until those levels refill. An execution of such an unknown
       order can fill only orders at strictly better prices.
     - **Halts.** The book cannot be crossed: orders submitted during a halt that cross it
-      trade at once, instead of waiting for the reopening cross.
+      trade at once, instead of waiting for the reopening cross. For the same reason a
+      replay starting while the recorded book is crossed or locked is seeded from the
+      last uncrossed snapshot before then, and replays the messages since.
 
     Without agents, the replay reproduces the historical book exactly (given a snapshot
     with every level the messages touch).
@@ -347,8 +374,10 @@ class MessageReplay:
             `snapshots`.
         snapshots: The visible book after each message (a LOBSTER orderbook file, from
             `read_lobster`). With them, a replay starting at time `t` is seeded from the
-            row of the last message at or before `t`; without them, it replays every
-            earlier message from `snapshot` (exact, but O(messages before `t`)).
+            row of the last message at or before `t` (if that row is crossed or locked,
+            from the last uncrossed row before it, replaying the messages since); without
+            them, it replays every earlier message from `snapshot` (exact, but
+            O(messages before `t`)).
         cap_to_history: Cut each background order to at most its historical remaining
             size after every message about it (see the biases above).
 
@@ -399,6 +428,10 @@ class MessageReplay:
         self._executions: list[int] = np.flatnonzero(
             (event == MessageType.EXECUTE) | (event == MessageType.EXECUTE_HIDDEN)
         ).tolist()
+        # The snapshot rows that cannot seed a book (crossed or locked), usually few.
+        self._crossed: list[int] = (
+            [] if snapshots is None else np.flatnonzero(snapshots.crossed).tolist()
+        )
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -456,11 +489,13 @@ class MessageReplay:
 
         The book is seeded with one `BACKGROUND` order per price level of a snapshot:
         `snapshot`, for a start before the first message (or without `snapshots`), else
-        the row of `snapshots` of the last message at or before `start`. Without
-        `snapshots`, the messages before `start` are then replayed onto it. `book.time`
-        is set to `start` (to the first message's time if `start` is `None`), and
-        `book.last_price` to the last execution price before it (to the seeded book's mid,
-        rounded down, if there was none).
+        the row of `snapshots` of the last message at or before `start`. A crossed or
+        locked row cannot seed a book, so then the last uncrossed row before it seeds it
+        (`snapshot` if there is none). The messages after the seeding snapshot and at or
+        before `start` are then replayed onto it. `book.time` is set to `start` (to the
+        first message's time if `start` is `None`), and `book.last_price` to the last
+        execution price before it (to the seeded book's mid, rounded down, if there was
+        none).
 
         Args:
             book: The book to (re)initialise.
@@ -481,9 +516,17 @@ class MessageReplay:
         book.clear()
         self._reset_state()
         self._book = book
-        if index > 0 and self.snapshots is not None:
+        row = self._seed_row(index - 1) if index > 0 and self.snapshots is not None else -1
+        if row >= 0 and row == index - 1:  # the snapshot after the last message by `start`
+            assert self.snapshots is not None
             book.time = now
-            self._seed(book, self.snapshots[index - 1])
+            self._seed(book, self.snapshots[row])
+        elif row >= 0:  # that one is crossed: an earlier one, then the messages since
+            assert self.snapshots is not None
+            book.time = min(now, float(times[row]))
+            self._seed(book, self.snapshots[row])
+            self._run(book, row + 1, index, [])
+            book.time = now
         else:  # the book before the first message, then the history before `start`
             book.time = min(now, float(times[0]))
             if self.snapshot is not None:
@@ -564,6 +607,15 @@ class MessageReplay:
                 "this replay drives another book; use one MessageReplay per book "
                 "(spawn() makes another) and initialise() it with that book."
             )
+
+    def _seed_row(self, row: int) -> int:
+        """The last snapshot row at or before `row` that can seed a book (-1 if none)."""
+        crossed = self._crossed
+        k = bisect_left(crossed, row + 1)  # crossed[:k] are the crossed rows <= row
+        while k > 0 and crossed[k - 1] == row:  # walk back over a run of crossed rows
+            row -= 1
+            k -= 1
+        return row
 
     def _seed(self, book: OrderBook, snapshot: BookSnapshot) -> None:
         """Rest one background order per non-empty level of `snapshot`."""
@@ -696,7 +748,9 @@ def read_lobster(
     the side of the resting order). The orderbook file has the visible book after each
     message: ask price, ask size, bid price and bid size for each level, best first;
     empty levels hold the dummy prices 9999999999 (ask) and -9999999999 (bid) with
-    size 0, and are read as price 0, size 0.
+    size 0, and are read as price 0, size 0. Its rows may be crossed or locked (best bid
+    at or above the best ask), as around halts and auctions: they are kept, marked in
+    `BookSnapshots.crossed`, and a replay never seeds a book from one.
 
     Prices become integer ticks of `tick_size` dollars. Visible orders must lie on that
     grid. Hidden executions may not (e.g. at the midpoint), so their prices are rounded
@@ -971,10 +1025,10 @@ def _check_depth(
             empty = prices.shape[:-1]
             tops.append((np.zeros(empty, np.int64), np.zeros(empty, np.bool_)))
     (bid, has_bid), (ask, has_ask) = tops
-    crossed = np.atleast_1d(has_bid & has_ask & (bid >= ask))
-    if crossed.any():
-        place = "" if ndim == 1 else f" (row {int(np.argmax(crossed))})"
-        raise ValueError(f"the best bid must be below the best ask{place}.")
+    # A snapshot seeds a book, which cannot be crossed; the rows of a recorded history
+    # (BookSnapshots) may be, around halts and auctions.
+    if ndim == 1 and bool(has_bid & has_ask & (bid >= ask)):
+        raise ValueError("the best bid must be below the best ask.")
     for array in out:
         array.setflags(write=False)
     return out[0], out[1], out[2], out[3]

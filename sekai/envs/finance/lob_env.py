@@ -35,7 +35,7 @@ from sekai.envs.finance._common import check_number, check_numbers, episode_over
 from sekai.error import InvalidAction, ResetRequired
 from sekai.finance.data import Time
 from sekai.finance.lob import Fill, MessageReplay, Order, OrderBook, Side, ZeroIntelligenceFlow
-from sekai.finance.sampling import EpisodeSampler, as_sampler, sample_start
+from sekai.finance.sampling import EpisodeSampler, RandomStart, as_sampler, sample_start
 from sekai.spaces.box import Box
 from sekai.spaces.dict import Dict
 from sekai.spaces.masked_box import MaskedBox
@@ -83,6 +83,13 @@ class _Trader:
 
 class _LOBCore:
     """State and mechanics shared by the single- and multi-agent environments."""
+
+    # Defaults for attributes added after 0.2, so that a core pickled by sekai 0.2.0
+    # (always with simulated flow, which never reads them) loads and runs as it did.
+    sampler: EpisodeSampler = RandomStart()
+    slot: float = 1.0
+    episode_slots: int = 0
+    n_starts: int = 0
 
     def __init__(
         self,
@@ -159,6 +166,11 @@ class _LOBCore:
     # Episode ----------------------------------------------------------------
 
     def start(self, rng: np.random.Generator, options: dict[str, Any] | None = None) -> None:
+        """Set up the book for a new episode.
+
+        With a replay, `options["start"]` places the episode (see `_seed_time`); simulated
+        flow has no history to start in, so it ignores the option, as sekai 0.2 did.
+        """
         flow = self.flow
         if isinstance(flow, MessageReplay):
             seed_time = self._seed_time(flow, rng, options)
@@ -166,11 +178,6 @@ class _LOBCore:
             if self.warmup > 0:
                 flow.advance(self.book, rng, seed_time + self.warmup)
         else:
-            if options and options.get("start") is not None:
-                raise ValueError(
-                    "options['start'] needs a replayed message stream (flow=MessageReplay(...)); "
-                    "simulated order flow has no history to start in."
-                )
             flow.initialise(self.book, rng, mid=self.mid_price)
             if self.warmup > 0:
                 flow.advance(self.book, rng, self.warmup)
@@ -553,7 +560,8 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     starting at the first message (position k seeds the book at
     `start_time + k * decision_interval`); `reset(options={"start": t})` makes the
     first decision at time `t` (a float or `Time(t)`), or at grid position `t` (an
-    int). While the replayed market is halted, the agent's orders are not sent.
+    int); simulated flow, which has no history, ignores it. While the replayed market
+    is halted, the agent's orders are not sent.
 
     **Latency.** An action decided at time t reaches the book at `t + latency`: the
     background flow runs up to that time first (messages stamped at or before it come
@@ -595,6 +603,11 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 10}
     AGENT: ClassVar[int] = 0
 
+    # Defaults for attributes added after 0.2, so that an env pickled by sekai 0.2.0 (which
+    # had no latency) loads and continues exactly as it would have.
+    latency: float | Callable[[np.random.Generator], float] = 0.0
+    _latency_fn: Callable[[np.random.Generator], float] | None = None
+
     def __init__(
         self,
         *,
@@ -613,10 +626,10 @@ class LimitOrderBookEnv(Env[dict[str, Any], NDArray[np.int64]]):
         sampler: str | int | EpisodeSampler = "random",
     ) -> None:
         decision_interval = check_number("decision_interval", decision_interval, ">0")
-        self._latency_fn: Callable[[np.random.Generator], float] | None = None
+        self._latency_fn = None
         if callable(latency):
             self._latency_fn = latency
-            self.latency: float | Callable[[np.random.Generator], float] = latency
+            self.latency = latency
         else:
             delay = check_number("latency", latency, ">=0")
             if delay > decision_interval:

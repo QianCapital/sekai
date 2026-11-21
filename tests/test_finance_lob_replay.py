@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import pickle
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +30,14 @@ from sekai.finance import (
     read_lobster,
 )
 from sekai.finance.lob import Fill
-from tests.data.lob_reference import MULTI_CONFIGS, SINGLE_CONFIGS, multi_rollout, single_rollout
+from tests.data.lob_pickles import CONTINUATIONS
+from tests.data.lob_reference import (
+    MULTI_CONFIGS,
+    SINGLE_CONFIGS,
+    digest,
+    multi_rollout,
+    single_rollout,
+)
 
 AGENT = 0
 BID, ASK = int(Side.BID), int(Side.ASK)
@@ -57,6 +65,16 @@ def snapshot_of(bids: list[tuple[int, int]], asks: list[tuple[int, int]]) -> Boo
         np.array([p for p, _ in asks], dtype=np.int64),
         np.array([q for _, q in asks], dtype=np.int64),
     )
+
+
+def single_rollout_of(env: Any, options: dict[str, Any] | None, actions: np.ndarray) -> list[int]:
+    """Digests of a reset of `env` (seed 0, with `options`) and of a step per action."""
+    r = env.reset(seed=0, options=options)
+    digests = [digest(r.observation, r.info)]
+    for action in actions:
+        s = env.step(action.astype(np.int64))
+        digests.append(digest(s.observation, s.reward, s.terminated, s.truncated, s.info))
+    return digests
 
 
 def assert_depth(got: Depth, expected: Depth, context: Any = "") -> None:
@@ -635,13 +653,22 @@ class TestValidation:
         assert len(rows) == 2 and rows.levels == 2
         assert rows[1].price_levels(Side.ASK) == [(102, 5), (103, 6)]
         assert rows[-1].price_levels(Side.BID) == [(100, 3)]
-        with pytest.raises(ValueError, match=r"row 1"):
-            BookSnapshots(
-                np.array([[100], [101]]),
-                np.array([[1], [1]]),
-                np.array([[101], [101]]),
-                np.array([[1], [1]]),
-            )
+        assert rows.crossed.tolist() == [False, False]
+        # A recorded history may be locked or crossed (around halts and auctions), but such a
+        # row is not the state of a book: it cannot be a BookSnapshot.
+        locked = BookSnapshots(
+            np.array([[100], [101], [102], [100]]),
+            np.array([[1], [1], [1], [0]]),
+            np.array([[101], [101], [101], [100]]),
+            np.array([[1], [1], [1], [1]]),
+        )
+        assert locked.crossed.tolist() == [False, True, True, False]
+        with pytest.raises(ValueError, match="row 1 is crossed or locked"):
+            _ = locked[1]
+        with pytest.raises(ValueError, match="best bid must be below the best ask"):
+            snapshot_of([(101, 1)], [(101, 1)])
+        empty = BookSnapshots(*(np.zeros((2, 0), np.int64) for _ in range(4)))
+        assert empty.crossed.tolist() == [False, False] and empty[0].price_levels(Side.BID) == []
         with pytest.raises(ValueError, match="shape"):
             BookSnapshots(np.array([100]), np.array([1]), np.array([101]), np.array([1]))
         with pytest.raises(ValueError, match="rows"):
@@ -819,7 +846,6 @@ class TestLobster:
             ("9999999999,0,1000000,10\n", "rows"),
             ("9999999999,0,1000000,10,5\n1000100,10,1000000,10,5\n", "4 columns per level"),
             ("9999999999,0,1000050,10\n1000100,10,1000000,10\n", "not a multiple"),
-            ("9999999999,0,1000000,10\n1000000,10,1000000,10\n", "below the best ask"),
         ]
         for content, match in cases:
             book.write_text(content)
@@ -835,6 +861,75 @@ class TestLobster:
             read_lobster(messages, book, levels=0)
         messages_1, snapshots_1 = read_lobster(messages, book, tick_size=0.0001)
         assert messages_1.price.tolist() == [1000000, 1000100] and snapshots_1 is not None
+
+    def test_crossed_and_locked_rows(self, tmp_path: Path) -> None:
+        # A halt during which a bid crosses the ask, as LOBSTER records it: the book stays
+        # crossed until the reopening auction (a cross trade) clears it.
+        messages_csv = "\n".join(
+            [
+                "1.0,1,1,5,10000,1",
+                "2.0,1,2,5,10200,-1",
+                "3.0,7,0,0,-1,-1",  # trading halts
+                "4.0,1,3,2,10300,1",  # a bid above the ask: crossed
+                "5.0,1,4,1,10100,-1",
+                "6.0,7,0,0,1,-1",  # trading resumes
+                "6.0,6,0,2,10200,-1",  # the reopening cross
+                "6.0,3,3,2,10300,1",
+                "6.0,2,2,2,10200,-1",
+            ]
+        )
+        no_ask, no_bid = "9999999999,0", "-9999999999,0"
+        book_csv = "\n".join(
+            [
+                f"{no_ask},10000,5,{no_ask},{no_bid}",
+                f"10200,5,10000,5,{no_ask},{no_bid}",
+                f"10200,5,10000,5,{no_ask},{no_bid}",
+                f"10200,5,10300,2,{no_ask},10000,5",
+                "10100,1,10300,2,10200,5,10000,5",
+                "10100,1,10300,2,10200,5,10000,5",
+                "10100,1,10300,2,10200,5,10000,5",
+                f"10100,1,10000,5,10200,5,{no_bid}",
+                f"10100,1,10000,5,10200,3,{no_bid}",
+            ]
+        )
+        (tmp_path / "m.csv").write_text(messages_csv + "\n")
+        (tmp_path / "o.csv").write_text(book_csv + "\n")
+        messages, snapshots = read_lobster(tmp_path / "m.csv", tmp_path / "o.csv")
+        assert snapshots is not None
+        assert snapshots.crossed.tolist() == [False] * 3 + [True] * 4 + [False] * 2
+        with pytest.raises(ValueError, match="row 4 is crossed"):
+            _ = snapshots[4]
+        # Starting while the recorded book is crossed, the replay is seeded from the last
+        # uncrossed row (2) and replays the messages since: the crossing bid trades at once.
+        # That is the book a replay of the whole history gives.
+        expected: Depth = (
+            np.array([100, 0]),
+            np.array([5, 0]),
+            np.array([101, 102]),
+            np.array([1, 3]),
+        )
+        for replay in (
+            MessageReplay(messages, snapshots=snapshots),
+            MessageReplay(messages),
+        ):
+            book = OrderBook()
+            replay.initialise(book, start=5.5)
+            assert_depth(book.depth(2), expected)
+            assert book.time == 5.5 and replay.position == 5 and replay.halted
+        # After the auction the recorded book is uncrossed again, and seeds the book directly.
+        replay = MessageReplay(messages, snapshots=snapshots)
+        book = OrderBook()
+        replay.initialise(book, start=7.0)
+        assert_depth(book.depth(2), expected)
+        assert not replay.halted and len(book) == 3  # one order per seeded level
+        # With no uncrossed row before the start, the replay starts from `snapshot`.
+        always = BookSnapshots(
+            *(np.tile(a, (len(messages), 1)) for a in ([103, 0], [2, 0], [102, 0], [5, 0]))
+        )
+        replay = MessageReplay(messages, snapshots=always)
+        book = OrderBook()
+        replay.initialise(book, start=5.5)
+        assert_depth(book.depth(2), expected)
 
 
 # ---------------------------------------------------------------------------
@@ -889,9 +984,27 @@ class TestReplayEnv:
                 env.reset(options={"start": bad})
         with pytest.raises(TypeError):
             env.reset(options={"start": True})
-        with pytest.raises(ValueError, match="needs a replayed"):
-            LimitOrderBookEnv().reset(options={"start": 3.0})
         assert env.core.n_starts == math.floor(end - begin - 12.0 + 1e-9) + 1
+
+    @pytest.mark.parametrize("start", [3.0, 5, Time(2.0), None])
+    def test_simulated_flow_ignores_start(self, start: Any) -> None:
+        # As in 0.2.0: simulated flow has no history to start in, so the option changes
+        # nothing (and warns about nothing).
+        actions = np.random.default_rng(0).integers(0, [6, 6, 3], size=(20, 3))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            env, plain = sekai.make("LimitOrderBook-v0"), sekai.make("LimitOrderBook-v0")
+            assert single_rollout_of(env, {"start": start}, actions) == single_rollout_of(
+                plain, None, actions
+            )
+            market, other = LimitOrderBookMarket(2), LimitOrderBookMarket(2)
+            r, s = market.reset(seed=4, options={"start": start}), other.reset(seed=4)
+            assert digest(r.observations, r.info) == digest(s.observations, s.info)
+            step = {a: np.array([1, 1, 1]) for a in r.observations}
+            r, s = market.step(step), other.step(step)
+            assert digest(r.observations, r.rewards, r.info) == digest(
+                s.observations, s.rewards, s.info
+            )
 
     def test_samplers(self, replay: MessageReplay) -> None:
         env = LimitOrderBookEnv(flow=replay, session_length=10.0, warmup=0.0, sampler="sequential")
@@ -1154,3 +1267,46 @@ class TestDefaultsUnchanged:
         assert single_rollout({}, 1, actions)[1:] != base[1:]
         assert single_rollout({}, 0, actions[::-1])[1:] != base[1:]
         assert single_rollout({"inventory_penalty": 0.02}, 0, actions)[1:] != base[1:]
+
+
+# ---------------------------------------------------------------------------
+# Objects pickled by sekai 0.2.0 load and continue as they did there
+# ---------------------------------------------------------------------------
+# tests/data/lob_pickles.npz holds order-book objects (environments as `sekai.make`
+# returns them, LimitOrderBookMarket, an OrderBook with its ZeroIntelligenceFlow) pickled
+# mid-run by sekai 0.2.0 under NumPy 1.24, with digests of how each run continued under
+# 0.2.0. It is recorded by tests/data/lob_pickles.py, which also defines how each run
+# continues (see that module before regenerating it).
+
+
+@pytest.fixture(scope="module")
+def pickled_by_020() -> dict[str, np.ndarray]:
+    with np.load(DATA / "lob_pickles.npz") as data:
+        return {key: data[key] for key in data.files}
+
+
+class TestPickledBy020:
+    @pytest.mark.parametrize("name", sorted(CONTINUATIONS))
+    def test_continues_as_under_020(self, pickled_by_020: dict[str, np.ndarray], name: str) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # loads without a deprecation warning, too
+            obj = pickle.loads(pickled_by_020[f"{name}__pickle"].tobytes())
+        digests = CONTINUATIONS[name](obj)
+        expected = pickled_by_020[f"{name}__digests"].tolist()
+        assert len(digests) == len(expected)
+        diverged = next((i for i, (a, b) in enumerate(zip(digests, expected)) if a != b), None)
+        assert diverged is None, f"the run differs from step {diverged} on"
+
+    def test_every_case_is_recorded(self, pickled_by_020: dict[str, np.ndarray]) -> None:
+        kinds = ("pickle", "digests")
+        assert set(pickled_by_020) == {f"{n}__{k}" for n in CONTINUATIONS for k in kinds}
+
+    def test_a_loaded_env_snapshots_and_restores(
+        self, pickled_by_020: dict[str, np.ndarray]
+    ) -> None:
+        env = pickle.loads(pickled_by_020["LimitOrderBook-v0__pickle"].tobytes())
+        assert env.latency == 0.0 and env.core.n_starts == 0  # the defaults of 0.2.0
+        snapshot = env.snapshot()
+        first = [env.step(np.array([1, 1, 1])).reward for _ in range(5)]
+        env.restore(snapshot)
+        assert [env.step(np.array([1, 1, 1])).reward for _ in range(5)] == first
