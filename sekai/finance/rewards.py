@@ -356,15 +356,22 @@ class DifferentialSharpe(_Stateful):
 
     Args:
         eta: Adaptation rate of the moving estimates (about 1 / window length).
+        initial_variance: Starting value of the second-moment estimate `B` (a prior on
+            the variance of step returns, e.g. `0.01**2` for 1% daily moves), which makes
+            the reward informative from the first step; 0 by default.
     """
 
-    _fields = (("A", 0.0), ("B", 0.0))
+    _fields: tuple[tuple[str, float], ...] = (("A", 0.0), ("B", 0.0))
 
-    def __init__(self, eta: float = 0.01) -> None:
+    def __init__(self, eta: float = 0.01, *, initial_variance: float = 0.0) -> None:
         if not 0.0 < eta < 1.0:
             raise ValueError(f"eta must be in (0, 1), got {eta}.")
+        if not (np.isfinite(initial_variance) and initial_variance >= 0):
+            raise ValueError(f"initial_variance must be finite and >= 0, got {initial_variance!r}.")
         super().__init__()
         self.eta = float(eta)
+        self.initial_variance = float(initial_variance)
+        self._fields = (("A", 0.0), ("B", self.initial_variance))
 
     def __call__(self, outcome: StepOutcome) -> Any:
         B, like = backend_and_like(outcome.simple_return)
@@ -380,7 +387,8 @@ class DifferentialSharpe(_Stateful):
         return d
 
     def __repr__(self) -> str:
-        return f"DifferentialSharpe(eta={self.eta:g})"
+        extra = f", initial_variance={self.initial_variance:g}" if self.initial_variance else ""
+        return f"DifferentialSharpe(eta={self.eta:g}{extra})"
 
 
 class PortfolioVariance(RewardFunction):

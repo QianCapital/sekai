@@ -64,6 +64,11 @@ All notable changes to sekai are documented here. The format follows
 - Cost models receive `assets=` from batched environments (the asset behind each slot's
   trade) and look per-asset parameters up with it (`ProportionalCost`, `SpreadCost`).
 - `MarketRenderer` draws `Market-v1` too.
+- Cost models read a `volatility` data field when there is one (a per-step forecast, such as a
+  risk model's), instead of estimating volatility from the observed window; `BatchMarketEnv`
+  info adds `return`, the step's net simple return.
+- `DifferentialSharpe(initial_variance=...)`: a prior on the variance of step returns, so the
+  reward is informative from the first step.
 - Docs: "Batched and differentiable environments"; holding costs, constraints and risk
   models in "Costs, accounts and rewards"; `Market-v1` in the environment catalogue; an
   API page for `sekai.backend`. Example `examples/integrations/direct_policy_torch.py`:

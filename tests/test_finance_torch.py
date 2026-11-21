@@ -258,3 +258,17 @@ def test_portfolio_variance_reward() -> None:
     bare = StepOutcome.from_growth(np.array([1.0]), equity=np.array([1.0]), turnover=0.0, cost=0.0)
     with pytest.raises(ValueError, match="risk model"):
         PortfolioVariance()(bare)
+
+
+def test_differential_sharpe_initial_variance() -> None:
+    reward = DifferentialSharpe(0.1, initial_variance=1e-4)
+    r = 0.01
+    out = reward(
+        StepOutcome.from_growth(np.array([1 + r]), equity=np.array([1 + r]), turnover=0.0, cost=0.0)
+    )
+    a, b = 0.0, 1e-4
+    want = (b * (r - a) - 0.5 * a * (r * r - b)) / (b - a * a) ** 1.5
+    assert float(out[0]) == pytest.approx(want)
+    assert "initial_variance=0.0001" in repr(reward)
+    with pytest.raises(ValueError, match="initial_variance"):
+        DifferentialSharpe(0.1, initial_variance=-1.0)

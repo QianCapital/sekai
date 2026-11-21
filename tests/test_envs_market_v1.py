@@ -517,3 +517,22 @@ def test_info_and_introspection() -> None:
     with pytest.raises(AttributeError):
         env.unwrapped.batch_env.lookback = 3  # type: ignore[misc]
     assert isinstance(env.unwrapped.batch_env.reward_fn, LogReturn)
+
+
+def test_volatility_field_prices_impact_and_step_return() -> None:
+    """A `volatility` data field (e.g. a risk model's forecast) replaces the window estimate."""
+    vol = np.full(DATA.prices.shape, 0.03)
+    data = DATA.with_fields(volatility=vol, dollar_volume=np.full(DATA.prices.shape, 1e7))
+    kw: dict[str, Any] = dict(
+        lookback=1, episode_length=5, execution="close", action=TargetWeights(1.0)
+    )
+    env = BatchMarketEnv(1, data=data, transaction_cost=SquareRootImpact(0.5), capital=1e6, **kw)
+    env.reset(seed=0, options={"start": 30})
+    trade = np.zeros((1, DATA.n_assets))
+    trade[0, 0] = 0.5
+    out = env.step(trade)
+    want = (
+        0.5 * 0.03 * 0.5 * np.sqrt(0.5 * 1e6 / 1e7)
+    )  # coefficient * vol * |w| * sqrt(participation)
+    assert float(out.info["cost"][0]) == pytest.approx(want)
+    assert float(out.info["return"][0]) == pytest.approx(float(out.info["equity"][0]) - 1.0)

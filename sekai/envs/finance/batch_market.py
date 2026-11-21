@@ -80,7 +80,8 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
     **Termination**: equity wiped out, or a drawdown of `max_drawdown`. **Truncation**:
     after `episode_length` decisions.
 
-    **info** (arrays with a leading `num_envs` axis): `equity`, `turnover`, `cost`,
+    **info** (arrays with a leading `num_envs` axis): `equity`, `return` (the step's net
+    simple return, after `step()`), `turnover`, `cost`,
     `holding_cost`, `financing`, `gross_exposure`, `net_exposure`, `drawdown`,
     `n_assets` (tradable), `weights` (per slot, after the step), `timestamp`, `dt`;
     `variance` and `exposures` with a risk model; `state` (the simulation's latent
@@ -249,7 +250,12 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             else (TargetWeights(max_leverage) if allow_short else LongOnlyScores(max_leverage))
         )
         self.cost_model = as_cost_model(transaction_cost)
-        if lookback < 2 and "volatility" in self.cost_model.requires:
+        needs_window = lookback < 2 and "volatility" in self.cost_model.requires
+        if (
+            needs_window
+            and scenarios is None
+            and not (data is not None and "volatility" in data.fields)
+        ):
             raise ValueError(
                 f"{self.cost_model!r} needs a per-asset volatility estimate, which takes at least "
                 f"2 returns, but lookback={lookback} observes only {lookback}; every trade would "
@@ -325,6 +331,11 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             assert scenarios is not None
             self.scenarios = scenarios
             panel = self._sample(1, seed=0, backend=B, device=device)  # shapes for the spaces
+            if needs_window and "volatility" not in panel.fields:
+                raise ValueError(
+                    f"{self.cost_model!r} needs a per-asset volatility: give the scenarios a "
+                    "'volatility' field, or use lookback >= 2 to estimate it from returns."
+                )
         self.dt = check_number("dt", self.dt, ">0")
         self.model = model
         self._asset_fields, self._market_fields = asset_fields, market_fields
@@ -360,6 +371,8 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         needs = self.cost_model.requires
         if "spread" in needs:
             assets.add("spread")
+        if "volatility" in needs and data is not None and "volatility" in data.fields:
+            assets.add("volatility")
         if "volume" in needs:
             has_dollar = data is not None and "dollar_volume" in data.fields
             assets |= {"dollar_volume"} if has_dollar or data is None else {"volume", close}
@@ -421,6 +434,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 for k, v in panel.fields.items()
                 if k in asset_fields
                 or (k in ("split", "dividend") and self.execution in _FILL_FIELD)
+                or (k == "volatility" and "volatility" in self.cost_model.requires)
             },
             exogenous={k: v[:, :W] for k, v in panel.exogenous.items()},
             timestamps=None if panel.timestamps is None else np.asarray(panel.timestamps)[..., :W],
@@ -881,6 +895,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             financing=B.where(frozen, 0.0, s.financing),
             exec_weights=held,
         )
+        info["return"] = B.where(frozen, 0.0, growth - 1.0)
         if variance is not None:
             info["variance"] = variance
             if exposures is not None:
@@ -969,10 +984,12 @@ def cost_context(
     """The inputs of cost and holding models, per slot, that `needs` names.
 
     Orders fill at `rows` (whose volume, spread and borrow fees apply); the volatility is
-    estimated over the `lookback` returns observed at the `decision` rows (the standard
-    deviation of log returns, NaN with fewer than two). `volume` is the traded value: the
-    `dollar_volume` field, else `volume` shares times the close. Shared by `BatchMarketEnv`
-    and `LiveMarketEnv`, so live and simulated trading price costs the same way.
+    the data's `volatility` field at those rows if there is one (a per-step forecast, such
+    as a risk model's), else it is estimated over the `lookback` returns observed at the
+    `decision` rows (the standard deviation of log returns, NaN with fewer than two).
+    `volume` is the traded value: the `dollar_volume` field, else `volume` shares times the
+    close. Shared by `BatchMarketEnv` and `LiveMarketEnv`, so live and simulated trading
+    price costs the same way.
     """
     B = backend
     occupied = slots >= 0
@@ -984,7 +1001,9 @@ def cost_context(
     ctx: dict[str, Any] = {"assets": cols}
     if "equity" in needs:
         ctx["equity"] = equity
-    if "volatility" in needs:
+    if "volatility" in needs and "volatility" in panel.fields:  # e.g. a risk model's forecast
+        ctx["volatility"] = at(panel.fields["volatility"])
+    elif "volatility" in needs:
         view = MarketView(
             backend=B,
             panel=panel,
