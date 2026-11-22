@@ -87,7 +87,7 @@ class BlackjackEnv(Env[Observation, np.intp]):
         bet_levels: Bet sizes in units of `rules.min_bet`, one action each.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {"name": ENV_ID, "render_fps": 2}
+    metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
 
     def __init__(
         self,

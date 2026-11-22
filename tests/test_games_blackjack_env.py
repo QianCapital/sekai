@@ -289,7 +289,7 @@ def test_action_mask_and_metadata() -> None:
     r = env.step(int(r.info["legal_actions"][0]))
     assert np.array_equal(env.action_mask(), r.info["legal_action_mask"])
     assert np.array_equal(env.legal_actions(), np.flatnonzero(env.action_mask()))
-    assert env.metadata["name"] == "Blackjack-v0" and env.metadata["render_fps"] > 0
+    assert env.metadata["render_fps"] == 2
     assert str(env) == "<Blackjack-v0 6D S17 DAS LS 3:2 bet_levels=(1, 2, 4, 8)>"
     assert not hasattr(env, "players") and not hasattr(env, "sides")
 
