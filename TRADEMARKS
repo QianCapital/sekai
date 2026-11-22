@@ -1,15 +1,17 @@
 Qian Capital trademarks and artwork
 ===================================
 
-sekai's code is licensed under the Apache License, Version 2.0 (see LICENSE), and the
-glyph atlases in sekai/rendering/fonts/ under the SIL Open Font License 1.1 (see
-sekai/rendering/fonts/OFL.txt). Neither licence covers the Qian Capital name and logo.
+sekai's code is licensed under the Apache License, Version 2.0 (see LICENSE); the glyph
+atlases in sekai/rendering/fonts/ and sekai/envs/games/assets/ under the SIL Open Font
+License 1.1 (see the OFL.txt in each); and the chess pieces in sekai/envs/games/assets/,
+by Colin M.L. Burnett, under the 3-clause BSD licence (see LICENSE-chess-pieces.txt
+there). None of these licences covers the Qian Capital name and logo.
 
 "Qian Capital", the Q mark and the QIAN CAPITAL wordmark are trademarks of Qian
 Capital, and the logo artwork (in sekai/rendering/assets/ and docs/assets/brand/) is
-Qian Capital's. They are not licensed under the Apache License 2.0 or the SIL Open Font
-License: section 6 of the Apache License grants no permission to use them beyond
-describing where sekai comes from.
+Qian Capital's. They are not licensed under the Apache License 2.0, the SIL Open Font
+License or the BSD licence: section 6 of the Apache License grants no permission to use
+them beyond describing where sekai comes from.
 
 Qian Capital permits you to:
 
