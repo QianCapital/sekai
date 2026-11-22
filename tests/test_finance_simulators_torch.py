@@ -3,12 +3,14 @@
 The same model as `simulate` (distributions, parameters, shapes, mask and state), not the
 same numbers: checked by shapes, and by statistics of large samples against the NumPy
 simulation and the models' defining properties, with tolerances of several standard errors
-(so they hold for any seed). Then the paths' way into environments: `MarketPanel` and
-`ModelScenarios(device=...)`.
+(so they hold for any seed). Then the paths' way into environments: `MarketPanel`,
+`ModelScenarios(device=...)` and `BatchMarketEnv(simulate_on_device=True)`, whose resets copy
+nothing to the device (counted as in test_device_syncs.py).
 """
 
 from __future__ import annotations
 
+import copy
 import gc
 import pickle
 import subprocess
@@ -20,8 +22,10 @@ from typing import Any
 import numpy as np
 import pytest
 
+import sekai
+from sekai.envs.finance import BatchMarketEnv
 from sekai.envs.finance.market_env import default_market
-from sekai.finance import MarketPanel, ModelScenarios
+from sekai.finance import MarketData, MarketPanel, ModelScenarios
 from sekai.finance.simulators import (
     GARCH,
     GBM,
@@ -670,6 +674,176 @@ class TestModelScenarios:
 
 
 # --------------------------------------------------------------------------------------------
+# BatchMarketEnv(simulate_on_device=True)
+# --------------------------------------------------------------------------------------------
+
+
+def make_env(n: int = 5, **kwargs: Any) -> BatchMarketEnv:
+    kw: dict[str, Any] = dict(
+        model=default_market(),
+        simulate_on_device=True,
+        backend="torch",
+        lookback=5,
+        episode_length=12,
+        max_drawdown=0.03,  # (lanes stop at different times: partial resets)
+    )
+    kw.update(kwargs)
+    return BatchMarketEnv(n, **kw)
+
+
+def actions(env: BatchMarketEnv, k: int, seed: int = 0) -> list[Any]:
+    g = torch.Generator().manual_seed(seed)
+    shape = (env.num_envs, *env.action_space.shape)  # type: ignore[misc]
+    return [torch.rand(shape, generator=g, dtype=env._like.dtype) for _ in range(k)]
+
+
+def same(a: Any, b: Any) -> None:
+    if isinstance(a, dict):
+        assert a.keys() == b.keys()
+        for key in a:
+            same(a[key], b[key])
+    elif a is None or b is None:
+        assert a is b
+    elif isinstance(a, torch.Tensor):
+        torch.testing.assert_close(a, b, rtol=0, atol=0, equal_nan=True)
+    else:
+        np.testing.assert_array_equal(a, b)
+
+
+def rollout(
+    env: BatchMarketEnv, steps: list[Any], reset: int | None = None
+) -> list[dict[str, Any]]:
+    out = [] if reset is None else [vars(env.reset(seed=reset))]
+    for i, a in enumerate(steps):
+        if not env.autoreset and i in (7, 15):
+            done = np.flatnonzero(env.backend.to_numpy(env.frozen))
+            if len(done):
+                out.append(vars(env.reset(indices=done[::2])))  # some of them
+        out.append(vars(env.step(a)))
+    return out
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("autoreset", [True, False])
+def test_an_env_simulating_on_the_device_steps_and_resets(autoreset: bool, dtype: str) -> None:
+    float_dtype = getattr(torch, dtype)
+    env = make_env(autoreset=autoreset, dtype=float_dtype, privileged_state=True)
+    assert env.scenarios is not None and env.scenarios.device == torch.device("cpu")
+    steps = actions(env, 30)
+    out = rollout(env, steps, reset=1)
+    resets = 0
+    for result in out:
+        obs = result["observations"]
+        for value in (obs["assets"]["values"], obs["portfolio"], obs["account"]):
+            assert value.device.type == "cpu" and value.dtype == float_dtype
+        assert bool(torch.isfinite(obs["assets"]["values"]).all())
+        lanes = result.get("reset_indices", result.get("indices"))
+        resets += lanes is not None and 0 < len(lanes) < env.num_envs
+    assert resets >= 2  # some lanes at a time: episodes of 12 steps, and drawdown stops
+    assert env.panel.returns.dtype == float_dtype and env.panel.returns.device.type == "cpu"
+    assert set(env.latent_state) == {"regime"}
+    again = rollout(
+        make_env(autoreset=autoreset, dtype=float_dtype, privileged_state=True), steps, 1
+    )
+    for x, y in zip(out, again, strict=True):  # a seed reproduces the rollout
+        same(x, y)
+    other = make_env(autoreset=autoreset, dtype=float_dtype).reset(seed=2).observations
+    assert not torch.equal(other["assets"]["values"], out[0]["observations"]["assets"]["values"])
+
+
+def test_a_reset_on_the_device_copies_nothing_to_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits = Waits(monkeypatch)
+    for autoreset in (True, False):
+        env, on_host = (
+            make_env(autoreset=autoreset),
+            make_env(autoreset=autoreset, simulate_on_device=False),
+        )
+        env._defer = on_host._defer = True  # run the device path on the CPU
+        with waits:
+            env.reset(seed=0)
+        assert dict(waits.count) == {}
+        with waits:  # the paths simulated on the host are copied over
+            on_host.reset(seed=0)
+        assert waits.count["upload"] > 0
+        if not autoreset:
+            for a in actions(env, 13):
+                env.step(a)
+            with waits:  # the lanes' indices, given on the host
+                env.reset(indices=np.array([1, 3]))
+            assert dict(waits.count) == {"upload": 1}
+            continue
+        resets = 0
+        for a in actions(env, 30):
+            with waits:
+                result = env.step(a)
+            resets += result.reset_indices is not None
+            # the step's read, and the indices of the lanes autoreset (as on the host)
+            assert dict(waits.count) == (
+                {"read": 1, "upload": 1} if result.reset_indices is not None else {"read": 1}
+            )
+        assert resets > 0
+
+
+def test_flag_validation() -> None:
+    data = MarketData(np.exp(np.cumsum(np.random.default_rng(0).normal(0, 0.01, (60, 3)), 0)))
+    with pytest.raises(ValueError, match="does not apply to data="):
+        BatchMarketEnv(
+            2, data, simulate_on_device=True, backend="torch", lookback=5, episode_length=10
+        )
+    with pytest.raises(ValueError, match="does not apply to scenarios="):
+        BatchMarketEnv(
+            2,
+            scenarios=ModelScenarios(GBM(), 40),
+            simulate_on_device=True,
+            backend="torch",
+            lookback=5,
+            episode_length=10,
+        )
+    with pytest.raises(ValueError, match="needs backend='torch'"):
+        BatchMarketEnv(2, model=GBM(), simulate_on_device=True)
+    with pytest.raises(NotImplementedError, match="ConstantModel"):
+        BatchMarketEnv(2, model=ConstantModel(), simulate_on_device=True, backend="torch")
+    default = BatchMarketEnv(
+        2, simulate_on_device=True, backend="torch", lookback=5, episode_length=10
+    )
+    assert default.scenarios is not None and default.scenarios.device == torch.device("cpu")
+    assert BatchMarketEnv(2, backend="torch").scenarios.device is None  # type: ignore[union-attr]
+
+
+def test_pickles_copies_and_snapshots_continue_identically() -> None:
+    env = make_env(autoreset=True)
+    env.reset(seed=3)
+    steps = actions(env, 40, seed=1)
+    for a in steps[:5]:
+        env.step(a)
+    clone, twin, snapshot = pickle.loads(pickle.dumps(env)), copy.deepcopy(env), env.snapshot()
+    expected = rollout(env, steps[5:])  # autoresets included, which simulate on the device
+    for other in (clone, twin):
+        for x, y in zip(rollout(other, steps[5:]), expected, strict=True):
+            same(x, y)
+    env.restore(snapshot)
+    for x, y in zip(rollout(env, steps[5:]), expected, strict=True):
+        same(x, y)
+
+
+def test_make_and_make_vec_pass_the_flag_on() -> None:
+    kw: dict[str, Any] = dict(
+        backend="torch", simulate_on_device=True, lookback=5, episode_length=10
+    )
+    env = sekai.make("Market-v1", **kw)
+    vec = sekai.make_vec("Market-v1", num_envs=3, **kw)
+    for batch in (env.unwrapped.batch_env, vec.batch_env):  # type: ignore[attr-defined]
+        assert batch.scenarios.device == torch.device("cpu")
+    env.reset(seed=0)
+    env.step(env.action_space.sample())
+    assert vec.reset(seed=0).observations["portfolio"].shape == (3, 11)
+    vec.step(vec.batch_action_space.sample())
+    vec.close()
+    with pytest.raises(ValueError, match="needs backend='torch'"):
+        sekai.make_vec("Market-v1", num_envs=2, simulate_on_device=True)
+
+
+# --------------------------------------------------------------------------------------------
 # On a GPU
 # --------------------------------------------------------------------------------------------
 
@@ -692,3 +866,16 @@ def test_simulates_on_a_gpu(device: str, name: str) -> None:
             model.simulate_torch(generator, 60, n_paths=16, dtype=torch.float32)
         finally:
             torch.cuda.set_sync_debug_mode("default")
+
+
+@pytest.mark.parametrize("device", GPUS)
+def test_an_env_simulating_on_a_gpu(device: str) -> None:
+    env = make_env(device=device, dtype=torch.float32)
+    result = env.reset(seed=0)
+    assert result.observations["portfolio"].device.type == device
+    assert env.panel.returns.device.type == device
+    for a in actions(env, 15):
+        result = env.step(a.to(device))
+    assert result.rewards.device.type == device and bool(torch.isfinite(result.rewards).all())
+    scenarios = ModelScenarios(default_market(), 20, device=device)
+    assert scenarios.sample(4, seed=0).returns.device.type == device

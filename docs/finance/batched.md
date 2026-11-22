@@ -83,7 +83,10 @@ you have access to.
 **A market model.** `model=` takes any `sekai.finance.MarketModel` (see
 [Market simulators](simulators.md)); each episode is a freshly simulated path, and the
 model's state series (such as the regime) can be observed with `exogenous=` or passed to
-the policy as privileged information with `privileged_state=True`.
+the policy as privileged information with `privileged_state=True`. The paths are simulated
+on the host with NumPy; with the torch backend, `simulate_on_device=True` simulates them
+on the env's device instead, so a reset copies nothing to it
+([Simulating on a GPU](simulators.md#simulating-on-a-gpu)).
 
 **Your generator.** `scenarios=` takes anything with
 `sample(n_paths, *, seed) -> MarketPanel`: a generative model of markets (a GAN, a

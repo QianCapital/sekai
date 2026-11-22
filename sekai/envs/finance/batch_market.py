@@ -102,6 +102,10 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             `lookback + episode_length + 1` times).
         model: A `MarketModel` to simulate (default, when no data or scenarios are
             given: `Market-v0`'s regime-switching market with listings).
+        simulate_on_device: Simulate the model's paths with torch on `device`
+            (`MarketModel.simulate_torch`) instead of with NumPy on the host, so that a
+            reset copies no data to the device (`backend="torch"` only; a seed then gives
+            other paths).
         max_assets: Slots per lane (default: every asset).
         features: Per-asset data fields to observe (default observation builder).
         exogenous: Market-wide series to observe (default observation builder); with
@@ -165,6 +169,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         *,
         scenarios: ScenarioGenerator | None = None,
         model: MarketModel | None = None,
+        simulate_on_device: bool = False,
         max_assets: int | None = None,
         features: Sequence[str] = (),
         exogenous: Sequence[str] = (),
@@ -241,6 +246,16 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         ):
             raise ValueError("maintenance_margin cannot exceed initial_margin.")
         B = get_backend(backend)
+        if simulate_on_device and model is None:
+            raise ValueError(
+                "simulate_on_device=True simulates a market model (model=, or the default "
+                f"market) on the device; it does not apply to {sources[0]}=."
+            )
+        if simulate_on_device and B.name != "torch":
+            raise ValueError(
+                "simulate_on_device=True needs backend='torch' (the NumPy backend simulates "
+                "on the host)."
+            )
         self._lookback = int(lookback)
         self._episode_length = int(episode_length)
         self._window = self._lookback + self._episode_length + 1
@@ -333,7 +348,11 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             self.dt = dt if dt is not None else (1.0 / ppy if ppy else 1 / 252)
         else:
             if model is not None:
-                scenarios = ModelScenarios(model, self._window - 1)
+                if simulate_on_device:  # on the env's device (BatchEnv's default: the CPU)
+                    where = "cpu" if device is None else device
+                    scenarios = ModelScenarios(model, self._window - 1, device=where, dtype=dtype)
+                else:
+                    scenarios = ModelScenarios(model, self._window - 1)
                 self.dt = dt if dt is not None else model.dt
             else:
                 self.dt = dt if dt is not None else 1 / 252
