@@ -16,9 +16,9 @@ licensed under the Apache License 2.0 that covers sekai's code (nor under the SI
 Font License of its fonts). You may show them as sekai draws them in its own dashboards
 (the finance renderers), including in figures and recordings of those dashboards, and
 redistribute them unmodified as part of sekai. Anything else, such as branding a
-dashboard or layout of your own (with `branding=True` or these functions), needs written
-permission from Qian Capital: see the TRADEMARKS file that comes with sekai. (`draw_rule`
-and `gold_metal` draw only a colour gradient.)
+dashboard or layout of your own (with `branding=True`, `draw_mark` or `draw_wordmark`),
+needs written permission from Qian Capital: see the TRADEMARKS file that comes with sekai.
+(`draw_rule` and `gold_metal` draw only a colour gradient, which is not a mark.)
 """
 
 from __future__ import annotations

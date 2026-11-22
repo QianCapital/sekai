@@ -58,9 +58,13 @@ Every bar is checked as it arrives, by `LiveMarketEnv` and by `PaperBroker`
 NaN (the asset cannot be traded now) or finite and positive; with `corporate_actions`, a
 `split` is NaN or positive and a `dividend` NaN or non-negative. The fields and market series
 the environment reads must be present, without infinities, and of the shapes its
-observation space was built for (below). Anything else raises `ValueError`, naming the
-asset (or field) and the bar's timestamp; after one in `step()`, the order is out but the
-account has no mark, so call `reset()` before stepping on.
+observation space was built for (below), and so must the inputs the broker's cost model
+needs and has no fallback for (a `spread` for `SpreadCost()`, say; an input with a fallback
+may be missing, and reaches the model as NaN). Anything else raises `ValueError`, naming the
+asset (or field) and the bar's timestamp, and the bar is not used; after one in `step()`,
+the order is out but the account has no mark, so call `reset()` before stepping on. The same
+goes for a `mark()` that raises (a broker outage): the episode ends, so no order goes out on
+an account the environment can no longer see, and `reset()` attaches to it again.
 
 ### Warm-up bars
 
@@ -97,8 +101,15 @@ carry over from one episode to the next: a later reset continues from the newest
 waiting for new ones, so the account is never left unwatched between episodes. While
 `reset()` waits for bars to trade on, an account that already holds positions (a live account
 on a feed without history, say) holds them bar by bar: an order for its current weights, then
-a mark, so the broker, and a `GuardedBroker`, mark and check every bar. Once the feed has
-ended (`next_bar()` returned `None`), `reset()` raises `RuntimeError`.
+a mark, so the broker, and a `GuardedBroker`, mark and check every bar. An episode starts
+with the account's book as the pending order, so its first step (with `next_close`) keeps
+what is held rather than selling it. Once the feed has ended (`next_bar()` returned
+`None`), `reset()` raises `RuntimeError`.
+
+A position whose asset can't be traded at a bar (no price: a halt, on a live account) is held
+as it is, and stays in the pending order; if the book then exceeds the action's gross cap,
+the rest of it is scaled down to fit. A halt therefore never forces a sale and a buy-back.
+(A `PaperBroker` replays history, where a missing price means the asset has delisted.)
 
 ## A broker adapter
 
@@ -167,7 +178,7 @@ broker, whatever the policy asks for, and records every intervention in `events`
 | `allow_short=False` | no negative weights |
 
 The book that reaches the broker always satisfies `max_position`, `max_gross`, `max_net` and
-`allow_short`, even when price moves have pushed the current book over a cap: the trades that
+`allow_short` (exactly, rounding included), even when price moves have pushed the current book over a cap: the trades that
 only bring it back within the caps are made whatever the turnover budget, and the budget
 limits the rest of the move. A target weight that is not finite (a NaN from a policy bug)
 means "do not trade that asset": it keeps its current weight (an event `"non_finite_target"`),
@@ -177,7 +188,8 @@ executed (only a position that cannot be traded can break one, on its own).
 
 **The kill switch** trips when the account's drawdown reaches `max_drawdown`, and it fails
 closed: it also trips when the broker reports an account that is not finite (equity, value or
-weights), with or without `max_drawdown`. The next order sells everything, and the account
+weights) or has no value left, with or without `max_drawdown`, and on an order after a
+`mark()` that raised, until a mark or `reset()` reports the account again. The next order sells everything, and the account
 stays flat. It latches: a `reset()` does not clear it, only `rearm()` does, an operator's
 decision (recorded as a `"rearm"` event), after which the drawdown is measured from the
 account's value at that moment.

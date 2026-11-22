@@ -196,19 +196,23 @@ All notable changes to sekai are documented here. The format follows
   the observation space; it never decides on a warm-up bar (`Bar.warmup`, which
   `ReplayFeed` sets for a split's history rows); `reset()` attaches to the account first,
   keeps the bar window between episodes and holds existing positions bar by bar, so live
-  positions are always marked and checked.
+  positions are always marked and checked, and an episode starts with the held book as its
+  pending order. A position halted at a bar is held, a bar without a cost input the model
+  needs is refused, and a `mark()` that raises ends the episode.
 - `sekai.finance.live`: `Bar` (`validate`); the `DataFeed` protocol and `ReplayFeed` (bars
   from a `MarketData` you own); the `Broker` protocol (`reset`, `execute(weights, bar,
   context)`, `mark(bar)`, an optional `fresh_account`), `AccountState` and
   `ExecutionReport`; `PaperBroker`, a simulated account with sekai's accounting, cost and
   holding-cost models (assets without a price aren't traded); `orders_for`, share
-  quantities for target weights in exact whole lots, refusing invalid inputs. sekai defines
+  quantities for target weights in exact whole lots, refusing invalid inputs (an account
+  value of 0 or less included). sekai defines
   the interfaces and connects to no market or data vendor.
 - `RiskLimits` and `GuardedBroker`: hard limits between any policy and any broker (caps on
   each position, gross and net exposure and turnover, no shorts, and a drawdown kill switch
   that liquidates and keeps the account flat), with every intervention in `events`. The
-  caps always hold (risk-reducing trades go beyond the turnover budget); a non-finite
-  target keeps the current weight; a non-finite account report trips the kill switch. The
+  caps always hold, exactly (risk-reducing trades go beyond the turnover budget); a
+  non-finite target keeps the current weight; a non-finite account report, an account with
+  no value left, or an order after a failed mark trips the kill switch. The
   kill switch stays tripped across resets until `rearm()`, and measures the drawdown on
   the account's value, carried over resets of a persistent account (`killed`, `peak`,
   `drawdown`).

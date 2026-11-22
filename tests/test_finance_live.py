@@ -845,3 +845,160 @@ def test_guarded_broker_clips_targets() -> None:
     out = env.step(np.where(env.action_mask() > 0, 1.0, 0.0).astype(np.float32))
     assert out.info["gross_exposure"] <= 0.5 * 1.1
     assert any(e.kind == "max_gross" for e in broker.events)
+
+
+# ---------------------------------------------------------------------------
+# A live-like account: positions persist over resets and trading halts
+# ---------------------------------------------------------------------------
+
+
+class LiveLikeBroker:
+    """Positions survive resets and halts (a NaN price: the asset can't trade, but is
+    still held), as at a real broker; prices are flat, so the account never moves."""
+
+    fresh_account = False
+
+    def __init__(self, fail_mark_at: Any = None) -> None:
+        self.weights: np.ndarray | None = None
+        self.orders: list[tuple[Any, np.ndarray]] = []
+        self.fail_mark_at = fail_mark_at
+
+    def reset(self, assets: tuple[Any, ...]) -> AccountState:
+        if self.weights is None:
+            self.weights = np.zeros(len(assets))
+        return AccountState(1.0, self.weights.copy(), 1e6)
+
+    def execute(self, weights: Any, bar: Bar, context: Mapping[str, Any]) -> ExecutionReport:
+        assert self.weights is not None
+        new = np.where(np.isfinite(bar.prices), np.asarray(weights, np.float64), self.weights)
+        trades = new - self.weights
+        if np.abs(trades).max() > 1e-12:
+            self.orders.append((bar.timestamp, trades))
+        self.weights = new
+        return ExecutionReport(weights=new.copy(), turnover=float(np.abs(trades).sum()), cost=0.0)
+
+    def mark(self, bar: Bar) -> AccountState:
+        if self.fail_mark_at is not None and bar.timestamp == self.fail_mark_at:
+            raise ConnectionError("the broker didn't answer")
+        assert self.weights is not None
+        return AccountState(1.0, self.weights.copy(), 1e6)
+
+
+@pytest.mark.parametrize("execution", ["next_close", "close"])
+def test_resets_never_trade_a_live_account(execution: str) -> None:
+    """The first step of an episode keeps the book a persistent account already holds."""
+    broker = LiveLikeBroker()
+    env = LiveMarketEnv(
+        ListFeed([[100.0, 50.0]] * 40),
+        broker,
+        lookback=2,
+        episode_length=3,
+        action=TargetWeights(1.0),
+        execution=execution,
+    )
+    for episode in range(4):
+        env.reset()
+        if episode:
+            broker.orders.clear()
+        done = False
+        while not done:
+            done = env.step(np.array([0.5, 0.5], np.float32)).done
+        if episode:
+            assert broker.orders == []  # the book is already what the policy wants
+
+
+@pytest.mark.parametrize("execution", ["next_close", "close"])
+@pytest.mark.parametrize("action", ["target_weights", "long_only_scores"])
+def test_a_halt_on_a_live_account_trades_nothing(execution: str, action: str) -> None:
+    prices = [[100.0, 50.0]] * 20
+    prices[8] = [np.nan, 50.0]  # "a" halted for a bar
+    broker = LiveLikeBroker()
+    kwargs: dict[str, Any] = {"action": TargetWeights(1.0)} if action == "target_weights" else {}
+    env = LiveMarketEnv(ListFeed(prices), broker, lookback=2, execution=execution, **kwargs)
+    env.reset()
+    act = np.array([0.5, 0.5] if action == "target_weights" else [1.0, 1.0, 0.0], np.float32)
+    for _ in range(3):  # the book is built
+        out = env.step(act)
+    broker.orders.clear()
+    for _ in range(10):  # through the halt and after it
+        out = env.step(act)
+        assert np.abs(out.info["weights"]).sum() <= 1.0 + 1e-12  # the gross cap holds
+    assert broker.orders == []
+    np.testing.assert_allclose(out.info["weights"], [0.5, 0.5])
+
+
+def test_a_failed_mark_stops_trading_until_reset() -> None:
+    broker = LiveLikeBroker(fail_mark_at=5)
+    env = LiveMarketEnv(ListFeed([[100.0, 50.0]] * 20), broker, lookback=2)
+    env.reset()
+    with pytest.raises(ConnectionError):
+        for _ in range(10):
+            env.step(np.array([1.0, 1.0, 0.0], np.float32))
+    sent = len(broker.orders)
+    with pytest.raises(sekai.ResetRequired):  # no order goes out on a stale account
+        env.step(np.array([1.0, 1.0, 0.0], np.float32))
+    assert len(broker.orders) == sent
+    broker.fail_mark_at = None
+    env.reset()  # attaches to the account again
+    env.step(np.array([1.0, 1.0, 0.0], np.float32))
+
+
+def test_a_guarded_broker_fails_closed_after_a_failed_mark() -> None:
+    guard = GuardedBroker(LiveLikeBroker(fail_mark_at=1), RiskLimits())
+    guard.reset(("a", "b"))
+    bar0, bar1 = Bar(0, np.array([100.0, 50.0])), Bar(1, np.array([100.0, 50.0]))
+    guard.execute(np.array([0.5, 0.5]), bar0, {})
+    with pytest.raises(ConnectionError):
+        guard.mark(bar1)
+    guard.execute(np.array([0.5, 0.5]), bar1, {})  # on an account it can't see
+    assert guard.killed
+    calm = GuardedBroker(LiveLikeBroker(fail_mark_at=1), RiskLimits())
+    calm.reset(("a", "b"))
+    calm.execute(np.array([0.5, 0.5]), bar0, {})
+    with pytest.raises(ConnectionError):
+        calm.mark(bar1)
+    calm.reset(("a", "b"))  # a fresh report: the account is known again
+    calm.execute(np.array([0.5, 0.5]), bar1, {})
+    assert not calm.killed
+
+
+def test_a_bar_without_a_needed_cost_input_is_refused_not_kept() -> None:
+    spread = {"spread": np.full(2, 1e-3)}
+    fields = [dict(spread) for _ in range(20)]
+    fields[6] = {}  # this bar lacks the spread SpreadCost needs
+    broker = PaperBroker(transaction_cost=SpreadCost())
+    env = LiveMarketEnv(ListFeed([[100.0, 50.0]] * 20, fields=fields), broker, lookback=2)
+    env.reset()
+    with pytest.raises(ValueError, match="'spread' field"):
+        for _ in range(10):
+            env.step(np.array([1.0, 1.0, 0.0], np.float32))
+    env.reset()
+    for _ in range(5):  # the bar was not kept: the env goes on past it
+        env.step(np.array([1.0, 1.0, 0.0], np.float32))
+    # With a fallback, the input may be missing.
+    lenient = PaperBroker(transaction_cost=SpreadCost(fallback_spread=1e-3))
+    env = LiveMarketEnv(ListFeed([[100.0, 50.0]] * 20, fields=fields), lenient, lookback=2)
+    env.reset()
+    for _ in range(10):
+        env.step(np.array([1.0, 1.0, 0.0], np.float32))
+
+
+def test_caps_hold_exactly_and_an_empty_account_trips_the_switch() -> None:
+    limits = RiskLimits(max_gross=1.0, max_net=0.5)
+    rng = np.random.default_rng(3)
+    for _ in range(5000):
+        w, _ = limits.apply(rng.normal(0, 1, 12), np.zeros(12))
+        assert np.abs(w).sum() <= 1.0 and abs(w.sum()) <= 0.5
+    for value in (0.0, -1e5):
+        with pytest.raises(ValueError, match="account_value"):
+            orders_for(np.array([0.5]), value, np.array([10.0]), np.array([0.0]))
+
+    class Wiped(LiveLikeBroker):
+        def mark(self, bar: Bar) -> AccountState:
+            return AccountState(0.0, np.zeros(2), 0.0)
+
+    guard = GuardedBroker(Wiped(), RiskLimits())  # no max_drawdown set
+    guard.reset(("a", "b"))
+    guard.execute(np.array([0.5, 0.5]), Bar(0, np.array([100.0, 50.0])), {})
+    guard.mark(Bar(1, np.array([100.0, 50.0])))
+    assert guard.killed

@@ -4,7 +4,8 @@ variable font pinned at weights 400 and 600, digits mapped to the font's tabular
 figures) and hedvig-letters-serif.npz of Hedvig Letters Serif (the variable font pinned
 at its only optical size, 24). Each is a Modified Version of its Font Software and, like
 the fonts, is licensed under the SIL Open Font License, Version 1.1, reproduced below.
-The rest of sekai is licensed under the Apache License, Version 2.0.
+The rest of sekai is licensed under the Apache License, Version 2.0, except the Qian
+Capital name and logo, which are not licensed under either (see TRADEMARKS).
 
 BDO Grotesk
 Copyright (c) 2017 by Lokal Container (https://lokalcontainer.org)

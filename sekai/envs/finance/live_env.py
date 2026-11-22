@@ -143,6 +143,7 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
         self._episode_length = episode_length
         self.execution = execution
         self.builder = observation or MarketObservation(tuple(features), tuple(exogenous))
+        self.max_leverage = float(max_leverage)
         self.action_map = action or (
             TargetWeights(max_leverage) if allow_short else LongOnlyScores(max_leverage)
         )
@@ -166,6 +167,25 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
             )
         )
         self._market_fields = tuple(self.builder.market_fields)
+        # The bar fields the broker's cost and holding models can't do without (inputs
+        # with a fallback may be missing; volatility is estimated from the window if so).
+        models = [getattr(broker, "cost_model", None), getattr(broker, "holding_cost", None)]
+        needed: set[str] = set()
+        optional: set[str] = set()
+        for model in models:
+            if model is not None:
+                reads, falls = (
+                    set(getattr(model, "requires", ())),
+                    set(getattr(model, "fallbacks", ())),
+                )
+                needed |= reads - falls
+                optional |= reads & falls
+        from_bars = ("volume", "spread", "borrow_rate")
+        self._needed_cost_fields = tuple(_COST_FIELDS[n] for n in sorted(needed) if n in from_bars)
+        # Inputs with a fallback are always in the panel, NaN where a bar lacks them.
+        self._optional_cost_fields = tuple(
+            _COST_FIELDS[n][0] for n in sorted(optional - needed) if n in from_bars
+        )
         self.observation_space = self.builder.space(_SpaceInfo(self))
         self.action_space = self.action_map.space(self.n_slots)
         self._bars: deque[Bar] = deque(maxlen=self._lookback + 1)
@@ -229,7 +249,7 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
     def _panel(self) -> MarketPanel:
         bars = list(self._bars)
         prices = np.stack([b.prices for b in bars]).astype(np.float64)
-        names = set(self._asset_fields)
+        names = set(self._asset_fields) | set(self._optional_cost_fields)
         for keys in _COST_FIELDS.values():
             names |= {k for k in keys if k in bars[-1].fields}
 
@@ -322,6 +342,12 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
                 f"{where} is a warm-up bar after bars to trade on: warm-up bars (history for "
                 "the lookback window) must come before the first bar to trade on."
             )
+        for options in self._needed_cost_fields:
+            if not any(k in bar.fields for k in options):
+                raise ValueError(
+                    f"{where} has no {' or '.join(map(repr, options))} field, which the "
+                    "broker's cost model needs and has no fallback for; the bar is not used."
+                )
         n = self.n_slots
         present = [k for keys in _COST_FIELDS.values() for k in keys if k in bar.fields]
         for name in dict.fromkeys((*self._asset_fields, *present)):
@@ -384,6 +410,9 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
             if self._bars and not self._bars[-1].warmup and np.any(self._weights != 0):
                 self._hold(bar)
             self._bars.append(bar)
+        # Nothing is pending but to keep what is held (a new paper account holds nothing): the
+        # first next-close step must not sell a live account's book.
+        self._pending = self._weights.copy()
         self._peak = self._equity
         self.reward_fn.reset()
         self._t, self._started, self._over = 0, True, False
@@ -401,6 +430,14 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
         panel = self._panel()
         self.broker.execute(self._weights.copy(), self._bars[-1], self._context(panel))
         self._sync(self.broker.mark(nxt))
+
+    def _gross_cap(self) -> float:
+        """The gross exposure the action map allows (the env's `max_leverage` otherwise)."""
+        m = self.action_map
+        cap = getattr(m, "max_leverage", None)
+        if cap is None and getattr(m, "constraints", None) is not None:
+            cap = m.constraints.max_gross
+        return float(self.max_leverage if cap is None else cap)
 
     def _sync(self, state: AccountState) -> None:
         self._equity = float(state.equity)
@@ -433,7 +470,24 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
             or None,
         )
         target = np.asarray(self.action_map(a[None], ctx))[0]
-        held = target if self.execution == "close" else np.where(tradable, self._pending, 0.0)
+        # Positions that can't trade now (no price: a halt on a live account) are kept as
+        # they are; if the book then exceeds the action's gross cap, the rest is scaled
+        # down to fit beside them. (With a PaperBroker such a position was delisted
+        # already, so this is idle.)
+        fixed = ~tradable & (self._weights != 0)
+        if fixed.any():
+            target = np.where(fixed, self._weights, target)
+            cap = self._gross_cap()
+            held_gross = float(np.abs(self._weights[fixed]).sum())
+            free_gross = float(np.abs(target[~fixed]).sum())
+            if held_gross + free_gross > cap and free_gross > 0:
+                scale = max(cap - held_gross, 0.0) / free_gross
+                target = np.where(fixed, target, target * scale)
+        held = (
+            target
+            if self.execution == "close"
+            else np.where(tradable, self._pending, self._weights)
+        )
         report = self.broker.execute(held, bar, self._context(panel))
         if self.execution == "next_close":
             self._pending = target
@@ -448,9 +502,13 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
             info = self._info(panel, turnover=report.turnover, cost=report.cost, financing=0.0)
             info["feed_ended"] = True
             return StepResult(self._observe(panel), 0.0, False, True, info)
-        state = self.broker.mark(nxt)
-        self._sync(state)
         self._bars.append(nxt)
+        try:
+            state = self.broker.mark(nxt)
+        except Exception:
+            self._over = True  # the account's state is unknown: reset() attaches to it again
+            raise
+        self._sync(state)
         self._peak = max(self._peak, self._equity)
         growth = self._equity / previous if previous > 0 else 0.0
         outcome = StepOutcome.from_growth(

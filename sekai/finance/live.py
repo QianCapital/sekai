@@ -458,8 +458,9 @@ def orders_for(
 
     Raises:
         ValueError: If the arrays differ in shape, `lot_size` or `account_value` is
-            invalid, a weight or position is not finite, or an asset that needs an order
-            has a price that is neither NaN nor finite and positive.
+            invalid (not finite and > 0), a weight or position is not finite, or an
+            asset that needs an order has a price that is neither NaN nor finite and
+            positive.
     """
     w = np.asarray(weights, dtype=np.float64)
     p = np.asarray(prices, dtype=np.float64)
@@ -473,6 +474,8 @@ def orders_for(
     if not lot > 0:
         raise ValueError(f"lot_size must be finite and > 0, got {lot_size!r}.")
     value = _finite_float("account_value", account_value)
+    if not value > 0:  # a negative value would turn buys into sells
+        raise ValueError(f"account_value must be > 0, got {account_value!r}.")
     for name, array in (("weight", w), ("position", held)):
         if not np.all(np.isfinite(array)):
             i = int(np.argmax(~np.isfinite(array)))
@@ -512,6 +515,11 @@ def _finite_float(name: str, value: Any) -> float:
 # ---------------------------------------------------------------------------
 # Risk limits
 # ---------------------------------------------------------------------------
+
+
+# A scale applied when a net or gross cap binds is shrunk by this much, so the book stays
+# within the cap after rounding (the sum of a few thousand weights is off by less).
+_MARGIN = 1.0 - 1e-12
 
 
 @dataclass(frozen=True)
@@ -648,14 +656,15 @@ class RiskLimits:
             other = w[~side].sum()
             needed = sign * self.max_net - other
             total = w[side].sum()
-            w[side] = w[side] * (min(max(needed / total, 0.0), 1.0) if total != 0 else 0.0)
+            ratio = min(max(needed / total, 0.0), 1.0) if total != 0 else 0.0
+            w[side] = w[side] * (ratio * _MARGIN)  # within the cap after rounding, too
             hit.append("max_net")
         gross = np.abs(w).sum()
         if self.max_gross is not None and gross > self.max_gross:
             held = np.abs(w[fixed]).sum()
             room = gross - held
             scale = max(self.max_gross - held, 0.0) / room if room > 0 else 0.0
-            w = np.where(free, w * min(scale, 1.0), w)
+            w = np.where(free, w * (min(scale, 1.0) * _MARGIN), w)  # within it after rounding
             hit.append("max_gross")
         return w, hit
 
@@ -752,8 +761,14 @@ class GuardedBroker:
         return self.broker.execute(target, bar, context)
 
     def mark(self, bar: Bar) -> AccountState:
-        state = self.broker.mark(bar)
         self._timestamp = bar.timestamp
+        try:
+            state = self.broker.mark(bar)
+        except Exception:
+            # The account is unknown until a mark or reset succeeds: an order before then
+            # trips the kill switch (fails closed) instead of trading on stale weights.
+            self._weights = np.full(np.shape(self._weights), np.nan)
+            raise
         self._check(state, bar.timestamp)
         return state
 
@@ -786,6 +801,9 @@ class GuardedBroker:
                 timestamp,
                 f"the broker reported a non-finite account (equity {equity!r}, value {value!r})",
             )
+            return
+        if value <= 0:
+            self._trip(timestamp, f"the account has no value left ({value!r})")
             return
         self._value = value
         self._peak = value if self._peak is None else max(self._peak, value)
