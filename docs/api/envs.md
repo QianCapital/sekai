@@ -31,9 +31,9 @@ frame.
 
 ::: sekai.envs.classic_control.AcrobotRenderer
 
-## Finance
+## Financial Markets
 
-See [Finance](../environments/finance.md).
+See [Financial Markets](../environments/finance.md).
 
 ::: sekai.envs.finance.TradingEnv
 
@@ -59,7 +59,7 @@ See [Finance](../environments/finance.md).
 
 ::: sekai.envs.finance.LimitOrderBookMarket
 
-### Finance renderers
+### Financial Markets renderers
 
 Exported from `sekai.envs.finance`. Each is a `sekai.rendering.Dashboard`; `render(env)`
 returns an `(H, W, 3)` `uint8` frame of the episode so far.

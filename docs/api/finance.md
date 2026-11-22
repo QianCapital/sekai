@@ -1,8 +1,8 @@
-# Finance
+# Financial Markets
 
 The `sekai.finance` toolkit. Classes are exported from `sekai.finance`; functions from
 their modules (`sekai.finance.features`, `sekai.finance.metrics`, ...). See the
-[Finance toolkit](../finance/index.md) pages for explanations and examples.
+[Financial Markets toolkit](../finance/index.md) pages for explanations and examples.
 
 ## Market data
 

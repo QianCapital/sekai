@@ -40,7 +40,7 @@ when gymnasium or pygame is missing; install `gymnasium[classic-control]` to run
 | `sekai/vector/` | `SyncVecEnv`, `AsyncVecEnv`, `ProcVecEnv`, vector wrappers |
 | `sekai/registry/` | `register`, `make`, `make_vec`, `EnvSpec` |
 | `sekai/envs/` | Built-in environments (`classic_control/`, `finance/`), their native vector versions and registration |
-| `sekai/finance/` | The finance toolkit: market data, samplers, simulators, features, costs, accounts, rewards, metrics, order book |
+| `sekai/finance/` | The financial markets toolkit: market data, samplers, simulators, features, costs, accounts, rewards, metrics, order book |
 | `sekai/rendering/` | `Renderer` protocol, `Canvas`, `RecordFrames` |
 | `sekai/compat/` | gymnasium interop |
 | `sekai/cli.py` | the `sekai` command |
@@ -70,9 +70,10 @@ async envs stay async through it. Export it from `sekai/wrappers/__init__.py` an
 env's `vector_entry_point`. Test that it matches the single env under `SyncVecEnv` wherever
 the dynamics are deterministic (see `tests/test_envs_finance_market.py`).
 
-**A finance component.** Cost models, reward functions, samplers and market models are small
-classes in `sekai/finance/`; keep them vectorised over a leading batch axis so native vector
-environments can use them, and check any data transform with `features.check_causal`.
+**A financial markets component.** Cost models, reward functions, samplers and market models
+are small classes in `sekai/finance/`; keep them vectorised over a leading batch axis so
+native vector environments can use them, and check any data transform with
+`features.check_causal`.
 
 ## Pull requests
 

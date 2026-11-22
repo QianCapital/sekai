@@ -2,9 +2,10 @@
 
 sekai environments train with any gymnasium-based library through the
 [gymnasium bridge](gymnasium.md#using-sekai-envs-with-gymnasium-libraries). Most need nothing
-more; the finance environments whose observations hold a padded set (`Market-v0`'s assets,
-`LimitOrderBook-v0`'s trades) need one wrapper, and `sekai.nn` gives them a network that
-treats the set as a set. This page goes from the bridge to a trained Stable-Baselines3 policy.
+more; the financial markets environments whose observations hold a padded set (`Market-v0`'s
+assets, `LimitOrderBook-v0`'s trades) need one wrapper, and `sekai.nn` gives them a network
+that treats the set as a set. This page goes from the bridge to a trained Stable-Baselines3
+policy.
 
 ```bash
 pip install "sekai[gymnasium,torch]" stable-baselines3
@@ -181,7 +182,8 @@ print(f"{evaluate(lambda o: equal_weight):+.4f}")  # +0.0115
 
 The two 20k-step runs take under a minute on a laptop CPU and are far from converged: the
 assets' drift is small next to their volatility, and equal weight is the bar a learned
-allocation has to clear (see the [finance baselines](../environments/finance.md)). The script is
+allocation has to clear (see the
+[financial markets baselines](../environments/finance.md)). The script is
 [`examples/integrations/sb3_market.py`](https://github.com/QianCapital/sekai/blob/master/examples/integrations/sb3_market.py).
 
 ### Per-slot outputs in your own policy

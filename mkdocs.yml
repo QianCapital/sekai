@@ -137,7 +137,7 @@ nav:
       - Episode statistics: guide/statistics.md
       - Checking environments: guide/checking.md
       - Command line: guide/cli.md
-  - Finance:
+  - Financial Markets:
       - Overview: finance/index.md
       - Market data and backtesting: finance/data.md
       - Market simulators: finance/simulators.md
@@ -150,7 +150,7 @@ nav:
   - Environments:
       - Catalog: environments/index.md
       - Classic control: environments/classic-control.md
-      - Finance: environments/finance.md
+      - Financial Markets: environments/finance.md
   - API reference:
       - Overview: api/index.md
       - Core: api/core.md
@@ -159,7 +159,7 @@ nav:
       - Vector: api/vector.md
       - Registry: api/registry.md
       - Environments: api/envs.md
-      - Finance: api/finance.md
+      - Financial Markets: api/finance.md
       - Backend: api/backend.md
       - Rendering: api/rendering.md
       - Statistics: api/stats.md

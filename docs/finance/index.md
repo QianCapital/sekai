@@ -1,7 +1,7 @@
-# Finance toolkit
+# Financial Markets toolkit
 
-`sekai.finance` holds the parts the finance environments are built from: market data and
-simulators, causal features, transaction costs, account rules, reward functions,
+`sekai.finance` holds the parts the financial markets environments are built from: market
+data and simulators, causal features, transaction costs, account rules, reward functions,
 performance metrics and an order book. Use them to configure the
 [built-in environments](../environments/finance.md) (which accept most of them as
 arguments) or to assemble your own.
@@ -126,7 +126,7 @@ environment built the same way from `train`.
 | [Costs, accounts and rewards](execution.md) | cost models and their inputs, account rules and settlement, reward functions and their composition |
 | [Performance metrics](metrics.md) | metric definitions, summaries, `RecordPerformance` |
 | [Order books](order-book.md) | `OrderBook`, zero-intelligence order flow and its parameters |
-| [Finance environments](../environments/finance.md) | `Trading-v0`, `Portfolio-v0`, `Market-v0`, `MarketMaking-v0`, `OptimalExecution-v0`, `LimitOrderBook-v0`, `LimitOrderBookMarket`, native vector versions, baselines |
+| [Financial Markets environments](../environments/finance.md) | `Trading-v0`, `Portfolio-v0`, `Market-v0`, `MarketMaking-v0`, `OptimalExecution-v0`, `LimitOrderBook-v0`, `LimitOrderBookMarket`, native vector versions, baselines |
 | [API reference](../api/finance.md) | every class and function in `sekai.finance` |
 
 For variable-size observations and action masks in general, see the

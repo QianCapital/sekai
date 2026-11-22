@@ -9,7 +9,7 @@ for each.
 
 Environments report time through two `info` keys:
 
-| Key | Meaning | In the built-in finance envs |
+| Key | Meaning | In the built-in financial markets envs |
 |---|---|---|
 | `timestamp` | when the observation is made, i.e. the time of the decision it informs | the data's timestamp (a `numpy.datetime64` or a number) on historical data, else the step index; session time in the order-book envs |
 | `dt` | the length of a step | in years in `Trading-v0`, `Portfolio-v0` and `Market-v0` (`1 / data.periods_per_year` on dated data, else the market model's `dt` when simulated, else `1/252`; an explicit `dt=` overrides all three); in the model's time units in `MarketMaking-v0` and `OptimalExecution-v0`; the time a step covered in the order-book envs |
@@ -112,10 +112,10 @@ multi-agent market works the same way per agent; see
 A policy without memory needs recent history in its observation. There are three ways to put
 it there.
 
-**Lookback windows inside the env.** The finance environments already observe a window of
-recent data: `Trading-v0` the last `lookback` log returns (and the current position),
-`Portfolio-v0` a `(lookback, n_assets)` window of returns. The env has the data, so this is
-the cheapest and most exact option; set its size with `lookback=`.
+**Lookback windows inside the env.** The financial markets environments already observe a
+window of recent data: `Trading-v0` the last `lookback` log returns (and the current
+position), `Portfolio-v0` a `(lookback, n_assets)` window of returns. The env has the data,
+so this is the cheapest and most exact option; set its size with `lookback=`.
 
 ```python
 print(sekai.make("Trading-v0", lookback=10).observation_space.shape)  # (11,)
@@ -142,7 +142,8 @@ start of an episode visible to the agent.
 
 **`TimeAwareObservation`** adds the elapsed fraction of the episode, which makes a time limit
 observable (otherwise the end of an episode looks random to the agent). It reads the horizon
-from a `TimeLimit`; the finance envs end episodes themselves, so pass it explicitly:
+from a `TimeLimit`; the financial markets envs end episodes themselves, so pass it
+explicitly:
 
 ```python
 env = sekai.TimeAwareObservation(sekai.make("Trading-v0", episode_length=50), max_episode_steps=50)
@@ -219,11 +220,11 @@ values far outside the recent range.
 
 ## Point-in-time data
 
-The other half of handling time correctly is never letting an observation contain information
-that was not available at its timestamp. The finance toolkit covers this:
-[`MarketData`](../finance/data.md) holds prices with their timestamps and marks unlisted
-assets, splits data chronologically with an embargo, and builds walk-forward folds;
+The other half of handling time correctly is never letting an observation contain
+information that was not available at its timestamp. The financial markets toolkit covers
+this: [`MarketData`](../finance/data.md) holds prices with their timestamps and marks
+unlisted assets, splits data chronologically with an embargo, and builds walk-forward folds;
 `sekai.finance.features.asof_join` aligns macro and fundamental data with a publication lag;
 and `sekai.finance.features.check_causal` tests a feature transform for look-ahead, raising
 `sekai.LookAheadError` when it finds one. See [Market data](../finance/data.md) and the
-[finance overview](../finance/index.md).
+[financial markets overview](../finance/index.md).

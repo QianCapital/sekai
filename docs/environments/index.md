@@ -21,7 +21,7 @@ Eleven environments are registered when `sekai` is imported. Build any of them w
 
 All observation and action `Box`es are `float32`. For the classic-control environments the
 horizon is a `TimeLimit` added by `make()` (override it with `make(id, max_episode_steps=N)`);
-the finance environments end their own episodes, so `make()` adds no wrapper.
+the financial markets environments end their own episodes, so `make()` adds no wrapper.
 
 `Trading-v0/v1`, `Portfolio-v0/v1`, `Market-v1`, `MarketMaking-v0` and `OptimalExecution-v0`
 also have [native vector implementations](finance.md#native-vector-environments) that step every
@@ -84,7 +84,7 @@ per-dimension ranges.)
 The standard control benchmarks, [bit-identical to gymnasium](classic-control.md), with
 NumPy-only RGB renderers.
 
-## Finance
+## Financial Markets
 
 === "Qian Capital (default)"
 
@@ -123,8 +123,8 @@ Each is drawn by its renderer in `sekai.envs.finance`, with the Qian Capital hea
 [your own price history](finance.md#your-own-price-history).
 [`LimitOrderBookMarket`](finance.md#limitorderbookmarket) is a multi-agent order book (not
 registered; construct it from `sekai.envs.finance`). The components they are built from
-are documented in the [finance toolkit](../finance/index.md). Each has a
-[renderer](../guide/rendering.md#finance) that draws its episodes as a dashboard.
+are documented in the [financial markets toolkit](../finance/index.md). Each has a
+[renderer](../guide/rendering.md#financial-markets) that draws its episodes as a dashboard.
 
 ## Adding your own
 

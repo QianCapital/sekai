@@ -1,6 +1,7 @@
 # Batched and differentiable environments
 
-`BatchMarketEnv` is the general finance environment, written once and run three ways:
+`BatchMarketEnv` is the general financial markets environment, written once and run
+three ways:
 
 - **one environment**: `sekai.make("Market-v1")`, a standard `sekai.Env`;
 - **a native vector environment**: `sekai.make_vec("Market-v1", num_envs=1024)`, every
@@ -12,7 +13,8 @@
 
 Each of the `num_envs` *lanes* is an independent account trading its own episode: a
 window of your history, or a fresh scenario from a market model or a generator of your
-own. It is assembled from the [finance toolkit](index.md), and each part can be swapped:
+own. It is assembled from the [financial markets toolkit](index.md), and each part can be
+swapped:
 
 | Part | Argument | Default |
 |---|---|---|
@@ -319,7 +321,7 @@ observations, to rounding), which is how it is tested. What changes by default:
 
 - [Costs, accounts and rewards](execution.md): cost models, holding costs, constraints,
   risk models and reward functions.
-- [Finance environments](../environments/finance.md#market-v1).
+- [Financial Markets environments](../environments/finance.md#market-v1).
 - API: [`sekai.envs.finance.BatchMarketEnv`](../api/envs.md#sekai.envs.finance.BatchMarketEnv),
   [`sekai.vector.BatchEnv`](../api/vector.md#batched-environments),
   [`sekai.backend`](../api/backend.md), [`sekai.finance`](../api/finance.md).

@@ -334,10 +334,10 @@ test                                    [  history: observed, never traded    )[
   embargo and the end of training: observing the past is legitimate, trading on it twice is
   not.
 
-The test part records its history rows as `test.warmup` (here 30), and every finance
-environment (`Market-v0`, `Trading-v0`, `Portfolio-v0` and their native vector versions)
-places episodes so that no decision falls on a warm-up row, whatever its lookback: a
-shorter lookback just observes fewer of them, and `reset(options={"start": t})` on a
+The test part records its history rows as `test.warmup` (here 30), and every financial
+markets environment (`Market-v0`, `Trading-v0`, `Portfolio-v0` and their native vector
+versions) places episodes so that no decision falls on a warm-up row, whatever its lookback:
+a shorter lookback just observes fewer of them, and `reset(options={"start": t})` on a
 warm-up row raises a `ValueError`. Slices of a part keep the warm-up rows they contain
 (`test[10:].warmup == 20`); `select`, `with_fields` and `with_exogenous` keep it.
 

@@ -407,5 +407,6 @@ print(env.reset(seed=0).observation.shape)  # (31,)
 
 ## See also
 
-- [Finance environments](../environments/finance.md): `model=` in each environment.
+- [Financial Markets environments](../environments/finance.md): `model=` in each
+  environment.
 - [`sekai.finance.simulators` API](../api/finance.md#simulators).

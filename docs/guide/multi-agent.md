@@ -133,10 +133,10 @@ transition. Steps then have different lengths for different agents; discount by 
 
 `sekai.envs.finance.LimitOrderBookMarket` is the built-in example: several traders in one
 limit order book, trader `i` deciding every `decision_intervals[i]` units of session time
-(the [finance documentation](../finance/index.md) covers the market itself). One trader's
-market order can fill another's resting quote but never its own (self-trade prevention:
-it first cancels the trader's quote on the opposite side). With intervals of 1, 2 and 5,
-all three act first, then only the fast one:
+(the [financial markets documentation](../finance/index.md) covers the market itself). One
+trader's market order can fill another's resting quote but never its own (self-trade
+prevention: it first cancels the trader's quote on the opposite side). With intervals of 1,
+2 and 5, all three act first, then only the fast one:
 
 ```python
 from sekai.envs.finance import LimitOrderBookMarket
