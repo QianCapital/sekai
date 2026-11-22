@@ -116,7 +116,7 @@ class ChessEnv(Env[Observation, np.intp]):
     (`"*"` while running, else `"1-0"`, `"0-1"`, `"1/2-1/2"`), `winner` and `termination`.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {"name": "Chess-v0"}
+    metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
     sides: ClassVar[tuple[str, str]] = ("white", "black")
     """The two sides, White first."""
     players: ClassVar[tuple[bool, bool]] = (WHITE, BLACK)

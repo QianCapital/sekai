@@ -135,6 +135,20 @@ def test_status() -> None:
     assert (draw.text, draw.sub) == ("Draw", "A draw. Black 0 · White 0 (komi 0).")
 
 
+def test_stopped_by_a_time_limit() -> None:
+    env = sekai.make("Go9x9-v0", max_episode_steps=4)
+    env.reset(seed=0)
+    for vertex in ("E5", "C3", "G7", "C7"):
+        result = env.step(env.unwrapped.encode_vertex(vertex))
+    assert result.truncated and not env.unwrapped.done
+    renderer = GoRenderer()
+    renderer.render(env)
+    status = renderer.status(env.unwrapped)
+    assert status.text == "Stopped"
+    assert status.sub is not None and status.sub.startswith("Stopped at the move limit. Black ")
+    assert renderer.turn(env.unwrapped) is None
+
+
 def test_layout_options() -> None:
     env = GoEnv(13)
     env.reset(seed=1)

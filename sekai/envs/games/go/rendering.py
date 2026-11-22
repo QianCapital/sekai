@@ -290,7 +290,7 @@ class GoRenderer(BoardRenderer):
         return self.perspective
 
     def turn(self, env: Any) -> str | None:
-        return None if env.done else str(env.to_play)
+        return None if self.finished(env) else str(env.to_play)
 
     def final(self, env: GoEnv) -> GoScore:
         """The score a finished game shows (dead stones estimated), cached per position."""
@@ -308,13 +308,19 @@ class GoRenderer(BoardRenderer):
             self._scores[key] = score
         return score
 
+    def finished(self, env: Any) -> bool:
+        """Whether the game is over: ended by the env or stopped by a `TimeLimit`."""
+        return bool(env.done) or self.time_limit_reached
+
     def status(self, env: Any) -> Status:
-        if env.done:
+        if self.finished(env):
             score = self.final(env)
             margin = abs(score.margin)
             points = (
                 f"Black {_num(score.black)} · White {_num(score.white)} (komi {_num(env.komi)})"
             )
+            if not env.done:
+                return Status("Stopped", f"Stopped at the move limit. {points}.", "draw")
             if score.winner is None:
                 return Status("Draw", f"A draw. {points}.", tone_for_result(None))
             winner = self.player(score.winner).name
@@ -425,7 +431,7 @@ class GoRenderer(BoardRenderer):
         ys = [top + (r + PAD) * unit for r in range(size)]
         pixels = painter.canvas.pixels
         dead: set[int] = set()
-        if env.done:  # in order: territory, stones, then the last move's ring
+        if self.finished(env):  # in order: territory, stones, then the last move's ring
             score = self.final(env)
             for owner, color in (("black", BLACK), ("white", WHITE)):
                 for vertex in score.territory.get(owner, ()):

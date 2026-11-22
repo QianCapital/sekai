@@ -368,7 +368,7 @@ def test_spaces_and_check_env() -> None:
 def test_sekai_conventions() -> None:
     env = GoEnv(9)
     assert GoEnv.sides == GoEnv.players == ("black", "white")
-    assert env.metadata["name"] == "Go"
+    assert env.metadata["render_fps"] == 4
     result = env.reset(seed=0, options={"moves": ["E5"]})
     np.testing.assert_array_equal(env.action_mask(), result.info["legal_action_mask"])
     assert env.action_mask().dtype == np.int8

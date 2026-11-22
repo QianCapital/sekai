@@ -146,7 +146,7 @@ class GoEnv(Env[Observation, np.intp]):
         superko: Positional superko (default) or, if `False`, simple ko only.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {"name": "Go", "render_fps": 4}
+    metadata: ClassVar[dict[str, Any]] = {"render_fps": 4}
     #: The sides, in the order they move (Black first).
     sides: ClassVar[tuple[str, str]] = ("black", "white")
     #: The values of `info["to_play"]`, in the same order.

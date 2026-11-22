@@ -492,6 +492,19 @@ def test_renderer_options_and_errors() -> None:
         ChessRenderer(32)
 
 
+def test_renderer_after_a_time_limit() -> None:
+    env = sekai.make("Chess-v0", max_episode_steps=2)
+    env.reset(seed=0)
+    for move in ("e2e4", "e7e5"):
+        env.step(env.unwrapped.encode_move(move))
+    renderer = ChessRenderer(240)
+    renderer.render(env)
+    status = renderer.status(env.unwrapped)
+    assert (status.text, status.sub) == ("Draw", "Drawn by the move limit.")
+    assert renderer.turn(env.unwrapped) is None
+    assert ChessEnv.metadata["render_fps"] == 2
+
+
 def test_text_renderer() -> None:
     env = ChessEnv()
     env.reset()
