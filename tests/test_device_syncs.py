@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import collections
 import copy
+import math
 import pickle
 from typing import Any
 
@@ -314,21 +315,29 @@ def test_collected_cost_checks_give_the_same_costs_and_errors(backend: str) -> N
 
 
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16", "float32", "float64"])
-def test_scalars_become_tensors_without_host_data(
+def test_scalars_become_tensors_made_on_the_device(
     dtype: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Host scalars become 0-d tensors made on the device, bit for bit as copying them
-    over would make them (rounding and overflow included)."""
+    """Host scalars become 0-d tensors made on the device, in the env's dtype (MPS has no
+    float64), bit for bit as copying them over makes them, rounding included. Only a
+    finite value beyond the dtype's range is converted on the host (overflowing to inf)."""
     B, like = get_backend("torch"), torch.zeros((), dtype=getattr(torch, dtype))
-    floats = [0.0, -0.0, 0.1, 1 / 3, 2 / 252, 1e-320, 1e39, -1e39, float("inf"), float("nan")]
+    floats = [0.0, -0.0, 0.1, 1 / 3, 2 / 252, 1e-320, 6e4, 1e39, -1e39, float("inf"), float("nan")]
     values = [*floats, 5, True, np.float32(0.1), np.float64(1e5), np.array(0.25), np.int64(3)]
-    expected = [torch.as_tensor(np.asarray(v, dtype=np.float64), dtype=like.dtype) for v in values]
+    as_float = [float(np.asarray(v, dtype=np.float64)) for v in values]
+    expected = [torch.as_tensor(np.float64(v), dtype=like.dtype) for v in as_float]
+    top = torch.finfo(like.dtype).max
+    beyond = sum(math.isfinite(v) and abs(v) > top for v in as_float)
+    filled: list[Any] = []
+    full = torch.full
+    monkeypatch.setattr(torch, "full", lambda *a, **k: filled.append(k["dtype"]) or full(*a, **k))
     waits = Waits(monkeypatch)
     with waits:
         got = [B.asfloat(v, like) for v in values]
         flags = [B.asbool(v, like) for v in (0, 1, True, np.bool_(False), np.array(2.0))]
         ints = [B.asint(v, like) for v in (0, -7, np.int64(2**40), np.array(9))]
-    assert dict(waits.count) == {}
+    assert dict(waits.count) == ({"upload": beyond} if beyond else {})
+    assert like.dtype == torch.float64 or torch.float64 not in filled
     bits = {2: torch.int16, 4: torch.int32, 8: torch.int64}[like.element_size()]
     for g, e in zip(got, expected, strict=True):
         assert g.dtype == like.dtype and g.shape == ()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
@@ -27,11 +28,13 @@ def _scalar(x: Any) -> bool:
 
 
 def _full_float(value: float, dtype: torch.dtype, device: Any) -> torch.Tensor:
-    """A 0-d float tensor of `value`, made on the device: copying a host scalar there
-    would wait for the device. Filled in float64 and cast, it rounds (and overflows to
-    inf) exactly as converting the host float64 does."""
-    out = torch.full((), value, dtype=torch.float64, device=device)
-    return out if dtype == torch.float64 else out.to(dtype)
+    """A 0-d float tensor of `value`, made on the device in `dtype` (copying a host scalar
+    there would wait for the device; some devices have no float64). It rounds as converting
+    the host float64 does. A finite value beyond the dtype's range, which `torch.full`
+    refuses, is converted on the host, overflowing to inf as before."""
+    if math.isfinite(value) and abs(value) > torch.finfo(dtype).max:
+        return torch.as_tensor(np.float64(value), dtype=dtype, device=device)
+    return torch.full((), value, dtype=dtype, device=device)
 
 
 class TorchBackend(Backend):
