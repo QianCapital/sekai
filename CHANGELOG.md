@@ -6,7 +6,7 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-21
+## [0.3.0] - 2026-11-22
 
 Batched and differentiable market environments, tools for research validity and long runs,
 market realism, paper and live trading, and branded dashboards. Nothing from 0.2.0 is
