@@ -27,14 +27,38 @@ when the model is built.
 from __future__ import annotations
 
 import abc
+import contextlib
+import contextvars
 import inspect
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from sekai.backend import Array, Backend, backend_and_like
+
+# Checks of model inputs collected instead of raised, as `(failed, message)` with `failed` a
+# 0-d bool array, while a batched env steps on a device (see `_collect_checks`).
+_CHECKS: contextvars.ContextVar[list[tuple[Array, str]] | None] = contextvars.ContextVar(
+    "sekai_cost_checks", default=None
+)
+
+
+@contextlib.contextmanager
+def _collect_checks() -> Iterator[list[tuple[Array, str]]]:
+    """Collect the input checks of the models called inside, instead of raising.
+
+    Reading a check's result back from a device makes the host wait for it, so a
+    batched env on a GPU collects them and reads them all at once, with its own
+    flags, then raises the first that failed (`ValueError(message)`).
+    """
+    checks: list[tuple[Array, str]] = []
+    token = _CHECKS.set(checks)
+    try:
+        yield checks
+    finally:
+        _CHECKS.reset(token)
 
 
 class CostModel(abc.ABC):
@@ -108,15 +132,21 @@ def _fill_from_median(
         option: Name of the model's fallback argument, for the error message.
     """
     ok = B.isfinite(values) & (values >= 0)
-    if bool(B.all(ok)):
+    checks = _CHECKS.get()
+    if checks is None and bool(B.all(ok)):  # (collected checks skip it: the fill is the same)
         return values
     any_ok = B.any(ok, axis=-1)
-    if fallback is None and bool(B.any(~any_ok & B.any(traded, axis=-1))):
-        raise ValueError(
+    if fallback is None:
+        unpriced = B.any(~any_ok & B.any(traded, axis=-1))
+        message = (
             f"{model} has no valid {name!r} (finite and >= 0) for any asset in a row with "
             f"trades, so it cannot price them (they would be free). Supply the input, or "
             f"set an explicit fallback value with {model}(..., {option}=...)."
         )
+        if checks is not None:
+            checks.append((unpriced, message))
+        elif bool(unpriced):
+            raise ValueError(message)
     with B.errstate():
         filled = B.where(ok, values, float("nan"))
         median = B.nanmedian(B.where(any_ok[..., None], filled, 0.0), axis=-1)

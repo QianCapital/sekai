@@ -6,6 +6,22 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A torch `BatchMarketEnv` on a GPU makes the host wait for the device once per step, where
+  it made about 12 waits (and about 16 per reset). Reading a value back from a device, and
+  copying host data to it, waits until the device has finished its queued work, so the
+  host could not queue the next work while the device ran. A step now reads back one
+  thing: which lanes finished, together with its checks of the action and of the cost
+  models' inputs. The lanes' counters are kept on the device too, and host scalars become
+  tensors made there. Results are bit-identical, and the errors are the same
+  (`InvalidAction`, a cost model's `ValueError`), still raised before the step changes any
+  state. On the CPU, and with NumPy, a step runs as before.
+
+### Added
+
+- `Backend.on_host(x)`: whether reading `x`'s values back costs a wait for a device.
+
 ## [0.3.0] - 2026-11-22
 
 Batched and differentiable market environments, tools for research validity and long runs,

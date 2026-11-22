@@ -97,6 +97,12 @@ class Backend(abc.ABC):
     def item(self, x: Array) -> Any:
         """The Python scalar held by a one-element array."""
 
+    def on_host(self, x: Array) -> bool:
+        """Whether `x` is in host memory, so reading its values (`item`, `to_numpy`, a
+        Python `if` on it) costs no wait for a device. False on a GPU, where each such
+        read blocks until the device finishes its queued work."""
+        return True
+
     # ------------------------------------------------------------------
     # Elementwise
     # ------------------------------------------------------------------

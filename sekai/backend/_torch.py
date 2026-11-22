@@ -26,6 +26,14 @@ def _scalar(x: Any) -> bool:
     return isinstance(x, (bool, int, float, np.number, np.bool_))
 
 
+def _full_float(value: float, dtype: torch.dtype, device: Any) -> torch.Tensor:
+    """A 0-d float tensor of `value`, made on the device: copying a host scalar there
+    would wait for the device. Filled in float64 and cast, it rounds (and overflows to
+    inf) exactly as converting the host float64 does."""
+    out = torch.full((), value, dtype=torch.float64, device=device)
+    return out if dtype == torch.float64 else out.to(dtype)
+
+
 class TorchBackend(Backend):
     """torch tensors. New tensors take the dtype and device of `like`."""
 
@@ -40,6 +48,8 @@ class TorchBackend(Backend):
             return x
         arr = np.asarray(x)
         if arr.dtype.kind == "f":
+            if arr.ndim == 0:
+                return _full_float(float(arr), _float_dtype(like), _device(like))
             return torch.as_tensor(arr, dtype=_float_dtype(like), device=_device(like))
         return torch.as_tensor(arr, device=_device(like))
 
@@ -48,19 +58,26 @@ class TorchBackend(Backend):
             out = x if x.is_floating_point() else x.to(_float_dtype(like))
             device = _device(like)
             return out if device is None or out.device == device else out.to(device)
-        return torch.as_tensor(
-            np.asarray(x, dtype=np.float64), dtype=_float_dtype(like), device=_device(like)
-        )
+        arr = np.asarray(x, dtype=np.float64)
+        if arr.ndim == 0:
+            return _full_float(float(arr), _float_dtype(like), _device(like))
+        return torch.as_tensor(arr, dtype=_float_dtype(like), device=_device(like))
 
     def asbool(self, x: Any, like: Array | None = None) -> Array:
         if isinstance(x, torch.Tensor):
             return x.to(torch.bool)
-        return torch.as_tensor(np.asarray(x, dtype=bool), device=_device(like))
+        arr = np.asarray(x, dtype=bool)
+        if arr.ndim == 0:
+            return torch.full((), bool(arr), dtype=torch.bool, device=_device(like))
+        return torch.as_tensor(arr, device=_device(like))
 
     def asint(self, x: Any, like: Array | None = None) -> Array:
         if isinstance(x, torch.Tensor):
             return x.to(torch.int64)
-        return torch.as_tensor(np.asarray(x, dtype=np.int64), device=_device(like))
+        arr = np.asarray(x, dtype=np.int64)
+        if arr.ndim == 0:
+            return torch.full((), int(arr), dtype=torch.int64, device=_device(like))
+        return torch.as_tensor(arr, device=_device(like))
 
     def cast(self, x: Any, like: Array) -> Array:
         return self._tensor(x, like).to(dtype=like.dtype, device=like.device)
@@ -98,6 +115,9 @@ class TorchBackend(Backend):
 
     def item(self, x: Array) -> Any:
         return x.item() if isinstance(x, torch.Tensor) else np.asarray(x).item()
+
+    def on_host(self, x: Array) -> bool:
+        return not isinstance(x, torch.Tensor) or x.device.type == "cpu"
 
     def where(self, condition: Array, x: Any, y: Any) -> Array:
         like = next((v for v in (x, y, condition) if isinstance(v, torch.Tensor)), None)

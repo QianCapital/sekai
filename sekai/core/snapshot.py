@@ -255,6 +255,11 @@ def restore_snapshot(obj: Any, snapshot: Snapshot) -> None:
     states = _copy(list(snapshot.layers), memo)
     for env, state in zip(envs, states):
         _put_back(env.__dict__, state)
+        # An env that keeps copies of its state (on the host and on a device, say) rebuilds
+        # those the snapshot lacks, as one taken by an older sekai can.
+        fill = getattr(env, "_fill_derived", None)
+        if fill is not None:
+            fill(state)
 
 
 def _put_back(current: dict[str, Any], state: dict[str, Any]) -> None:
