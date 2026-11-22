@@ -48,6 +48,14 @@ All notable changes to sekai are documented here. The format follows
 **Torch and GPUs**
 
 - `Backend.on_host(x)`: whether reading `x`'s values back costs a wait for a device.
+- Market models simulate on a GPU: `MarketModel.simulate_torch(generator, n_steps, *,
+  n_paths, dtype)` simulates every built-in model with torch on the generator's device, into
+  a `Simulation` of tensors (the same model as `simulate`, not the same numbers), reading
+  nothing back and copying a model's parameters there once. `ModelScenarios(..., device=,
+  dtype=)` samples panels simulated on a device, `MarketPanel.from_simulation` keeps a tensor
+  simulation where it is, and `BatchMarketEnv(..., simulate_on_device=True)` (with `model=`
+  and `backend="torch"`) simulates each reset's paths on the env's device, so a reset copies
+  nothing to it. By default paths are simulated on the host, as before.
 
 ### Changed
 
