@@ -55,7 +55,7 @@ from sekai.finance.data import MarketData
 from sekai.finance.observations import MarketObservation, MarketView, ObservationBuilder
 from sekai.finance.panel import MarketPanel, ModelScenarios, ScenarioGenerator
 from sekai.finance.rewards import LogReturn, RewardFunction, StepOutcome
-from sekai.finance.risk import FactorRiskModel, factor_exposures, portfolio_variance
+from sekai.finance.risk import FactorRiskModel, _variance_and_exposures
 from sekai.finance.sampling import EpisodeSampler, as_sampler, resolve_start, sample_start
 from sekai.finance.simulators import MarketModel
 from sekai.vector.batch import BatchEnv, BatchVecEnv, UnbatchedEnv
@@ -157,6 +157,9 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
     # A scenario generator draws from the seed it is given, so snapshots share it (a
     # generative model, perhaps on a GPU and still training, is never copied).
     _snapshot_shared = ("scenarios",)
+    # Values derived from the state, made once and reused until what they derive from is
+    # replaced (see `_cols`, `_rows`, `_index`): snapshots, pickles and copies leave them out.
+    _snapshot_exclude = ("_memo",)
 
     def __init__(
         self,
@@ -472,6 +475,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         self._t = np.zeros(n, dtype=np.int64)
         self._start_dev = B.ints((n,), 0, like=like)
         self._t_dev = B.ints((n,), 0, like=like)
+        self._memo: dict[Any, Any] = {}
         self._samplers = [self.sampler.spawn() for _ in range(n)]
         self._slots = B.ints((n, S), -1, like=like)
         self._weights = B.zeros((n, S), like=like)
@@ -543,20 +547,52 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
 
     def _rows(self, room: int = 0) -> Array:
         """Each lane's decision time in the panel, at most `room` rows before its window ends."""
+        memo = self._memo.get(("rows", room))
+        if memo is not None and memo[0] is self._t_dev and memo[1] is self._start_dev:
+            return memo[2]
         rows = self._start_dev + self._lookback + self._t_dev
-        return self.backend.minimum(rows, self._start_dev + (self._window - 1 - room))
+        rows = self.backend.minimum(rows, self._start_dev + (self._window - 1 - room))
+        self._memo[("rows", room)] = (self._t_dev, self._start_dev, rows)
+        return rows
 
     def _cols(self) -> tuple[Array, Array]:
+        """Each slot's panel column (0 for an empty slot), and which slots hold an asset."""
+        memo = self._memo.get("cols")
+        if memo is not None and memo[0] is self._slots:
+            return memo[1], memo[2]
         occ = self._slots >= 0
-        return self.backend.where(occ, self._slots, 0), occ
+        cols = self.backend.where(occ, self._slots, 0)
+        self._memo["cols"] = (self._slots, cols, occ)
+        return cols, occ
+
+    def _index(self, rows: Array) -> tuple[Array, Array, Array]:
+        """The index of each lane's slots at `rows` in a `(paths, times, assets, ...)` panel
+        array."""
+        indices = self._memo.setdefault("index", {})
+        memo = indices.get(id(rows))  # (kept with `rows` itself, so the id stays its own)
+        if (
+            memo is not None
+            and memo[0] is rows
+            and memo[1] is self._slots
+            and memo[2] is self._paths
+        ):
+            return memo[3]  # type: ignore[no-any-return]
+        if memo is None and len(indices) >= 8:  # those of earlier steps' rows
+            indices.clear()
+        cols, _ = self._cols()
+        paths = self._memo.get("paths")
+        if paths is None or paths[0] is not self._paths:
+            paths = self._memo["paths"] = (self._paths, self._paths[:, None])
+        index = (paths[1], rows[:, None], cols)
+        indices[id(rows)] = (rows, self._slots, self._paths, index)
+        return index
 
     def _asset_at(self, arr: Array, rows: Array) -> Array:
-        cols, _ = self._cols()
-        return arr[self._paths[:, None], rows[:, None], cols]
+        return arr[self._index(rows)]
 
     def _tradable(self, rows: Array) -> Array:
-        cols, occ = self._cols()
-        return occ & self._panel.valid[self._paths[:, None], rows[:, None], cols]
+        _, occ = self._cols()
+        return occ & self._panel.valid[self._index(rows)]
 
     def action_mask(self) -> Array:
         """`(num_envs, A)` int8: 1 for the slots that can be traded now (and for any extra
@@ -768,6 +804,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             needs=needs,
             equity=self.capital * self._equity,
             close_field=self._close_field,
+            index=self._index(rows),
         )
 
     def _exposures(self, names: Sequence[str], rows: Array) -> dict[str, Array]:
@@ -801,10 +838,10 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         frozen = self.frozen
         r = self._rows(room=1)  # decision rows; frozen lanes stay inside their window
         nxt = r + 1
-        cols, occ = self._cols()
-        p2 = self._paths[:, None]
-        valid_now = occ & panel.valid[p2, r[:, None], cols]
-        valid_next = occ & panel.valid[p2, nxt[:, None], cols]
+        _, occ = self._cols()
+        at_now, at_next = self._index(r), self._index(nxt)
+        valid_now = occ & panel.valid[at_now]
+        valid_next = occ & panel.valid[at_next]
         shortable = None
         if self.shortable is not None:
             flag = self._asset_at(panel.fields[self.shortable], r)
@@ -829,23 +866,23 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 )
                 start = w
                 exec_rows = r
-                ret = B.where(valid_now & valid_next, panel.returns[p2, nxt[:, None], cols], 0.0)
+                ret = B.where(valid_now & valid_next, panel.returns[at_next], 0.0)
                 ret = B.where(delisting, self.delisting_return, ret)
                 overnight = None
             else:
                 fill = panel.fields[_FILL_FIELD[self.execution]]
                 close = panel.fields[self._close_field]
                 both = valid_now & valid_next
-                fill_next = fill[p2, nxt[:, None], cols]
-                close_now = close[p2, r[:, None], cols]
-                close_next = close[p2, nxt[:, None], cols]
+                fill_next = fill[at_next]
+                close_now = close[at_now]
+                close_next = close[at_next]
                 priced = both & B.isfinite(fill_next) & B.isfinite(close_now)
                 value_next = fill_next  # a share's value at the fill, dividends and splits in
                 if panel.corporate_actions and "dividend" in panel.fields:
-                    cash = panel.fields["dividend"][p2, nxt[:, None], cols]
+                    cash = panel.fields["dividend"][at_next]
                     value_next = value_next + B.where(B.isfinite(cash), cash, 0.0)
                 if panel.corporate_actions and "split" in panel.fields:
-                    ratio = panel.fields["split"][p2, nxt[:, None], cols]
+                    ratio = panel.fields["split"][at_next]
                     value_next = value_next * B.where(B.isfinite(ratio), ratio, 1.0)
                 move = B.where(priced, value_next / B.where(priced, close_now, 1.0) - 1.0, 0.0)
                 move = B.where(delisting, self.delisting_return, move)
@@ -909,39 +946,43 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
                 )
                 drifted = B.where(margin_call[:, None], forced, drifted)
         wiped = growth <= 0.0
+        # With no lane frozen (which the host knows), `where(frozen, ..., x)` would be x.
+        thawed = not self._frozen_host.any()
         previous = self._equity
-        equity = B.where(frozen, previous, B.maximum(previous * growth, 0.0))
+        equity = B.maximum(previous * growth, 0.0)
+        if not thawed:
+            equity = B.where(frozen, previous, equity)
         peak = B.maximum(self._peak, equity)
         drawdown = B.where(peak > 0, 1.0 - equity / B.where(peak > 0, peak, 1.0), 1.0)
         variance = exposures = None
         if self.risk is not None:
             variance, exposures = self._risk(held, r)
-        zero = B.zeros((n,), like=like)
         outcome = StepOutcome.from_growth(
-            B.where(frozen, 1.0, growth),
+            growth if thawed else B.where(frozen, 1.0, growth),
             equity=equity,
-            turnover=B.where(frozen, 0.0, turnover),
-            cost=B.where(frozen, 0.0, cost),
+            turnover=turnover if thawed else B.where(frozen, 0.0, turnover),
+            cost=cost if thawed else B.where(frozen, 0.0, cost),
             previous_equity=previous,
             weights=held,
             variance=variance,
         )
         t = self._t + (~self._frozen_host).astype(np.int64)
-        t_dev = self._t_dev + B.asint(~frozen, like)
+        t_dev = self._t_dev + (1 if thawed else B.asint(~frozen, like))
         stopped = wiped
         if self.max_drawdown is not None:
             stopped = stopped | (drawdown >= self.max_drawdown)
-        terminated = ~frozen & stopped
-        truncated = ~frozen & ~terminated & (t_dev >= self._episode_length)
+        terminated = stopped if thawed else ~frozen & stopped
+        running = ~terminated if thawed else ~frozen & ~terminated
+        truncated = running & (t_dev >= self._episode_length)
         self._checkpoint(actions, finite, checks, terminated | truncated, deferred)
         reward = self.reward_fn(outcome)
-        self._weights = B.where(frozen[:, None], w, drifted)
+        self._weights = drifted if thawed else B.where(frozen[:, None], w, drifted)
         self._equity = equity
-        self._peak = B.where(frozen, self._peak, peak)
+        self._peak = peak if thawed else B.where(frozen, self._peak, peak)
         if self._pending is not None:
             self._pending = B.where(frozen[:, None], self._pending, target)
         self._t, self._t_dev = t, t_dev
-        live = ~frozen & ~(terminated | truncated)
+        live = ~(terminated | truncated) if thawed else ~frozen & ~(terminated | truncated)
         # Reassigning slots is a no-op for lanes that are not live, so on a device it runs
         # without first reading whether any is.
         if self._dynamic and (deferred or B.item(B.any(live))):
@@ -949,7 +990,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         info = self._info(
             turnover=B.where(frozen, 0.0, turnover),
             cost=B.where(frozen, 0.0, cost),
-            holding=zero if holding is None else B.where(frozen, 0.0, holding),
+            holding=B.zeros((n,), like=like) if holding is None else B.where(frozen, 0.0, holding),
             financing=B.where(frozen, 0.0, s.financing),
             exec_weights=held,
         )
@@ -964,8 +1005,14 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             info["margin_call"] = B.where(frozen, False, margin_call)
         return reward, terminated, truncated, info
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_memo", None)
+        return state
+
     def _fill_derived(self, state: Mapping[str, Any]) -> None:
         super()._fill_derived(state)
+        self._memo = {}
         if "_t_dev" not in state:
             B, like = self.backend, self._like
             self._t_dev = B.asint(self._t, like)
@@ -1015,9 +1062,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         if risk.factor_cov is not None:
             series = self._panel.exogenous[risk.factor_cov]
             cov = B.nan_to_num(series[self._paths, rows])
-        variance = portfolio_variance(weights, loadings=loadings, factor_cov=cov, idio_var=idio)
-        exposures = None if loadings is None else factor_exposures(weights, loadings)
-        return variance, exposures
+        return _variance_and_exposures(weights, loadings, cov, idio)
 
     def _info(
         self,
@@ -1078,6 +1123,7 @@ def cost_context(
     needs: frozenset[str],
     equity: Array,
     close_field: str = "close",
+    index: tuple[Array, Array, Array] | None = None,
 ) -> dict[str, Any]:
     """The inputs of cost and holding models, per slot, that `needs` names.
 
@@ -1087,14 +1133,16 @@ def cost_context(
     `decision` rows (the standard deviation of log returns, NaN with fewer than two).
     `volume` is the traded value: the `dollar_volume` field, else `volume` shares times the
     close. Shared by `BatchMarketEnv` and `LiveMarketEnv`, so live and simulated trading
-    price costs the same way.
+    price costs the same way. `index` is `(paths[:, None], rows[:, None], cols)`, when the
+    caller has it already.
     """
     B = backend
     occupied = slots >= 0
     cols = B.where(occupied, slots, 0)
+    where = (paths[:, None], rows[:, None], cols) if index is None else index
 
     def at(arr: Array) -> Array:
-        return arr[paths[:, None], rows[:, None], cols]
+        return arr[where]
 
     ctx: dict[str, Any] = {"assets": cols}
     if "equity" in needs:
@@ -1116,7 +1164,7 @@ def cost_context(
             peak=equity,
             pending=None,
         )
-        avail = view.available(lookback)
+        avail = view._available(lookback)
         like = panel.returns
         window = B.where(avail, B.log1p(view.returns(lookback, fill=0.0)), 0.0)
         count = B.sum(B.asfloat(avail, like), axis=-1)

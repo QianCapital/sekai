@@ -20,6 +20,18 @@ All notable changes to sekai are documented here. The format follows
   (`InvalidAction`, a cost model's `ValueError`, a singular projection's `LinAlgError`),
   still raised before the step changes any state. On the CPU, and with NumPy, a step runs
   as before.
+- `BatchMarketEnv` steps take 20-30% less time on the CPU, with the same results bit for
+  bit (rewards, observations, infos and gradients). A torch step of 32 lanes holding a
+  dollar-neutral book, with costs and a factor risk model, went from 3.8 to 2.6 ms; one
+  of 1,024 lanes of the default market from 1.9 to 1.3 ms; and a NumPy step of 64 lanes
+  (`make_vec("Market-v1")`) from 369 to 276 µs. Work is no longer repeated:
+  - a neutral book's projection builds its Gram matrix once, not in each of its 21 rounds;
+  - observations and cost models gather their windows once per step;
+  - the torch backend asks opt_einsum for a contraction's order once per shape, where
+    `torch.einsum` asked at every call, and makes the constants it passes to
+    `torch.where` once;
+  - the env reuses each step's slot, row and index arrays, and skips masking frozen
+    lanes when there are none.
 
 ### Added
 

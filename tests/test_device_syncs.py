@@ -278,6 +278,7 @@ NEW_IN_0_3_1 = frozenset(
         "_resetting",
         "_finished_host",
         "_defer",
+        "_memo",
     }
 )
 
