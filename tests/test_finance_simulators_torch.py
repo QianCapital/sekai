@@ -3,7 +3,8 @@
 The same model as `simulate` (distributions, parameters, shapes, mask and state), not the
 same numbers: checked by shapes, and by statistics of large samples against the NumPy
 simulation and the models' defining properties, with tolerances of several standard errors
-(so they hold for any seed).
+(so they hold for any seed). Then the paths' way into environments: `MarketPanel` and
+`ModelScenarios(device=...)`.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import numpy as np
 import pytest
 
 from sekai.envs.finance.market_env import default_market
+from sekai.finance import MarketPanel, ModelScenarios
 from sekai.finance.simulators import (
     GARCH,
     GBM,
@@ -590,6 +592,81 @@ class TestRandomized:
         model = Randomized(lambda r: next(models, GBM(n_assets=2)))
         with pytest.raises(ValueError, match="reference"):
             model.simulate_torch(gen(), 5, n_paths=3)
+
+
+# --------------------------------------------------------------------------------------------
+# MarketPanel and ModelScenarios
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("single", [False, True])
+def test_a_panel_of_a_tensor_simulation_is_computed_on_its_device(single: bool) -> None:
+    sim = default_market().simulate_torch(
+        gen(3), 30, n_paths=None if single else 4, dtype=torch.float64
+    )
+    as_numpy = Simulation(
+        prices=host(sim.prices),
+        mask=host(sim.mask),
+        state={k: host(v) for k, v in sim.state.items()},
+    )
+    want = MarketPanel.from_simulation(as_numpy)  # the NumPy panel of the same paths
+    got = MarketPanel.from_simulation(sim, backend="torch")
+    for a, b in (
+        (got.returns, want.returns),
+        (got.valid, want.valid),
+        (got.fields["close"], want.fields["close"]),
+        (got.exogenous["regime"], want.exogenous["regime"]),
+        (got.state["regime"], want.state["regime"]),
+    ):
+        assert isinstance(a, torch.Tensor) and a.device.type == "cpu"
+        np.testing.assert_array_equal(host(a), b)  # float64: the same operations, bit for bit
+    assert got.returns.dtype == torch.float64 and got.valid.dtype == torch.bool
+    narrow = MarketPanel.from_simulation(sim, backend="torch", dtype=torch.float32)
+    assert torch.equal(torch.isnan(narrow.returns), torch.isnan(got.returns))
+    assert torch.equal(torch.nan_to_num(narrow.returns), torch.nan_to_num(got.returns.float()))
+    on_host = MarketPanel.from_simulation(sim)  # the NumPy backend copies it to the host
+    np.testing.assert_array_equal(on_host.returns, want.returns)
+    np.testing.assert_array_equal(on_host.valid, want.valid)
+
+
+class TestModelScenarios:
+    def test_on_a_device_the_panels_are_tensors_made_there(self) -> None:
+        model = ListingProcess(GBM(mu=0.05, sigma=0.2, n_assets=5))
+        scenarios = ModelScenarios(model, 30, device="cpu", dtype=torch.float64)
+        a, b = scenarios.sample(3, seed=7), scenarios.sample(3, seed=7)
+        assert isinstance(a.returns, torch.Tensor) and a.returns.dtype == torch.float64
+        assert a.device == torch.device("cpu") and tuple(a.returns.shape) == (3, 31, 5)
+        torch.testing.assert_close(a.returns, b.returns, rtol=0, atol=0, equal_nan=True)
+        torch.testing.assert_close(  # NumPy integers seed it too, as they seed NumPy
+            scenarios.sample(3, seed=np.int64(7)).returns, a.returns, rtol=0, atol=0, equal_nan=True
+        )
+        c = scenarios.sample(3, seed=8)
+        assert not torch.equal(torch.nan_to_num(c.returns), torch.nan_to_num(a.returns))
+        sim = model.simulate_torch(gen(7), 30, n_paths=3, dtype=torch.float64)
+        torch.testing.assert_close(a.fields["close"], sim.prices, rtol=0, atol=0, equal_nan=True)
+        assert ModelScenarios(model, 30, device="cpu").sample(2, seed=0).returns.dtype == (
+            torch.get_default_dtype()
+        )
+        assert repr(scenarios).endswith("n_steps=30, device='cpu', dtype=torch.float64)")
+        assert repr(ModelScenarios(model, 30, device="cpu")).endswith(", device='cpu')")
+
+    def test_without_a_device_nothing_changes(self) -> None:
+        model = GBM(sigma=[0.2, 0.3])
+        scenarios = ModelScenarios(model, 20)
+        assert vars(scenarios).keys() == {"model", "n_steps"}  # pickles as it did
+        assert repr(scenarios) == f"ModelScenarios({model!r}, n_steps=20)"
+        panel = scenarios.sample(4, seed=3)
+        want = MarketPanel.from_simulation(model.simulate(np.random.default_rng(3), 20, n_paths=4))
+        assert isinstance(panel.returns, np.ndarray)
+        np.testing.assert_array_equal(panel.returns, want.returns)
+
+    def test_validation(self) -> None:
+        with pytest.raises(ValueError, match="give device= too"):
+            ModelScenarios(GBM(), 5, dtype=torch.float32)
+        with pytest.raises(TypeError, match="floating-point"):
+            ModelScenarios(GBM(), 5, device="cpu", dtype=torch.int32)
+        with pytest.raises(NotImplementedError):
+            ModelScenarios(ConstantModel(), 5, device="cpu").sample(2, seed=0)
 
 
 # --------------------------------------------------------------------------------------------
