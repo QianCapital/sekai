@@ -1,6 +1,6 @@
 # Environment catalog
 
-Eleven environments are registered when `sekai` is imported. Build any of them with
+Fourteen environments are registered when `sekai` is imported. Build any of them with
 `sekai.make(id)`; keyword arguments go to the environment's constructor.
 
 | ID | Observation space | Action space | Horizon | Reward threshold |

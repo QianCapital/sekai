@@ -17,8 +17,9 @@ that a learned policy has to beat.
 | [`LimitOrderBook-v0`](#limitorderbook-v0) | quote and trade in a limit order book | zero-intelligence order flow, or your historical messages | inventory-skewed quotes |
 
 [`LimitOrderBookMarket`](#limitorderbookmarket) puts several agents in one order book.
-The first four have [native vector versions](#native-vector-environments) that step
-thousands of sub-envs at once. All of them are assembled from the
+`Trading-v0`, `Portfolio-v0`, `Market-v1`, `MarketMaking-v0` and `OptimalExecution-v0` have
+[native vector versions](#native-vector-environments) that step thousands of sub-envs at
+once. All of them are assembled from the
 [financial markets toolkit](../finance/index.md), whose parts (market models, cost models,
 reward functions, metrics) they also accept as arguments.
 

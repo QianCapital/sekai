@@ -265,7 +265,7 @@ Run `sekai list` to see every registered environment, or browse the
 | Vector env naming | `AsyncVectorEnv` means multiprocessing | `SyncVecEnv`, `AsyncVecEnv` (asyncio), `ProcVecEnv` (processes) |
 | Registry plugins | Entry-point plugins | `register_namespace("qc", loader)` for lazy plugin namespaces |
 | Env checking | Passive checker wraps every env | `check_env()` in your tests; zero overhead in training |
-| Financial Markets | Not in scope | `sekai.finance` toolkit and six financial markets environments |
+| Financial Markets | Not in scope | `sekai.finance` toolkit and seven financial markets environments |
 
 Coming from gymnasium? The [migration guide](https://sekai.qiancapital.com/guide/gymnasium/)
 maps every API, and `sekai.compat` lets you mix both while you move over.
