@@ -848,7 +848,7 @@ class LimitOrderBookMarket(MultiAgentEnv[dict[str, Any], NDArray[np.int64], str]
             max_trades=max_trades,
             warmup=warmup,
             sampler=sampler,
-            slot=float(intervals.min()),
+            slot=float(np.min(intervals)),
         )
         self.intervals = intervals.copy()
         self.jitter = jitter

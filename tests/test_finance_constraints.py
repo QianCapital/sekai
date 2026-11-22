@@ -110,7 +110,7 @@ class TestProject:
         s = torch.zeros(2, 30, requires_grad=True)
         w = project(s, rules, gross=torch.tensor([1.0, 1.0]))
         (w * torch.randn(2, 30)).sum().backward()
-        assert float(w.abs().sum()) == 0.0
+        assert float(w.detach().abs().sum()) == 0.0
         assert s.grad is not None and bool(torch.isfinite(s.grad).all())
 
     def test_validation(self) -> None:

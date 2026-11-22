@@ -19,8 +19,9 @@ from numpy.typing import NDArray
 
 from sekai.backend._base import Array, Backend
 
-_ndarray = np.ndarray
-# NumPy, untyped: its stubs do not match the `Backend` signatures the aliases below fill.
+# NumPy, untyped: its stubs do not match the `Backend` signatures the aliases and fast
+# paths below fill (a fast path's `x` stays an `Array`, not a narrowed `ndarray`).
+_ndarray: Any = np.ndarray
 _np: Any = np
 
 
@@ -125,18 +126,18 @@ class NumpyBackend(Backend):
         self, x: Array, axis: int | tuple[int, ...] | None = None, keepdims: bool = False
     ) -> Array:
         if type(x) is _ndarray:
-            return np.add.reduce(x, axis=axis, keepdims=keepdims)
-        return np.sum(x, axis=axis, keepdims=keepdims)
+            return _np.add.reduce(x, axis=axis, keepdims=keepdims)
+        return _np.sum(x, axis=axis, keepdims=keepdims)
 
     def mean(self, x: Array, axis: int | None = None, keepdims: bool = False) -> Array:
         if type(x) is _ndarray:
             return x.mean(axis=axis, keepdims=keepdims)
-        return np.mean(x, axis=axis, keepdims=keepdims)
+        return _np.mean(x, axis=axis, keepdims=keepdims)
 
     def max(self, x: Array, axis: int | None = None, keepdims: bool = False) -> Array:
         if type(x) is _ndarray:
-            return np.maximum.reduce(x, axis=axis, keepdims=keepdims)
-        return np.max(x, axis=axis, keepdims=keepdims)
+            return _np.maximum.reduce(x, axis=axis, keepdims=keepdims)
+        return _np.max(x, axis=axis, keepdims=keepdims)
 
     def any(self, x: Array, axis: int | None = None) -> Array:
         if type(x) is _ndarray:

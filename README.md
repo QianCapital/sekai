@@ -69,8 +69,8 @@ pip install sekai
 | `pip install "sekai[pettingzoo]"` | PettingZoo interop for multi-agent envs |
 | `pip install "sekai[pandas]"` | building `MarketData` from pandas DataFrames |
 | `pip install "sekai[render]"` | saving frames as GIF / MP4 |
-| `pip install "sekai[torch]"` | the torch backend: batched environments on tensors, with autograd |
 | `pip install "sekai[all]"` | all of the above |
+| `pip install "sekai[torch]"` | the torch backend: batched environments on tensors, with autograd (not in `all`: you choose PyTorch's build) |
 
 sekai itself needs only NumPy and cloudpickle; `import sekai` never imports PyTorch.
 

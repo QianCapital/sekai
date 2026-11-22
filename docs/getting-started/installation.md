@@ -23,7 +23,7 @@ sekai list
 | `sekai[torch]` | `torch` | the [torch backend](../finance/batched.md#backends-and-gradients) of batched environments, and [`sekai.nn`](../guide/training.md) |
 | `sekai[pettingzoo]` | `pettingzoo>=1.24`, `gymnasium` | [`to_pettingzoo()` / `from_pettingzoo()`](../guide/multi-agent.md) for multi-agent libraries |
 | `sekai[pandas]` | `pandas>=1.5` | [`MarketData.from_pandas()` / `from_long()`](../finance/data.md) |
-| `sekai[all]` | `gymnasium`, `pettingzoo`, `pandas` and `render` extras | everything at runtime |
+| `sekai[all]` | `gymnasium`, `pettingzoo`, `pandas` and `render` extras | everything at runtime except `torch`, whose build (CPU, CUDA) is yours to choose |
 | `sekai[test]` | `pytest`, `pytest-cov`, `gymnasium`, `pettingzoo`, `pandas`, `pillow` | running the test suite |
 | `sekai[docs]` | `mkdocs-material`, `mkdocstrings[python]` | building this site |
 | `sekai[dev]` | `test` + `docs` + `mypy`, `ruff`, `pre-commit`, `build`, `twine` | contributing |

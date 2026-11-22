@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import pickle
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -88,6 +89,7 @@ def test_arrays_are_copied_unless_shared_on_purpose(tmp_path: Path) -> None:
     np.save(tmp_path / "p.npy", np.full((10, 2), 100.0))
     mapped = np.load(tmp_path / "p.npy", mmap_mode="r")
     copied = MarketData(mapped, fields={"x": mapped}, exogenous={"e": mapped[:, 0]})
+    del mapped  # (Windows can't rewrite a file while it is mapped)
     np.save(tmp_path / "p.npy", np.full((10, 2), 200.0))  # the caller rewrites the file
     assert copied.prices[0, 0] == copied.field("x")[0, 0] == 100.0
     assert type(copied.prices) is np.ndarray
@@ -167,10 +169,17 @@ def test_memory_mapped_data_in_environments(tmp_path: Path) -> None:
 
 
 def test_save_over_its_own_source(tmp_path: Path) -> None:
-    """Saving onto the directory the data is mapped from replaces it safely."""
+    """Saving onto the directory the data is mapped from replaces it safely (Windows,
+    which can't rename files in use, refuses and leaves the directory as it was)."""
     root = make().save(tmp_path / "d")
     loaded = MarketData.load(root)
     before = np.array(loaded.prices)
+    if sys.platform == "win32":
+        with pytest.raises(OSError, match="memory-mapped"):
+            loaded.save(root, overwrite=True)
+        same(MarketData.load(root), loaded)
+        assert [p.name for p in tmp_path.iterdir()] == ["d"]
+        return
     loaded.save(root, overwrite=True)
     np.testing.assert_array_equal(loaded.prices, before)  # still reads its (old) files
     again = MarketData.load(root)
@@ -219,7 +228,10 @@ def test_save_keeps_other_files_and_links(tmp_path: Path) -> None:
     make(dated=False).save(root, overwrite=True)
     assert (root / "notes.txt").read_text() == "mine"
     link = tmp_path / "link"
-    link.symlink_to(root, target_is_directory=True)
+    try:
+        link.symlink_to(root, target_is_directory=True)
+    except OSError:  # Windows, without the privilege to make links
+        pytest.skip("can't create symbolic links here")
     make().save(link, overwrite=True)
     assert link.is_symlink() and (link / "notes.txt").read_text() == "mine"
     assert MarketData.load(link).n_steps == make().n_steps
@@ -240,6 +252,9 @@ def test_save_under_a_read_only_parent(tmp_path: Path) -> None:
         parent.chmod(0o755)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows can't replace a save while it is memory-mapped"
+)
 def test_data_mapped_from_a_replaced_save_still_pickles(tmp_path: Path) -> None:
     root = make().save(tmp_path / "d")
     loaded = MarketData.load(root)

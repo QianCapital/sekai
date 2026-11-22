@@ -1196,7 +1196,8 @@ def _new_market_data() -> MarketData:
 
 
 def _saved_id(directory: str) -> str | None:
-    """The save id in `directory`'s metadata (None if it has none or can't be read)."""
+    """The save id in `directory`'s metadata (None if it has none, "<unreadable>" if the
+    metadata can't be read)."""
     try:
         meta = json.loads((Path(directory) / "metadata.json").read_text())
     except (OSError, ValueError):

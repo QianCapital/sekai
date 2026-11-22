@@ -608,7 +608,9 @@ class RiskLimits:
         hits: list[tuple[str, str]] = []
         unknown = ~np.isfinite(t) & ~fixed
         if unknown.any():
-            names = [assets[i] if assets is not None else i for i in np.flatnonzero(unknown)]
+            names = [
+                assets[i] if assets is not None else i for i in np.flatnonzero(unknown).tolist()
+            ]
             hits.append(
                 ("non_finite_target", f"target not finite for {names}: kept the current weight")
             )
