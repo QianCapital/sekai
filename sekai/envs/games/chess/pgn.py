@@ -44,8 +44,12 @@ def to_pgn(
             the standard one.
         result: `"1-0"`, `"0-1"`, `"1/2-1/2"` or `"*"` (unfinished).
         headers: Further tags (`{"Termination": "checkmate"}`), written after the roster.
-        white, black, event, site, round: The roster's names (`"?"` when unknown).
+        white: White's name (`"?"`, as for every roster tag, when unknown).
+        black: Black's name.
+        event: The event's name.
+        site: Where the game was played.
         date: A `datetime.date` or a PGN date string (default: unknown, `"????.??.??"`).
+        round: The round.
 
     Raises:
         ValueError: If a move is not legal in its position.

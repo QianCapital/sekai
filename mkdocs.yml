@@ -133,6 +133,7 @@ nav:
       - Registry: guide/registry.md
       - Async environments: guide/async.md
       - Multi-agent: guide/multi-agent.md
+      - Self-play and search: guide/games.md
       - Rendering: guide/rendering.md
       - Episode statistics: guide/statistics.md
       - Checking environments: guide/checking.md
@@ -151,6 +152,7 @@ nav:
       - Catalog: environments/index.md
       - Classic control: environments/classic-control.md
       - Finance: environments/finance.md
+      - Strategy games: environments/games.md
   - API reference:
       - Overview: api/index.md
       - Core: api/core.md

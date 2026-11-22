@@ -141,6 +141,55 @@ can draw several environments at once, keeping a history for each.
 `LimitOrderBookMarket` is multi-agent, and `RecordFrames` wraps single-agent environments
 only, so call `renderer.render(env)` after each step yourself.
 
+### Strategy games
+
+Every [strategy game](../environments/games.md) has an RGB renderer that draws the current
+position, and a text renderer. A frame has a header with the game's name and its status
+(whose turn it is, the check, the result and how it came about), then the board between a
+strip for each player (their name and colour, the material they have captured, a dot on
+the side to move), or the card table with its seats.
+
+| Renderer | Draws | Shows |
+|---|---|---|
+| `ChessRenderer` | `Chess-v0` | cream and green squares, Colin M.L. Burnett's pieces, the last move tinted gold, a red glow under a king in check, coordinates in the edge squares |
+| `GoRenderer` | `Go9x9-v0`, `Go13x13-v0`, `Go19x19-v0` | a wooden board with its grain, shaded stones, star points and coordinates, the last stone ringed, and at the end the territory and the stones counted as dead |
+| `XiangqiRenderer` | `Xiangqi-v0` | the board with its palaces, river (楚河 漢界) and file numbers, round pieces with their characters, the last move and a general in check |
+| `HoldemRenderer` | `HeadsUpHoldem-v0` | the felt table: board cards, the pot, both seats with their cards, stacks, bets, last actions and the dealer button, and the winning hand at showdown |
+| `BlackjackRenderer` | `Blackjack-v0` | the table: the dealer's cards (the hole card face down until revealed), the seat's hands, totals and outcomes, the bet, and a gauge of the shoe with the count |
+
+They take `theme="dark"` (the default) or `"light"`, `header=False` to leave the header
+out, and `names` to name the players (`{"white": "Agent", "black": "Random"}`; sides
+without a name show their colour). The board renderers take `size=480`, the board's
+width in pixels, and `strips=False` to leave out the player strips; `ChessRenderer` and
+`XiangqiRenderer` also take `orientation` (a colour, or `"mover"` to keep the side to move
+at the bottom, as the network sees the board), and `GoRenderer` takes `perspective`, the
+colour whose strip is at the bottom. The card tables take `width=640`, and
+`BlackjackRenderer` names seats rather than colours (`names="Agent"`, or one name per
+seat of a multi-seat `BlackjackTable`, which it draws too). Drawing
+the board's wood, shadows and grid happens once per layout and is cached, so a frame takes
+a few milliseconds after the first. The poker renderer shows both hands by default, as a
+spectator of two agents would see them; `perspective` (a seat, `0`/`"p1"` by default) is
+the seat at the bottom, and `reveal="perspective"` hides the other seat's cards until the
+hand is over.
+
+```python
+import sekai
+from sekai.envs.games import ChessRenderer, ChessTextRenderer
+from sekai.rendering import RecordFrames
+
+env = RecordFrames(sekai.make("Chess-v0"), ChessRenderer(orientation="white"))
+result = env.reset(seed=0)
+while not result.done:
+    result = env.step(env.action_space.sample(mask=result.info["legal_action_mask"]))
+env.save("chess.gif")
+print(ChessTextRenderer().render(env))
+```
+
+The pieces are Colin M.L. Burnett's chess set (3-clause BSD licence) and the xiangqi
+characters come from Noto Serif CJK TC (SIL Open Font License); both ship with sekai as
+small images resampled to the size a frame needs (`tools/build_game_assets.py` builds
+them).
+
 ## Recording frames
 
 `RecordFrames` (in `sekai.rendering`) calls a renderer after every `reset()` and `step()`

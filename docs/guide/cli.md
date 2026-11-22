@@ -28,7 +28,7 @@ options:
 | `sekai list [--namespace NS]` | list registered IDs with their time limit and entry point (`--namespace ""` for IDs without one) |
 | `sekai info ID` | print the spec, spaces, metadata and the wrapper stack `make()` builds |
 | `sekai check ID [--steps N] [--determinism] [--strict]` | run [`check_env`](checking.md) (500 steps by default) |
-| `sekai bench ID [--steps N] [--num-envs N] [--mode auto\|native\|sync\|async\|proc] [--workers N] [--seed S]` | time random-action steps |
+| `sekai bench ID [--steps N] [--num-envs N] [--mode auto\|native\|sync\|async\|proc] [--workers N] [--seed S]` | time random-action steps (legal ones where a mask says which) |
 | `sekai --version` | print the installed version |
 
 ## list
@@ -86,7 +86,11 @@ error: Environment 'CartPol-v1' not found in registry. Did you mean: 'CartPole-v
 ## bench
 
 `bench` times `--steps` calls of `step()` with random actions after a short warm-up, resetting
-finished episodes. With `--num-envs` above 1 (or an explicit `--mode` other than `sync`) it
+finished episodes. For an environment with discrete actions and an
+[action mask](training.md#action-masks-maskableppo), such as the
+[strategy games](../environments/games.md), the actions are drawn from the legal ones and
+the output says `legal actions`; other masks mark components that must stay at zero, which
+the environments enforce themselves, so their actions are drawn from the whole space. With `--num-envs` above 1 (or an explicit `--mode` other than `sync`) it
 builds a vector env with [`make_vec`](vector.md), and each timed call steps every sub-env, so
 the reported total is `steps × num_envs`. The default `--mode auto` uses the environment's
 [native vector implementation](vector.md#native-vector-environments) when it has one (marked
@@ -108,6 +112,8 @@ $ sekai bench Portfolio-v0 --num-envs 1024 --mode sync --steps 20
 Portfolio-v0 [SyncVecEnv x1024]: 20,480 env steps in 0.42s = 48,355 steps/s
 $ sekai bench Portfolio-v0 --num-envs 16 --mode proc --workers 4 --steps 1000
 Portfolio-v0 [ProcVecEnv x16]: 16,000 env steps in 0.70s = 22,769 steps/s
+$ sekai bench Go9x9-v0
+Go9x9-v0 [single env, legal actions]: 10,000 env steps in 0.19s = 52,178 steps/s
 ```
 
 For simulators that vectorise, the native implementation is fastest by far. Among the

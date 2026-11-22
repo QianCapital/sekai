@@ -6,6 +6,53 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+**Strategy games** (`sekai.envs.games`)
+
+- Five classic games of strategy, built the way AlphaZero learned its games: `Chess-v0`
+  (and `ChessVsRandom-v0`), `Go9x9-v0`, `Go13x13-v0` and `Go19x19-v0`, `Xiangqi-v0`,
+  `HeadsUpHoldem-v0` (one hand of heads-up no-limit Texas hold'em) and `Blackjack-v0` (a
+  round at a six-deck table whose shoe carries over between episodes). The two-player games
+  are played from both sides by the caller: the player to act sees the game from its side
+  (AlphaZero's 119 planes for chess, AlphaGo Zero's 17 for go, 131 for xiangqi, 125 slots
+  of public and own information in poker), the legal actions come as an `int8` mask in
+  `info["legal_action_mask"]` and as `env.action_mask()`, and rewards come at the end of
+  the game for the player who just moved. Chess, go and xiangqi have `clone()` for tree
+  search. `sekai.envs.games` is imported only when a game is first made or accessed, so
+  `import sekai` builds none of their tables.
+- Rules engines with their notation: a native chess engine (`chess.Board`, `Move`; legal
+  moves, FEN, SAN, every draw rule; no python-chess, which is GPL-3.0) that matches
+  python-chess's rules where implementations differ and the published perft counts; PGN
+  export; an incremental go board with Zobrist hashing, positional superko, area scoring,
+  dead-stone estimates and SGF export; a xiangqi engine with WXF and Chinese notation; a
+  hold'em dealer with exact pot accounting, a 5-to-7-card hand evaluator and
+  PokerStars-style hand histories; a blackjack table, shoe and `Rules`.
+- `OpponentWrapper` plays one side of a two-player game with a fixed policy (anything with
+  `act(observation, info)`; `RandomPolicy` by default), so a game becomes a single-agent
+  environment; the opponent keeps acting until it is the agent's turn again, as poker
+  needs, and a game it ends before the agent's first move (a fold from the small blind) is
+  dealt again, with the agent's rewards from the skipped games in
+  `info["skipped_rewards"]`.
+- Renderers for every game (`ChessRenderer`, `GoRenderer`, `XiangqiRenderer`,
+  `HoldemRenderer`, `BlackjackRenderer`), with dark and light themes, player strips, the
+  last move, checks, territory and showdowns, and text
+  renderers for terminals. The chess pieces are Colin M.L. Burnett's (3-clause BSD) and the
+  xiangqi characters come from Noto Serif CJK TC (OFL); `tools/build_game_assets.py`
+  rebuilds both. The licence expression gains `BSD-3-Clause`.
+- `examples/games_search.py` (PUCT tree search on any board game with nothing but the
+  environment) and `examples/render_games.py` (the documentation's animations). New pages:
+  [Strategy games](https://sekai.qiancapital.com/environments/games/) and
+  [Self-play and search](https://sekai.qiancapital.com/guide/games/).
+
+### Changed
+
+- `sekai bench` draws its random actions from the legal ones for environments with discrete
+  actions and an action mask, such as the games (it stopped at their first illegal move);
+  other environments are sampled as before, so their documented throughputs still apply.
+- `Canvas.clear()`, and so every new canvas, is about 70 times faster (0.9 ms to 0.01 ms
+  for a 480 × 650 frame), with the same pixels.
+
 ## [0.3.0] - 2026-11-22
 
 Batched and differentiable market environments, tools for research validity and long runs,
