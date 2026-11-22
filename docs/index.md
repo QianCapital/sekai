@@ -28,8 +28,10 @@ outside the environment, and typed episode statistics. Its financial markets too
 (point-in-time market data, simulators, costs, rewards, metrics and a limit order book)
 powers environments for trading, portfolio allocation over changing universes, market
 making, optimal execution and order-book markets. It ships the classic-control benchmarks
-too (dynamics bit-identical to gymnasium), and two-way gymnasium and PettingZoo bridges mean
-Stable-Baselines3, CleanRL, RLlib and multi-agent libraries work out of the box.
+too (dynamics bit-identical to gymnasium) and classic strategy games (chess, go, xiangqi,
+heads-up hold'em and blackjack, with the encodings of AlphaZero), and two-way gymnasium and
+PettingZoo bridges mean Stable-Baselines3, CleanRL, RLlib and multi-agent libraries work out
+of the box.
 
 </div>
 
@@ -130,6 +132,16 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
     simulators, cost and impact models, rewards and performance metrics.
 
     [:octicons-arrow-right-24: Financial Markets toolkit](finance/index.md)
+
+-   :material-chess-knight:{ .lg .middle } **Strategy games**
+
+    ---
+
+    Chess, go, xiangqi, heads-up no-limit hold'em and blackjack, for self-play and tree
+    search: the player to act sees the game from its side, legal moves come as a mask, and
+    the board games clone cheaply.
+
+    [:octicons-arrow-right-24: Strategy games](environments/games.md)
 
 -   :material-swap-horizontal:{ .lg .middle } **gymnasium both ways**
 

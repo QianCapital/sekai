@@ -7,11 +7,19 @@ name = "sekai"
 dynamic = ["version"]
 description = "A modern, flexible RL environment framework for complex and financial market environments"
 readme = "README.md"
-# The glyph atlases in sekai/rendering/fonts are SIL Open Font License data (BDO Grotesk,
-# Hedvig Letters Serif). The Qian Capital logo in sekai/rendering/assets is under neither
-# licence: TRADEMARKS says what it may be used for.
-license = "Apache-2.0 AND OFL-1.1 AND LicenseRef-Qian-Capital-Trademarks"
-license-files = ["LICENSE", "sekai/rendering/fonts/OFL.txt", "TRADEMARKS"]
+# The glyph atlases in sekai/rendering/fonts and sekai/envs/games/assets are SIL Open Font
+# License data (BDO Grotesk, Hedvig Letters Serif, Noto Serif CJK). The chess pieces in
+# sekai/envs/games/assets are Colin M.L. Burnett's, under the 3-clause BSD licence. The
+# Qian Capital logo in sekai/rendering/assets is under none of these licences: TRADEMARKS
+# says what it may be used for.
+license = "Apache-2.0 AND OFL-1.1 AND BSD-3-Clause AND LicenseRef-Qian-Capital-Trademarks"
+license-files = [
+    "LICENSE",
+    "sekai/rendering/fonts/OFL.txt",
+    "sekai/envs/games/assets/OFL.txt",
+    "sekai/envs/games/assets/LICENSE-chess-pieces.txt",
+    "TRADEMARKS",
+]
 authors = [{ name = "Qian Capital", email = "opensource@qiancapital.com" }]
 requires-python = ">=3.10"
 keywords = [
@@ -101,6 +109,8 @@ sekai = [
     "rendering/fonts/*.npz",
     "rendering/fonts/OFL.txt",
     "rendering/assets/*.npz",
+    "envs/games/assets/*.npz",
+    "envs/games/assets/*.txt",
 ]
 
 # ---------------------------------------------------------------------------

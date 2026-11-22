@@ -27,9 +27,10 @@ successor to [gym](https://github.com/openai/gym) / [gymnasium](https://github.c
 It keeps the API you know (`make`, `reset`, `step`, spaces, wrappers, vector envs) and fixes
 what gets painful at scale: structured return types instead of tuples, async-native
 environments, built-in multi-agent support, typed episode statistics, and rendering that
-lives outside the environment. It ships with gymnasium-identical classic control benchmarks
-and a suite of financial-market environments, and it plugs straight into the gymnasium
-ecosystem (Stable-Baselines3, CleanRL, RLlib).
+lives outside the environment. It ships with gymnasium-identical classic control benchmarks,
+a suite of financial-market environments and classic strategy games (chess, go, xiangqi,
+poker, blackjack), and it plugs straight into the gymnasium ecosystem (Stable-Baselines3,
+CleanRL, RLlib).
 
 ```python
 import sekai
@@ -50,6 +51,7 @@ while not result.done:
 - **Batched and differentiable markets.** `Market-v1` is one implementation that runs as a single env, a native vector env, or a batch of torch tensors on a GPU whose rewards are differentiable in the actions, so policies can be trained by backpropagating through the market. Explicit execution timing (no fills at the close the agent just observed), hard constraints by projection (gross and per-name caps, dollar and factor neutrality), holding costs, factor risk models, and scenarios from your own generative models.
 - **A financial markets toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
 - **Built-in environments.** Classic control with dynamics bit-for-bit identical to gymnasium; trading, portfolio, dynamic-universe, market-making, optimal-execution and order-book environments (single- and multi-agent), with closed-form baselines.
+- **Strategy games.** Chess, go (9×9 to 19×19), xiangqi, heads-up no-limit hold'em and blackjack, with the encodings of AlphaZero: the player to act sees the game from its side, legal moves come as a mask, rewards come at the end for the player who just moved, and the board games clone cheaply for tree search. Each game comes with its rules engine (chess's is native, with no GPL dependency), its notation (PGN, SGF, WXF, hand histories), and an RGB and a text renderer.
 - **From backtest to paper and live trading.** `LiveMarketEnv` gives a trained policy the same observations and actions over a data feed and a broker you plug in; replaying history through it with the paper broker reproduces `Market-v1` exactly. Hard risk limits (position, gross, net and turnover caps, a drawdown kill switch) sit between any policy and any broker.
 - **Honest evaluation.** Reproducible benchmark tasks with classical baselines, and the statistics that account for how many things were tried: probabilistic and deflated Sharpe ratios, minimum track-record length, and the probability of backtest overfitting (CSCV).
 - **Renderers for every environment, in NumPy alone.** The financial markets ones draw each episode as a dashboard: prices with positions and trades, equity, allocations, order-book depth with your orders in the queue. They are built from charts (`sekai.rendering.Dashboard`, `sekai.finance.rendering`) that render your own environments as well.
@@ -223,6 +225,11 @@ model.learn(total_timesteps=10_000)
 | `MarketMaking-v0` | Box(2) | Box(2) | Quote bid/ask, manage inventory (Avellaneda–Stoikov) |
 | `OptimalExecution-v0` | Box(3) | Box(1) | Liquidate a large order (Almgren–Chriss) |
 | `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete([6, 6, 3]) | Make markets in an event-driven limit order book |
+| `Chess-v0` | Box(119, 8, 8) | Discrete(4672) | Chess, self-play; `ChessVsRandom-v0` against a random opponent |
+| `Go9x9-v0`, `Go13x13-v0`, `Go19x19-v0` | Box(17, N, N) | Discrete(N² + 1) | Go with area scoring, komi and superko, self-play |
+| `Xiangqi-v0` | Box(131, 10, 9) | Discrete(8100) | Chinese chess, self-play |
+| `HeadsUpHoldem-v0` | Box(125) | Discrete(7) | One hand of heads-up no-limit hold'em, self-play |
+| `Blackjack-v0` | Box(43) | Discrete(9) | A round at a casino table; the shoe carries over, so counting pays |
 
 The classic control environments match gymnasium's dynamics exactly, verified step by step
 in the test suite. The financial markets environments simulate markets by default, and
@@ -248,6 +255,22 @@ The microstructure environments come with their textbook solutions as baselines,
 `OptimalExecution-v0` the Almgren–Chriss schedule scores about -320 bps against -420 bps for
 TWAP, so a learned policy has a clear bar to beat.
 
+The strategy games are played from both sides by the caller, the way AlphaZero trains:
+
+```python
+import sekai
+
+env = sekai.make("Chess-v0")
+result = env.reset(seed=0)
+while not result.done:  # each move is by the player to act, who sees the board from its side
+    result = env.step(env.action_space.sample(mask=result.info["legal_action_mask"]))
+print(result.info["result"], result.info["termination"])
+```
+
+`env.clone()` branches the board games for tree search, and
+`sekai.envs.games.OpponentWrapper` plays one side with a fixed policy for single-agent
+training.
+
 Run `sekai list` to see every registered environment, or browse the
 [environment catalogue](https://sekai.qiancapital.com/environments/).
 
@@ -266,6 +289,7 @@ Run `sekai list` to see every registered environment, or browse the
 | Registry plugins | Entry-point plugins | `register_namespace("qc", loader)` for lazy plugin namespaces |
 | Env checking | Passive checker wraps every env | `check_env()` in your tests; zero overhead in training |
 | Financial Markets | Not in scope | `sekai.finance` toolkit and seven financial markets environments |
+| Board and card games | Toy blackjack | Chess, go, xiangqi, hold'em and blackjack with AlphaZero encodings |
 
 Coming from gymnasium? The [migration guide](https://sekai.qiancapital.com/guide/gymnasium/)
 maps every API, and `sekai.compat` lets you mix both while you move over.
@@ -296,9 +320,12 @@ If you use sekai in research, please cite it using the metadata in
 
 Apache 2.0. See [LICENSE](https://github.com/QianCapital/sekai/blob/master/LICENSE). The
 glyph atlases the renderers draw text with are under the SIL Open Font License
-([OFL.txt](https://github.com/QianCapital/sekai/blob/master/sekai/rendering/fonts/OFL.txt)).
+([OFL.txt](https://github.com/QianCapital/sekai/blob/master/sekai/rendering/fonts/OFL.txt),
+and [for the xiangqi characters](https://github.com/QianCapital/sekai/blob/master/sekai/envs/games/assets/OFL.txt)),
+and the chess pieces are Colin M.L. Burnett's, under the 3-clause BSD licence
+([LICENSE-chess-pieces.txt](https://github.com/QianCapital/sekai/blob/master/sekai/envs/games/assets/LICENSE-chess-pieces.txt)).
 The Qian Capital name and logo, which the financial markets dashboards show, are trademarks
-of Qian Capital and covered by neither licence: see
+of Qian Capital and covered by none of these licences: see
 [TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) for what they may
 be used for.
 

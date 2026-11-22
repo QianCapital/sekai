@@ -29,7 +29,13 @@ def test_check(capsys: pytest.CaptureFixture[str]) -> None:
 def test_bench(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["bench", "CartPole-v1", "--steps", "200"]) == 0
     assert main(["bench", "CartPole-v1", "--steps", "20", "--num-envs", "2"]) == 0
-    assert "steps/s" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "steps/s" in out and "legal actions" not in out
+    # Games reject illegal moves: their random actions come from the action mask.
+    assert main(["bench", "Chess-v0", "--steps", "50"]) == 0
+    assert main(["bench", "Go9x9-v0", "--steps", "20", "--num-envs", "2"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("legal actions") == 2
 
 
 def test_bench_user_errors_exit_cleanly(capsys: pytest.CaptureFixture[str]) -> None:
