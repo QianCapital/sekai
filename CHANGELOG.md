@@ -9,14 +9,17 @@ All notable changes to sekai are documented here. The format follows
 ### Changed
 
 - A torch `BatchMarketEnv` on a GPU makes the host wait for the device once per step, where
-  it made about 12 waits (and about 16 per reset). Reading a value back from a device, and
-  copying host data to it, waits until the device has finished its queued work, so the
-  host could not queue the next work while the device ran. A step now reads back one
-  thing: which lanes finished, together with its checks of the action and of the cost
+  it made about 12 waits (and about 16 per reset), plus 21 for a dollar- or factor-neutral
+  book (`torch.linalg.solve` reads back whether its system was singular, and the default
+  projection solves 21 times). Reading a value back from a device, and copying host data
+  to it, waits until the device has finished its queued work, so the host could not queue
+  the next work while the device ran. A step now reads back one thing: which lanes
+  finished, together with its checks of the action, of its projection and of the cost
   models' inputs. The lanes' counters are kept on the device too, and host scalars become
-  tensors made there. Results are bit-identical, and the errors are the same
-  (`InvalidAction`, a cost model's `ValueError`), still raised before the step changes any
-  state. On the CPU, and with NumPy, a step runs as before.
+  tensors made there. Results and gradients are bit-identical, and the errors are the same
+  (`InvalidAction`, a cost model's `ValueError`, a singular projection's `LinAlgError`),
+  still raised before the step changes any state. On the CPU, and with NumPy, a step runs
+  as before.
 
 ### Added
 

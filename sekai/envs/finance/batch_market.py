@@ -35,20 +35,22 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import functools
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import NDArray
 
 from sekai.backend import Array, Backend, get_backend
+from sekai.backend._base import _Check, _collect_checks
 from sekai.envs.finance._common import check_number
 from sekai.envs.finance.market_env import default_market
 from sekai.error import InvalidAction
 from sekai.finance.account import AccountConfig, settle
 from sekai.finance.actions import ActionContext, ActionMap, LongOnlyScores, TargetWeights
-from sekai.finance.costs import CostModel, HoldingCost, _collect_checks, as_cost_model
+from sekai.finance.costs import CostModel, HoldingCost, as_cost_model
 from sekai.finance.data import MarketData
 from sekai.finance.observations import MarketObservation, MarketView, ObservationBuilder
 from sekai.finance.panel import MarketPanel, ModelScenarios, ScenarioGenerator
@@ -785,12 +787,17 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         shape = (n, *self.action_space.shape)  # type: ignore[misc]
         if tuple(a.shape) != shape:
             raise InvalidAction(actions, self.action_space)
-        # On a device, the checks of the action and of the cost models' inputs are read
-        # back once, with `finished`, before the step changes any state (see `_checkpoint`).
+        # On a device, the checks of the action, of its projection and of the cost models'
+        # inputs are read back once, with `finished`, before the step changes any state
+        # (see `_checkpoint`).
         deferred = self._deferring()
         finite = B.all(B.isfinite(a))
         if not deferred and not B.item(finite):
             raise InvalidAction(actions, self.action_space)
+        checks: list[_Check] = []
+        collect: Callable[[], contextlib.AbstractContextManager[Any]] = (
+            functools.partial(_collect_checks, checks) if deferred else contextlib.nullcontext
+        )
         frozen = self.frozen
         r = self._rows(room=1)  # decision rows; frozen lanes stay inside their window
         nxt = r + 1
@@ -811,13 +818,11 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             if self.action_map.fields
             else None,
         )
-        target = self.action_map(a, ctx)
+        with collect():
+            target = self.action_map(a, ctx)
         w = self._weights
         delisting = valid_now & ~valid_next
-        collect: contextlib.AbstractContextManager[list[tuple[Array, str]]] = (
-            _collect_checks() if deferred else contextlib.nullcontext([])
-        )
-        with B.errstate(), collect as checks:
+        with B.errstate(), collect():
             if self.execution in ("close", "next_close"):
                 held = (
                     target if self.execution == "close" else B.where(valid_now, self._pending, 0.0)
@@ -979,23 +984,24 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         self,
         actions: Any,
         finite: Array,
-        checks: list[tuple[Array, str]],
+        checks: list[_Check],
         finished: Array,
         deferred: bool,
     ) -> None:
         """With deferred checks, read them back in one transfer with `finished` (which the
         base class then uses), and raise the first that failed before the step changes any
-        state: `InvalidAction` for a non-finite action, else the cost model's `ValueError`."""
+        state: `InvalidAction` for a non-finite action, else the error the check would have
+        raised (a cost model's `ValueError`, the `LinAlgError` of a singular projection)."""
         if not deferred:
             return
         B = self.backend
-        failed = B.stack([~finite] + [unpriced for unpriced, _ in checks])
+        failed = B.stack([~finite] + [flag for flag, _ in checks])
         host = B.to_numpy(B.concat([failed, finished]))
         if host[0]:
             raise InvalidAction(actions, self.action_space)
-        for (_, message), unpriced in zip(checks, host[1 : len(checks) + 1]):
-            if unpriced:
-                raise ValueError(message)
+        for (_, error), flag in zip(checks, host[1 : len(checks) + 1]):
+            if flag:
+                raise error()
         self._finished_host = host[len(checks) + 1 :]
 
     def _risk(self, weights: Array, rows: Array) -> tuple[Array, Array | None]:

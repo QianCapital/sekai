@@ -258,6 +258,11 @@ class TorchBackend(Backend):
     def solve(self, a: Array, b: Array) -> Array:
         return torch.linalg.solve(a, b)
 
+    def _solve_unchecked(self, a: Array, b: Array) -> tuple[Array, Array]:
+        # `solve` is `solve_ex` (the same solution and gradient), then a read of `info`.
+        x, info = torch.linalg.solve_ex(a, b)
+        return x, torch.any(info != 0)
+
     def eye(self, n: int, like: Array | None = None) -> Array:
         return torch.eye(n, dtype=_float_dtype(like), device=_device(like))
 

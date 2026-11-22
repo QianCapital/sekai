@@ -27,38 +27,16 @@ when the model is built.
 from __future__ import annotations
 
 import abc
-import contextlib
-import contextvars
+import functools
 import inspect
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from sekai.backend import Array, Backend, backend_and_like
-
-# Checks of model inputs collected instead of raised, as `(failed, message)` with `failed` a
-# 0-d bool array, while a batched env steps on a device (see `_collect_checks`).
-_CHECKS: contextvars.ContextVar[list[tuple[Array, str]] | None] = contextvars.ContextVar(
-    "sekai_cost_checks", default=None
-)
-
-
-@contextlib.contextmanager
-def _collect_checks() -> Iterator[list[tuple[Array, str]]]:
-    """Collect the input checks of the models called inside, instead of raising.
-
-    Reading a check's result back from a device makes the host wait for it, so a
-    batched env on a GPU collects them and reads them all at once, with its own
-    flags, then raises the first that failed (`ValueError(message)`).
-    """
-    checks: list[tuple[Array, str]] = []
-    token = _CHECKS.set(checks)
-    try:
-        yield checks
-    finally:
-        _CHECKS.reset(token)
+from sekai.backend._base import _CHECKS
 
 
 class CostModel(abc.ABC):
@@ -144,7 +122,7 @@ def _fill_from_median(
             f"set an explicit fallback value with {model}(..., {option}=...)."
         )
         if checks is not None:
-            checks.append((unpriced, message))
+            checks.append((unpriced, functools.partial(ValueError, message)))
         elif bool(unpriced):
             raise ValueError(message)
     with B.errstate():

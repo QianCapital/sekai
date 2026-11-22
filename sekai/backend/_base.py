@@ -4,13 +4,39 @@ from __future__ import annotations
 
 import abc
 import contextlib
-from collections.abc import Sequence
+import contextvars
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any, ClassVar
 
 from numpy.typing import NDArray
 
 #: An array of the backend at hand: a `numpy.ndarray` or a `torch.Tensor`.
 Array = Any
+
+# A check collected instead of raised: `(failed, error)`, `failed` a 0-d bool array and
+# `error()` the exception to raise when it is set.
+_Check = tuple[Array, Callable[[], Exception]]
+_CHECKS: contextvars.ContextVar[list[_Check] | None] = contextvars.ContextVar(
+    "sekai_deferred_checks", default=None
+)
+
+
+@contextlib.contextmanager
+def _collect_checks(checks: list[_Check] | None = None) -> Iterator[list[_Check]]:
+    """Collect the input checks of sekai's models called inside (cost models, the
+    neutralisation of constraints) into `checks` (default: a new list), instead of
+    raising.
+
+    Reading a check's result back from a device makes the host wait for it, so a
+    batched env on a GPU collects them and reads them all at once, with its own
+    flags, then raises the first that failed.
+    """
+    checks = [] if checks is None else checks
+    token = _CHECKS.set(checks)
+    try:
+        yield checks
+    finally:
+        _CHECKS.reset(token)
 
 
 class Backend(abc.ABC):
@@ -222,6 +248,12 @@ class Backend(abc.ABC):
     @abc.abstractmethod
     def solve(self, a: Array, b: Array) -> Array:
         """`x` with `a @ x = b`, batched over leading dimensions (`b` is `(..., n, k)`)."""
+
+    def _solve_unchecked(self, a: Array, b: Array) -> tuple[Array, Array]:
+        """`solve(a, b)` and whether some matrix of `a` is singular (a 0-d bool array),
+        without reading that back from a device, as `solve` does to raise. On the host,
+        a singular `a` raises here, as in `solve`."""
+        return self.solve(a, b), self.bools((), False, like=a)
 
     @abc.abstractmethod
     def eye(self, n: int, like: Array | None = None) -> Array: ...

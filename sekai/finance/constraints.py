@@ -41,12 +41,14 @@ Example:
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from sekai.backend import Array, Backend, backend_and_like
+from sekai.backend._base import _CHECKS
 
 
 @dataclass(frozen=True)
@@ -117,8 +119,24 @@ def neutralize(x: Array, columns: Array, *, ridge: float = 1e-4) -> Array:
     c = B.asfloat(columns, like)
     k = c.shape[-1]
     gram = B.einsum("...nk,...nj->...kj", c, c) + ridge * B.eye(k, like=c)
-    coef = B.solve(gram, B.einsum("...nk,...n->...k", c, x)[..., None])[..., 0]
+    rhs = B.einsum("...nk,...n->...k", c, x)[..., None]
+    checks = _CHECKS.get()
+    if checks is None:
+        coef = B.solve(gram, rhs)[..., 0]
+    else:  # a batched env's step on a device: whether `gram` is singular is read later
+        coef, singular = B._solve_unchecked(gram, rhs)
+        checks.append((singular, functools.partial(_solve_error, B, gram, rhs)))
+        coef = coef[..., 0]
     return x - B.einsum("...nk,...k->...n", c, coef)
+
+
+def _solve_error(B: Backend, a: Array, b: Array) -> Exception:
+    """The error `B.solve(a, b)` raises, for an `a` with a singular matrix."""
+    try:
+        B.solve(a, b)
+    except Exception as e:  # whatever the backend raises (torch's LinAlgError)
+        return e
+    return ValueError("The neutralisation's least-squares system is singular.")
 
 
 def constraint_columns(

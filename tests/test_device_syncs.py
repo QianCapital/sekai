@@ -1,11 +1,12 @@
 """A torch BatchMarketEnv on a device reads back from it once per step.
 
-Reading a value on a GPU (`.item()`, `.cpu()`, a Python `if` on a tensor) or copying host
-data to it makes the host wait until the device has finished its queued work. So on a
-device, a step reads back one thing: its finished lanes, together with its checks of the
-action and of the cost models' inputs, and only then changes its state. These tests run
-that path on the CPU (`env._defer = True`), count what would wait on a GPU, and check
-that it gives exactly what the host path gives, errors included.
+Reading a value on a GPU (`.item()`, `.cpu()`, a Python `if` on a tensor, the check of
+`torch.linalg.solve`) or copying host data to it makes the host wait until the device has
+finished its queued work. So on a device, a step reads back one thing: its finished
+lanes, together with its checks of the action, of its projection and of the cost models'
+inputs, and only then changes its state. These tests run that path on the CPU
+(`env._defer = True`), count what would wait on a GPU, and check that it gives exactly
+what the host path gives, errors included.
 """
 
 from __future__ import annotations
@@ -20,19 +21,22 @@ import numpy as np
 import pytest
 
 from sekai.backend import get_backend
+from sekai.backend._base import _collect_checks
 from sekai.core.snapshot import Snapshot
 from sekai.envs.finance import BatchMarketEnv
 from sekai.error import InvalidAction
 from sekai.finance import (
     BorrowFee,
+    Constraints,
     FactorRiskModel,
     PortfolioVariance,
     ProportionalCost,
+    ScoresLeverage,
     SimpleReturn,
     SpreadCost,
     SquareRootImpact,
 )
-from sekai.finance.costs import _collect_checks
+from sekai.finance.constraints import neutralize
 from tests.test_envs_market_v1 import DATA, GaussianScenarios
 
 torch = pytest.importorskip("torch")
@@ -70,6 +74,19 @@ CONFIGS: dict[str, dict[str, Any]] = {
         initial_margin=0.5,
         maintenance_margin=0.48,
         execution="next_open",
+    ),
+    "neutral": dict(  # every step solves for the neutral book 21 times
+        data=DATA,
+        lookback=6,
+        episode_length=20,
+        allow_short=True,
+        action=ScoresLeverage(
+            Constraints(
+                max_gross=2.0, max_position=0.3, dollar_neutral=True, neutral_to=("loadings",)
+            )
+        ),
+        transaction_cost=SpreadCost(),
+        max_drawdown=0.08,
     ),
     "scenarios": dict(
         scenarios=GaussianScenarios(),
@@ -141,8 +158,8 @@ def test_the_device_path_gives_what_the_host_path_gives(
 
 class Waits(python_dispatch.TorchDispatchMode):  # type: ignore[misc]
     """Counts, while entered, what would make the host wait for a GPU: values read back
-    ("read"), ops whose output size depends on the data ("shape") and host data made
-    into tensors ("upload")."""
+    ("read", `torch.linalg.solve`'s check of its matrices included), ops whose output size
+    depends on the data ("shape") and host data made into tensors ("upload")."""
 
     SHAPE_OPS = frozenset(
         {"nonzero", "masked_select", "_unique2", "unique_dim", "unique_consecutive"}
@@ -182,7 +199,7 @@ class Waits(python_dispatch.TorchDispatchMode):  # type: ignore[misc]
 
     def __torch_dispatch__(self, func: Any, types: Any, args: Any = (), kwargs: Any = None) -> Any:
         name = func.overloadpacket.__name__
-        if name == "_local_scalar_dense":
+        if name in ("_local_scalar_dense", "_linalg_check_errors"):
             self.count["read"] += 1
         elif name in self.SHAPE_OPS:
             self.count["shape"] += 1
@@ -214,7 +231,7 @@ def test_a_step_on_a_device_reads_back_once(name: str, monkeypatch: pytest.Monke
     assert resets > 0
 
 
-@pytest.mark.parametrize("name", ["costs", "dynamic", "margin"])
+@pytest.mark.parametrize("name", ["costs", "dynamic", "margin", "neutral"])
 def test_a_reset_on_a_device_uploads_only_the_new_starts(
     name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -311,7 +328,60 @@ def test_collected_cost_checks_give_the_same_costs_and_errors(backend: str) -> N
         model(unpriced, spread=spread)
     with _collect_checks() as checks:
         model(unpriced, spread=spread)
-    assert bool(checks[0][0]) and checks[0][1] == str(error.value)
+    raised = checks[0][1]()
+    assert bool(checks[0][0]) and type(raised) is ValueError and str(raised) == str(error.value)
+
+
+def lanes_state(env: BatchMarketEnv) -> dict[str, Any]:
+    """Copies of the env's arrays: what a step that raises must leave as it was."""
+    return {
+        k: v.clone() if isinstance(v, torch.Tensor) else v.copy()
+        for k, v in vars(env).items()
+        if isinstance(v, (torch.Tensor, np.ndarray))
+    }
+
+
+def test_a_singular_projection_raises_solves_error_before_the_step_changes_anything() -> None:
+    # Two copies of one large exposure: the ridge is lost to rounding, so the
+    # neutralisation's least-squares system is singular.
+    twins = DATA.with_fields(twins=np.full((*DATA.prices.shape, 2), 2.0**40))
+    rules = Constraints(max_gross=2.0, neutral_to=("twins",))
+    errors = []
+    for device_path in (False, True):
+        env = make("neutral", device_path=device_path, data=twins, action=ScoresLeverage(rules))
+        env.reset(seed=0)
+        before = lanes_state(env)
+        with pytest.raises(torch.linalg.LinAlgError, match="singular") as error:
+            env.step(actions(env, 1)[0])
+        same(lanes_state(env), before)
+        errors.append(str(error.value))
+    assert errors[0] == errors[1]
+
+
+@pytest.mark.parametrize("backend", ["numpy", "torch"])
+def test_collected_solve_checks_give_the_same_book_and_error(backend: str) -> None:
+    B = get_backend(backend)
+    like = torch.zeros((), dtype=torch.float64) if backend == "torch" else None
+    rng = np.random.default_rng(0)
+    x = B.asfloat(rng.normal(size=(4, 6)), like)
+    columns = B.asfloat(rng.normal(size=(4, 6, 2)), like)
+    eager = neutralize(x, columns)
+    with _collect_checks() as checks:
+        collected = neutralize(x, columns)
+    same(collected, eager)
+    assert len(checks) == 1 and not bool(checks[0][0])
+    twins = B.asfloat(np.full((4, 6, 2), 2.0**40), like)
+    with pytest.raises(Exception, match=r"(?i)singular") as error:
+        neutralize(x, twins)
+    if backend == "numpy":  # on the host, reading the check costs nothing: it raises
+        with _collect_checks(), pytest.raises(type(error.value)):
+            neutralize(x, twins)
+        return
+    with _collect_checks() as checks:
+        neutralize(x, twins)
+    raised = checks[0][1]()
+    assert bool(checks[0][0]) and type(raised) is type(error.value)
+    assert str(raised) == str(error.value)
 
 
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16", "float32", "float64"])
