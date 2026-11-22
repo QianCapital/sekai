@@ -15,6 +15,7 @@ import collections
 import copy
 import math
 import pickle
+import warnings
 from typing import Any
 
 import numpy as np
@@ -214,9 +215,15 @@ class Waits(python_dispatch.TorchDispatchMode):  # type: ignore[misc]
 def test_a_step_on_a_device_reads_back_once(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     env = make(name, device_path=True)
     env.reset(seed=0)
+    check_one_read_per_step(env, actions(env, 30), monkeypatch)
+
+
+def check_one_read_per_step(
+    env: BatchMarketEnv, steps: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     waits = Waits(monkeypatch)
     resets = 0
-    for a in actions(env, 30):
+    for a in steps:
         with waits:
             result = env.step(a)
         expected = {"read": 1}
@@ -418,3 +425,138 @@ def test_scalars_become_tensors_made_on_the_device(
     assert all(f.dtype == torch.bool for f in flags)
     assert [int(i) for i in ints] == [0, -7, 2**40, 9] and all(i.dtype == torch.int64 for i in ints)
     assert B.on_host(like) and get_backend("numpy").on_host(np.zeros(3))
+
+
+# On a real accelerator (skipped without one): the device path, chosen by the env itself.
+
+ACCELERATORS = [
+    device
+    for device, available in (
+        ("cuda", torch.cuda.is_available()),
+        ("mps", torch.backends.mps.is_available()),
+    )
+    if available
+]
+on_accelerators = pytest.mark.parametrize(
+    "device", ACCELERATORS or [pytest.param("none", marks=pytest.mark.skip("no CUDA or MPS"))]
+)
+
+
+def on(device: str, name: str, **kwargs: Any) -> BatchMarketEnv:
+    """The env `name` on `device`, in float64 where the device has it (MPS has not)."""
+    if name == "neutral":
+        try:  # (a device without torch.linalg.solve can't neutralise a book, in 0.3.0 either)
+            torch.linalg.solve_ex(torch.eye(2, device=device), torch.ones(2, 1, device=device))
+        except (NotImplementedError, RuntimeError) as e:
+            pytest.skip(f"torch.linalg.solve_ex on {device}: {e}")
+    dtype = torch.float32 if device == "mps" else torch.float64
+    kwargs = {**CONFIGS[name], **kwargs}
+    env = BatchMarketEnv(N_ENVS, backend="torch", device=device, dtype=dtype, **kwargs)
+    assert env._deferring()
+    return env
+
+
+def moved(device: str, steps: list[Any]) -> list[Any]:
+    return [a.to(device) for a in steps]
+
+
+def close(a: Any, b: Any, **tolerance: float) -> None:
+    """`b` (on a device) is `a` (on the CPU) to rounding."""
+    if isinstance(a, dict):
+        assert a.keys() == b.keys()
+        for k in a:
+            close(a[k], b[k], **tolerance)
+    elif a is None or b is None:
+        assert a is b
+    elif isinstance(a, torch.Tensor):
+        b = b.cpu()
+        if a.is_floating_point():
+            torch.testing.assert_close(b, a, equal_nan=True, **tolerance)
+        else:
+            assert torch.equal(a, b)
+    else:
+        np.testing.assert_array_equal(a, b)
+
+
+@on_accelerators
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_on_an_accelerator_a_step_reads_back_once(
+    device: str, name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = on(device, name)
+    env.reset(seed=0)
+    check_one_read_per_step(env, moved(device, actions(env, 30)), monkeypatch)
+    if device != "cuda":
+        return
+    # CUDA's own count of the operations that synchronise with the host: one per step.
+    env.reset(seed=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        torch.cuda.set_sync_debug_mode("warn")
+        try:
+            for a in moved(device, actions(env, 12, seed=1)):
+                caught.clear()
+                result = env.step(a)
+                syncs = [w for w in caught if "synchronizing CUDA operation" in str(w.message)]
+                if result.reset_indices is None:
+                    assert len(syncs) == 1
+        finally:
+            torch.cuda.set_sync_debug_mode(0)
+
+
+@on_accelerators
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_on_an_accelerator_results_are_the_cpus_to_rounding(device: str, name: str) -> None:
+    env = on(device, name)
+    cpu = BatchMarketEnv(N_ENVS, backend="torch", dtype=env._like.dtype, **CONFIGS[name])
+    float32 = env._like.dtype == torch.float32
+    tolerance = dict(rtol=1e-3, atol=1e-5) if float32 else dict(rtol=1e-7, atol=1e-10)
+    steps = actions(cpu, 25)
+    for x, y in zip(rollout(cpu, steps), rollout(env, moved(device, steps)), strict=True):
+        close(x, y, **tolerance)
+
+
+@on_accelerators
+def test_on_an_accelerator_errors_come_before_the_step_changes_anything(device: str) -> None:
+    env = on(device, "costs")
+    env.reset(seed=0)
+    first, second = moved(device, actions(env, 2))
+    env.step(first)
+    twin = copy.deepcopy(env)
+    bad = second.clone()
+    bad[3, 2] = float("nan")
+    with pytest.raises(InvalidAction):
+        env.step(bad)
+    same(vars(env.step(second)), vars(twin.step(second)))
+    no_spreads = DATA.with_fields(spread=np.full(np.shape(DATA.field("spread")), np.nan))
+    env = on(device, "costs", data=no_spreads, execution="close")
+    env.reset(seed=0)
+    before = lanes_state(env)
+    with pytest.raises(ValueError, match="SpreadCost has no valid 'spread'"):
+        env.step(moved(device, actions(env, 1))[0])
+    same(lanes_state(env), before)
+
+
+@on_accelerators
+def test_on_an_accelerator_a_singular_projection_raises_solves_error(device: str) -> None:
+    twins = DATA.with_fields(twins=np.full((*DATA.prices.shape, 2), 2.0**40))
+    rules = Constraints(max_gross=2.0, neutral_to=("twins",))
+    env = on(device, "neutral", data=twins, action=ScoresLeverage(rules))
+    env.reset(seed=0)
+    before = lanes_state(env)
+    with pytest.raises(torch.linalg.LinAlgError, match="singular"):
+        env.step(moved(device, actions(env, 1))[0])
+    same(lanes_state(env), before)
+
+
+@on_accelerators
+def test_on_an_accelerator_rewards_are_differentiable(device: str) -> None:
+    env = on(device, "costs")
+    env.differentiable = True
+    env.reset(seed=0)
+    shape, dtype = env.action_space.shape, env._like.dtype
+    theta = torch.zeros(shape, dtype=dtype, device=device, requires_grad=True)
+    total = sum(env.step(theta + a).rewards.sum() for a in moved(device, actions(env, 8)))
+    (grad,) = torch.autograd.grad(total, theta)
+    assert grad.device.type == device
+    assert bool(torch.isfinite(grad).all()) and bool(grad.abs().sum() > 0)
