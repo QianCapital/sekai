@@ -162,11 +162,7 @@ class XiangqiEnv(Env[Observation, np.intp]):
     are rebuilt exactly as if the moves had been stepped).
     """
 
-    metadata: ClassVar[dict[str, Any]] = {
-        "name": ENV_ID,
-        "render_modes": ["ansi"],
-        "render_fps": 2,
-    }
+    metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
     sides: ClassVar[tuple[str, str]] = ("red", "black")
     """The sides, Red first (Red moves first)."""
     players: ClassVar[tuple[str, str]] = ("red", "black")

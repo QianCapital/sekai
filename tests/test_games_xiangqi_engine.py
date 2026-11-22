@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
 
@@ -39,10 +37,7 @@ def test_start_position_perft(depth: int, nodes: int) -> None:
     assert Position().perft(depth) == nodes
 
 
-@pytest.mark.skipif(
-    not os.environ.get("SEKAI_SLOW_TESTS"), reason="slow (a few seconds): set SEKAI_SLOW_TESTS=1"
-)
-def test_start_position_perft_depth_4() -> None:
+def test_start_position_perft_depth_4() -> None:  # 3.3 million leaves, under a second
     assert Position().perft(4) == 3_290_240
 
 

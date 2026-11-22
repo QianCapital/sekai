@@ -49,7 +49,6 @@ from sekai.envs.games.xiangqi.env import XiangqiEnv
 from sekai.rendering.renderer import BaseRenderer
 from sekai.rendering.text import face
 from sekai.rendering.theme import ColorLike, rgb
-from sekai.wrappers.time_limit import TimeLimit
 
 Orientation = Literal["red", "black", "mover"]
 
@@ -300,7 +299,6 @@ class XiangqiRenderer(BoardRenderer):
         super().__init__(size, theme=theme, header=header, strips=strips, names=names)
         self.orientation: Orientation = orientation
         self._sprites: dict[tuple[Any, ...], _Sprite] = {}
-        self._at_move_limit = False
 
     # -- layout -----------------------------------------------------------------------
 
@@ -330,7 +328,7 @@ class XiangqiRenderer(BoardRenderer):
         return self.orientation
 
     def turn(self, env: Any) -> str | None:
-        return None if env.done else str(env.turn)
+        return None if env.done or self.time_limit_reached else str(env.turn)
 
     def static_key(self, env: Any) -> Any:
         return self.bottom_side(env)
@@ -345,7 +343,7 @@ class XiangqiRenderer(BoardRenderer):
 
     def status(self, env: Any) -> Status:
         outcome = env.outcome
-        if outcome is None and self._at_move_limit:
+        if outcome is None and self.time_limit_reached:
             return Status("Draw", f"Drawn by {ENDINGS['MAX_PLIES']}.", tone_for_result(None))
         if outcome is None:
             sub = "In check." if env.is_check() else None
@@ -356,14 +354,6 @@ class XiangqiRenderer(BoardRenderer):
         player = self.player(outcome.winner)
         sub = f"{player.label} wins by {how}."
         return Status(f"{player.name} won", sub, tone_for_result(outcome.winner))
-
-    def render(self, env: Any) -> NDArray[np.uint8]:
-        # The header shows a TimeLimit's truncation, which only the wrappers know about.
-        self._at_move_limit = _move_limit_reached(env)
-        try:
-            return super().render(env)
-        finally:
-            self._at_move_limit = False
 
     # -- static layer: the board ------------------------------------------------------
 
@@ -564,16 +554,6 @@ class XiangqiTextRenderer(BaseRenderer):
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
-
-
-def _move_limit_reached(env: Any) -> bool:
-    """Whether a `TimeLimit` around the env has truncated the episode (and the game is on)."""
-    layer = env
-    while layer is not None and not isinstance(layer, XiangqiEnv):
-        if isinstance(layer, TimeLimit) and layer.elapsed_steps >= layer.max_episode_steps:
-            return not bool(getattr(layer.unwrapped, "done", False))
-        layer = getattr(layer, "env", None)
-    return False
 
 
 def _material(board: list[int]) -> tuple[dict[str, list[int]], float]:

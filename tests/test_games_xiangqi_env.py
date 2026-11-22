@@ -103,8 +103,7 @@ def test_spaces() -> None:
 
 def test_sides_players_and_metadata() -> None:
     assert XiangqiEnv.sides == XiangqiEnv.players == ("red", "black")
-    assert XiangqiEnv.metadata["name"] == "Xiangqi-v0"
-    assert XiangqiEnv.metadata["render_fps"] > 0
+    assert XiangqiEnv.metadata["render_fps"] == 2
     assert str(XiangqiEnv()) == f"<Xiangqi-v0 history_length=8 fen='{START_FEN}'>"
 
 
