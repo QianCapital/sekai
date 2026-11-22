@@ -91,22 +91,26 @@ def orient_planes(planes: Planes, turn: Color) -> Planes:
 
 def constant_values(board: Board) -> list[float]:
     """The values of the 7 constant planes (each plane is filled with one value)."""
-    us, them = board.turn, not board.turn
+    rights = board.clean_castling_rights()  # bits: 1 K, 2 Q, 4 k, 8 q
+    ours, theirs = (rights, rights >> 2) if board.turn == WHITE else (rights >> 2, rights)
     return [
         1.0 if board.turn == WHITE else 0.0,
         min(board.fullmove_number / MOVE_COUNT_SCALE, 1.0),
-        float(board.has_kingside_castling_rights(us)),
-        float(board.has_queenside_castling_rights(us)),
-        float(board.has_kingside_castling_rights(them)),
-        float(board.has_queenside_castling_rights(them)),
+        float(ours & 1),
+        float(ours >> 1 & 1),
+        float(theirs & 1),
+        float(theirs >> 1 & 1),
         min(board.halfmove_clock / NO_PROGRESS_SCALE, 1.0),
     ]
 
 
+_ONES = np.ones((1, 64), dtype=np.float32)
+
+
 def constant_planes(board: Board) -> Planes:
     """Colour, move count, castling rights and no-progress planes. Shape `(7, 8, 8)`."""
-    values = np.asarray(constant_values(board), dtype=np.float32)
-    return np.ascontiguousarray(np.broadcast_to(values[:, None, None], (NUM_CONSTANT_PLANES, 8, 8)))
+    values = np.array(constant_values(board), dtype=np.float32)[:, None]
+    return (values * _ONES).reshape(NUM_CONSTANT_PLANES, 8, 8)
 
 
 def frames(planes: Planes) -> tuple[Planes, Planes]:
