@@ -45,7 +45,7 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
 
 ## A first look
 
-=== "Classic control"
+=== "Classic Control"
 
     ```python
     import sekai
@@ -133,7 +133,7 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
 
     [:octicons-arrow-right-24: Financial Markets toolkit](finance/index.md)
 
--   :material-chess-knight:{ .lg .middle } **Strategy games**
+-   :material-chess-knight:{ .lg .middle } **Strategy Games**
 
     ---
 
@@ -141,7 +141,7 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
     search: the player to act sees the game from its side, legal moves come as a mask, and
     the board games clone cheaply.
 
-    [:octicons-arrow-right-24: Strategy games](environments/games.md)
+    [:octicons-arrow-right-24: Strategy Games](environments/games.md)
 
 -   :material-swap-horizontal:{ .lg .middle } **gymnasium both ways**
 

@@ -1,4 +1,4 @@
-# Classic control
+# Classic Control
 
 The five classic-control benchmarks, with the same IDs, time limits and reward thresholds as
 gymnasium. They need only NumPy.

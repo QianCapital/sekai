@@ -150,9 +150,9 @@ nav:
       - Order books: finance/order-book.md
   - Environments:
       - Catalog: environments/index.md
-      - Classic control: environments/classic-control.md
+      - Classic Control: environments/classic-control.md
       - Financial Markets: environments/finance.md
-      - Strategy games: environments/games.md
+      - Strategy Games: environments/games.md
   - API reference:
       - Overview: api/index.md
       - Core: api/core.md

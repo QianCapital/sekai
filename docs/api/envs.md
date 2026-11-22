@@ -4,9 +4,9 @@ The built-in environment classes, exported from `sekai.envs` and registered unde
 the [catalog](../environments/index.md). Create them with `sekai.make(id)`, or instantiate
 the classes directly (no time limit is applied then).
 
-## Classic control
+## Classic Control
 
-See [Classic control](../environments/classic-control.md).
+See [Classic Control](../environments/classic-control.md).
 
 ::: sekai.envs.CartPoleEnv
 
@@ -101,9 +101,9 @@ returns them; see [Native vector environments](../environments/finance.md#native
 
 ::: sekai.envs.finance.sample_window
 
-## Strategy games
+## Strategy Games
 
-See [Strategy games](../environments/games.md) and [Self-play and search](../guide/games.md).
+See [Strategy Games](../environments/games.md) and [Self-play and search](../guide/games.md).
 Everything below is in `sekai.envs.games`, which imports each game's subpackage the first
 time it is used.
 

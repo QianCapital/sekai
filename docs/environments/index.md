@@ -62,7 +62,7 @@ LimitOrderBook-v0         Dict({book: Box(-inf, inf, (5, 4), float32), trades: M
 (A `Box` prints its overall minimum and maximum bound; see each environment's page for the
 per-dimension ranges.)
 
-## Classic control
+## Classic Control
 
 <div class="sk-gallery" markdown>
 <figure markdown>
@@ -132,7 +132,7 @@ registered; construct it from `sekai.envs.finance`). The components they are bui
 are documented in the [financial markets toolkit](../finance/index.md). Each has a
 [renderer](../guide/rendering.md#financial-markets) that draws its episodes as a dashboard.
 
-## Strategy games
+## Strategy Games
 
 <div class="sk-gallery" markdown>
 <figure markdown>

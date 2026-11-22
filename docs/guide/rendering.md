@@ -69,7 +69,7 @@ calls `close()` on exit; the built-in renderers do.
 
 ## Built-in renderers
 
-### Classic control
+### Classic Control
 
 The classic-control environments come with RGB renderers that mirror gymnasium's
 `rgb_array` output, drawn with sekai's own [`Canvas`](#canvas) (no pygame needed):
@@ -141,7 +141,7 @@ can draw several environments at once, keeping a history for each.
 `LimitOrderBookMarket` is multi-agent, and `RecordFrames` wraps single-agent environments
 only, so call `renderer.render(env)` after each step yourself.
 
-### Strategy games
+### Strategy Games
 
 Every [strategy game](../environments/games.md) has an RGB renderer that draws the current
 position, and a text renderer. A frame has a header with the game's name and its status

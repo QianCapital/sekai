@@ -1,4 +1,4 @@
-# Strategy games
+# Strategy Games
 
 Five classic games of strategy, built for reinforcement learning the way AlphaZero learned
 its games: chess, go, xiangqi (Chinese chess), heads-up no-limit Texas hold'em and

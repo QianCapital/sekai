@@ -8,14 +8,14 @@ All notable changes to sekai are documented here. The format follows
 
 ## [0.3.1] - 2026-11-22
 
-Strategy games (chess, go, xiangqi, heads-up hold'em and blackjack), market models
+Strategy Games (chess, go, xiangqi, heads-up hold'em and blackjack), market models
 simulated on a GPU, a torch `BatchMarketEnv` that waits for its GPU once per step, and
 `BatchMarketEnv` steps 20-30% faster on the CPU. Nothing from 0.3.0 changes: its
 environments give bit-identical results, and its API and pickles keep working.
 
 ### Added
 
-**Strategy games** (`sekai.envs.games`)
+**Strategy Games** (`sekai.envs.games`)
 
 - Five classic games of strategy, built the way AlphaZero learned its games: `Chess-v0`
   (and `ChessVsRandom-v0`), `Go9x9-v0`, `Go13x13-v0` and `Go19x19-v0`, `Xiangqi-v0`,
@@ -49,7 +49,7 @@ environments give bit-identical results, and its API and pickles keep working.
   rebuilds both. The licence expression gains `BSD-3-Clause`.
 - `examples/games_search.py` (PUCT tree search on any board game with nothing but the
   environment) and `examples/render_games.py` (the documentation's animations). New pages:
-  [Strategy games](https://sekai.qiancapital.com/environments/games/) and
+  [Strategy Games](https://sekai.qiancapital.com/environments/games/) and
   [Self-play and search](https://sekai.qiancapital.com/guide/games/).
 
 **Torch and GPUs**
