@@ -146,7 +146,7 @@ def test_step_info_and_helpers() -> None:
     assert env.decode_action(env.encode_move("h9g7")) == "h9g7"
     assert not env.is_check() and env.outcome is None and not env.done
     assert isinstance(env.position, Position)
-    assert "r n b a k a b n r" in env.render()
+    assert "r n b a k a b n r" in env.position.ascii()
 
 
 def test_action_mask_is_the_legal_action_mask() -> None:

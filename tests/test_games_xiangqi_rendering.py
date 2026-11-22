@@ -100,7 +100,7 @@ def test_renders_wrapped_envs_and_rejects_others() -> None:
     wrapped = OpponentWrapper(XiangqiEnv(), RandomPolicy(seed=1), agent_color="black")
     wrapped.reset(seed=1)
     assert renderer.render(wrapped).shape == renderer.render(made).shape
-    assert XiangqiTextRenderer().render(wrapped) == wrapped.unwrapped.render()
+    assert XiangqiTextRenderer().render(wrapped) == wrapped.unwrapped.position.ascii()
     with pytest.raises(TypeError):
         renderer.render(sekai.make("CartPole-v1"))
     with pytest.raises(TypeError):

@@ -374,10 +374,6 @@ class XiangqiEnv(Env[Observation, np.intp]):
         new._rng = None
         return new
 
-    def render(self) -> str:
-        """Text diagram of the board (Black at the top, uppercase Red)."""
-        return self._position.ascii()
-
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
