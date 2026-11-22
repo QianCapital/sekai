@@ -62,7 +62,7 @@ class HoldemEnv(Env[Observation, np.intp]):
             `history_length >= 0`.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {"name": ENV_ID, "render_fps": 2}
+    metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
     #: The seats' names, in seat order (as `OpponentWrapper`'s `agent_color` takes them).
     sides: ClassVar[tuple[str, str]] = ("p1", "p2")
     #: The seats as `info["to_play"]` gives them, in the same order.

@@ -7,16 +7,19 @@ is a move by the player to act, who sees the observation from their own side.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from sekai._types import SeedType
+from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import Wrapper
 from sekai.envs.games.policies import Policy, RandomPolicy
 
+MAX_REDEALS = 100
+"""How many games in a row the opponent may end before the agent's first move."""
 
-class OpponentWrapper(Wrapper[Any, int, Any, int]):
+
+class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
     """A two-player game against a fixed opponent: one agent, the other side automatic.
 
     After each agent action the opponent plays until it is the agent's turn again (or the
@@ -37,11 +40,18 @@ class OpponentWrapper(Wrapper[Any, int, Any, int]):
 
     `info` gains `"agent_color"` (the agent's side, as `info["to_play"]` names it) and,
     after the opponent has moved, `"opponent_action"` and `"opponent_move"`.
+
+    A game the opponent ends before the agent has moved (in poker, a fold from the small
+    blind) gives the agent nothing to do, so `reset()` deals again; the agent's rewards in
+    the games it skipped are in `info["skipped_rewards"]` (present only if it skipped any),
+    for an evaluation to count. `reset()` raises `RuntimeError` if the opponent ends
+    `MAX_REDEALS` games in a row, as a deterministic one might from a fixed position. A
+    game that is already over when the env resets is returned as it is.
     """
 
     def __init__(
         self,
-        env: Env[Any, int],
+        env: Env[ObsType, ActType],
         opponent: Policy | None = None,
         agent_color: Any = "first",
     ) -> None:
@@ -84,20 +94,39 @@ class OpponentWrapper(Wrapper[Any, int, Any, int]):
 
     def reset(
         self, *, seed: SeedType = None, options: dict[str, Any] | None = None
-    ) -> ResetResult[Any]:
-        result = self.env.reset(seed=seed, options=options)
-        if seed is not None and hasattr(self.opponent, "seed"):
-            self.opponent.seed(seed)
-        self.agent_color = self._resolve()
-        observation, info = result.observation, dict(result.info)
-        done = bool(getattr(self.env.unwrapped, "done", False))
-        while not done and info["to_play"] != self.agent_color:
-            reply = self._opponent_reply(observation, info)
-            observation, info, done = reply.observation, reply.info, reply.done
+    ) -> ResetResult[ObsType]:
+        skipped: list[float] = []
+        while True:
+            result = self.env.reset(seed=seed, options=options)
+            if seed is not None and hasattr(self.opponent, "seed"):
+                self.opponent.seed(seed)
+            seed = None  # a game dealt again continues the generators' streams
+            self.agent_color = self._resolve()
+            observation, info = result.observation, dict(result.info)
+            if bool(getattr(self.env.unwrapped, "done", False)):
+                break  # over before anyone moved: nothing to deal again for
+            reply = None
+            reward = 0.0
+            while info["to_play"] != self.agent_color:
+                reply = self._opponent_reply(observation, info)
+                observation, info = reply.observation, reply.info
+                reward -= float(reply.reward)
+                if reply.done:
+                    break
+            if reply is None or not reply.done:
+                break
+            skipped.append(reward)
+            if len(skipped) >= MAX_REDEALS:
+                raise RuntimeError(
+                    f"The opponent ended {MAX_REDEALS} games in a row before the agent's "
+                    "first move."
+                )
         info["agent_color"] = self.agent_color
+        if skipped:
+            info["skipped_rewards"] = skipped
         return ResetResult(observation=observation, info=info)
 
-    def step(self, action: int) -> StepResult[Any]:
+    def step(self, action: ActType) -> StepResult[ObsType]:
         result = self.env.step(action)
         if result.done:
             return StepResult(
@@ -120,9 +149,9 @@ class OpponentWrapper(Wrapper[Any, int, Any, int]):
             info={**reply.info, "agent_color": self.agent_color},
         )
 
-    def _opponent_reply(self, observation: Any, info: dict[str, Any]) -> StepResult[Any]:
+    def _opponent_reply(self, observation: ObsType, info: dict[str, Any]) -> StepResult[ObsType]:
         opponent_action = int(self.opponent.act(observation, info))
-        reply = self.env.step(opponent_action)
+        reply = self.env.step(cast(ActType, opponent_action))  # the games' actions are ints
         move = (
             reply.info["last_move"] if "last_move" in reply.info else reply.info.get("last_action")
         )

@@ -445,10 +445,23 @@ def test_opponent_rewards_are_the_agents_in_big_blinds() -> None:
     assert r.terminated and r.reward == pytest.approx(-0.5)
 
 
+def test_opponent_wrapper_deals_again_when_the_opponent_ends_the_hand() -> None:
+    # The folding opponent ends every hand in which it has the button and acts first.
+    env = OpponentWrapper(HoldemEnv(), Folder(), agent_color="p2")
+    skipped: list[float] = []
+    for seed in range(20):
+        r = env.reset(seed=seed)
+        assert r.info["to_play"] == 1 and not env.unwrapped.done
+        skipped += r.info.get("skipped_rewards", [])
+    assert skipped and all(reward == pytest.approx(0.5) for reward in skipped)
+    with pytest.raises(RuntimeError, match="in a row"):
+        env.reset(options={"button": 0})
+
+
 def test_opponent_wrapper_random_play() -> None:
     env = OpponentWrapper(HoldemEnv(), RandomPolicy(seed=3), agent_color="random")
     for seed in range(30):
         r = env.reset(seed=seed)
-        while not r.done and not env.unwrapped.done:
+        while not r.done:
             assert r.info["to_play"] == r.info["agent_color"]
             r = env.step(int(env.action_space.sample(mask=r.info["legal_action_mask"])))
