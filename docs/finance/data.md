@@ -227,8 +227,9 @@ field and exogenous series along.
 series, the timestamps, the validity mask and the returns, with the names, asset ids and
 warm-up in `metadata.json`). It writes to a new directory that then takes the place of
 `path`, so saving again (even onto the directory the data is mapped from) never leaves it
-half-written or destroys data mapped from it, and it refuses to replace a directory that
-holds anything but a saved `MarketData`. `MarketData.load(path)` memory-maps it back, read-only:
+half-written or destroys data mapped from it. Other files in that directory are kept, it
+refuses to replace a directory that holds anything but a saved `MarketData`, it saves
+through a symbolic link, and under a read-only parent it replaces the files in place. `MarketData.load(path)` memory-maps it back, read-only:
 nothing is read until it is used, and the operating system shares the pages between
 processes. Pickling memory-mapped data sends its location and rows, not the arrays, so
 the workers of a `ProcVecEnv` map the same files instead of each holding a copy: on a
@@ -236,8 +237,9 @@ the workers of a `ProcVecEnv` map the same files instead of each holding a copy:
 private memory with the data in memory, and 25 MB with it memory-mapped. Slicing rows
 (`data[a:b]`, `between`, `split`, `walk_forward`) keeps the mapping. `select` copies the
 assets it keeps into memory, and `with_fields` keeps the mapped fields mapped but pickles
-by value, since its new fields aren't in the files. A pickled slice refuses to load once
-another `save` has replaced the directory. `load(path, mmap=False)` reads everything into
+by value, since its new fields aren't in the files. Data mapped from files that another
+`save` has replaced since pickles by value; a slice pickled before the replacement refuses
+to load. `load(path, mmap=False)` reads everything into
 memory instead.
 
 ```python

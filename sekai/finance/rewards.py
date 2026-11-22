@@ -249,11 +249,9 @@ class _Stateful(RewardFunction):
         B, like = backend_and_like(*state.values())
         m = B.asbool(mask, like)
         shape = tuple(next(iter(state.values())).shape)
-        try:
-            fits = np.broadcast_shapes(tuple(m.shape), shape) == shape
-        except ValueError:
-            fits = False
-        if not fits:  # (as a boolean index into the state, the mask raised IndexError in 0.2)
+        # One flag per sub-env, or one bool for all of them (as a boolean index into the
+        # state, any other mask raised IndexError in 0.2).
+        if tuple(m.shape) not in (shape, ()):
             raise IndexError(
                 f"reset() got a mask of shape {tuple(m.shape)} for a state of shape {shape}."
             )

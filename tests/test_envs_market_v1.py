@@ -576,3 +576,13 @@ def test_attributes_reach_the_batch_env_as_on_market_v0() -> None:
     assert env.unwrapped.batch_env.delisting_return == -0.5
     vec = sekai.make_vec("Market-v1", num_envs=2, data=DATA)
     assert all(isinstance(r, LogReturn) for r in vec.get_attr("reward_fn"))
+
+
+def test_cost_models_added_to_a_composite_later_count() -> None:
+    from sekai.finance import ProportionalCost, SpreadCost
+
+    cost = SpreadCost(5e-4) + ProportionalCost(1e-4)
+    trades = np.array([[0.2, -0.1]])
+    before = float(cost(trades)[0])
+    cost.models.append(ProportionalCost(1.0))
+    assert float(cost(trades, assets=np.array([[0, 1]]))[0]) == pytest.approx(before + 0.3)

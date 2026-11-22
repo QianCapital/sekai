@@ -286,3 +286,27 @@ def test_async_vec_env_snapshots_after_sync_calls() -> None:
         assert [vec.step(a).rewards.tolist() for a in actions] == first
     finally:
         vec.close()
+
+
+def test_restore_leaves_arrays_callers_hold_alone() -> None:
+    """A tree search keeps what it read from each branch: restore rebinds, it doesn't
+    write into arrays from before (only into buffers the env itself hands out views of)."""
+    env = sekai.make("Portfolio-v0")
+    env.reset(seed=0)
+    env.action_space.seed(0)
+    root = env.snapshot()
+    seen = []
+    for _ in range(3):
+        env.step(env.action_space.sample())
+        weights = env.unwrapped.weights
+        seen.append((weights, weights.copy()))
+        env.restore(root)
+    for held, value in seen:
+        np.testing.assert_array_equal(held, value)
+    masked = sekai.make("CartPole-v1")
+    masked.reset(seed=0)
+    masked.unwrapped.extra = np.ma.MaskedArray([1.0, 2.0], mask=[False, True])
+    snap = masked.snapshot()
+    masked.unwrapped.extra = np.ma.MaskedArray([5.0, 6.0], mask=[True, False])
+    masked.restore(snap)
+    assert masked.unwrapped.extra.mask.tolist() == [False, True]

@@ -188,7 +188,7 @@ class NumpyBackend(Backend):
         return np.concatenate(arrays, axis=axis)
 
     def astype(self, x: Any, dtype: Any) -> Array:
-        return np.asarray(x).astype(dtype)
+        return (x if isinstance(x, np.ndarray) else np.asarray(x)).astype(dtype)
 
     def random_uniform(
         self, rng: np.random.Generator, low: Any, high: Any, shape: Sequence[int]

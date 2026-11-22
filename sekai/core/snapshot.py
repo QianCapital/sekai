@@ -258,20 +258,39 @@ def restore_snapshot(obj: Any, snapshot: Snapshot) -> None:
 
 
 def _put_back(current: dict[str, Any], state: dict[str, Any]) -> None:
-    """Set the attributes of `state`, NumPy arrays in place where they can be.
+    """Set the attributes of `state`: rebound to the snapshot's copies, as a rule, so
+    arrays that callers hold from before are left as they were.
 
-    An array restored in place keeps every view of it (an observation buffer handed out
-    read-only, an alias held by another attribute) a view of the restored values.
+    The exception is an array that another attribute of the same env views (an
+    observation buffer handed out as a read-only view of the state, say): it takes the
+    snapshot's values in place, and the view is kept, so it still views the state.
     """
+    arrays = {id(v): k for k, v in current.items() if isinstance(v, np.ndarray)}
+    viewed: dict[str, list[str]] = {}  # array attribute -> the attributes that view it
+    for name, value in current.items():
+        if isinstance(value, np.ndarray):
+            base = value.base
+            while isinstance(base, np.ndarray):
+                if id(base) in arrays and arrays[id(base)] != name:
+                    viewed.setdefault(arrays[id(base)], []).append(name)
+                    break
+                base = base.base
+    in_place: set[str] = set()
+    for name in viewed:
+        old, new = current[name], state.get(name)
+        if (
+            isinstance(new, np.ndarray)
+            and old is not new
+            and old.flags.writeable
+            and old.shape == new.shape
+            and old.dtype == new.dtype
+        ):
+            np.copyto(old, new)
+            in_place.add(name)
+    keep = {view for name in in_place for view in viewed[name]} | in_place
     for name, value in state.items():
-        old = current.get(name)
-        if isinstance(old, np.ndarray) and isinstance(value, np.ndarray) and old is not value:
-            if old.flags.writeable and old.shape == value.shape and old.dtype == value.dtype:
-                np.copyto(old, value)
-                continue
-            if not old.flags.writeable and not _frozen(old):
-                continue  # a read-only view of live state, which is restored in place
-        current[name] = value
+        if name not in keep:
+            current[name] = value
 
 
 __all__ = ["Snapshot", "register_immutable", "take_snapshot", "restore_snapshot"]

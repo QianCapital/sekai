@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import pickle
 from pathlib import Path
 
@@ -210,3 +211,41 @@ def test_save_numpy_asset_ids_and_shape_checks(tmp_path: Path) -> None:
     np.save(root / "mask.npy", np.ones((4, 3), dtype=bool))  # a damaged save
     with pytest.raises(ValueError, match="don't agree"):
         MarketData.load(root)
+
+
+def test_save_keeps_other_files_and_links(tmp_path: Path) -> None:
+    root = make().save(tmp_path / "d")
+    (root / "notes.txt").write_text("mine")
+    make(dated=False).save(root, overwrite=True)
+    assert (root / "notes.txt").read_text() == "mine"
+    link = tmp_path / "link"
+    link.symlink_to(root, target_is_directory=True)
+    make().save(link, overwrite=True)
+    assert link.is_symlink() and (link / "notes.txt").read_text() == "mine"
+    assert MarketData.load(link).n_steps == make().n_steps
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["d", "link"]  # nothing left behind
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs file permissions"
+)
+def test_save_under_a_read_only_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    root = make().save(parent / "d")
+    parent.chmod(0o555)
+    try:
+        make(dated=False).save(root, overwrite=True)  # in place, file by file
+        np.testing.assert_array_equal(MarketData.load(root).prices, make(dated=False).prices)
+    finally:
+        parent.chmod(0o755)
+
+
+def test_data_mapped_from_a_replaced_save_still_pickles(tmp_path: Path) -> None:
+    root = make().save(tmp_path / "d")
+    loaded = MarketData.load(root)
+    old = np.array(loaded.prices)
+    loaded.save(root, overwrite=True)  # onto its own source
+    make(dated=False).save(root, overwrite=True)  # and a different save over that
+    for clone in (pickle.loads(pickle.dumps(loaded)), copy.deepcopy(loaded)):
+        np.testing.assert_array_equal(clone.prices, old)  # by value now
+        assert not clone.memory_mapped

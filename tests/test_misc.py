@@ -211,3 +211,26 @@ def test_multi_agent_seeding_api() -> None:
     assert env.rng.random() == a
     env.rng = np.random.default_rng(0)  # 0.1.x-style subclasses assign their own generator
     assert env._rng_seed == -1
+
+
+def test_more_of_0_2_still_works() -> None:
+    import sekai.sekai
+
+    with pytest.warns(DeprecationWarning, match="BackendMismatch"):
+        assert sekai.sekai.BackendMismatch is sekai.error._BackendMismatch  # type: ignore[attr-defined]
+    from sekai.backend import NumpyBackend
+    from sekai.finance import DrawdownPenalty, MarketData, StepOutcome
+
+    masked = np.ma.MaskedArray([1.0, 2.0], mask=[False, True])
+    assert NumpyBackend().astype(masked, np.float32).mask.tolist() == [False, True]
+    with pytest.raises(ValueError, match="unique"):
+        MarketData(np.ones((5, 2)), assets=["a", "b"]).select(["a", "a"])
+    reward = DrawdownPenalty()
+    reward(
+        StepOutcome.from_growth(
+            np.ones(3), equity=np.ones(3), turnover=np.zeros(3), cost=np.zeros(3)
+        )
+    )
+    with pytest.raises(IndexError):
+        reward.reset(np.array([True]))  # one flag for three envs
+    reward.reset(True)  # one bool for all of them

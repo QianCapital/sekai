@@ -792,6 +792,8 @@ class MarketData:
         missing = [a for a in assets if a not in lookup]
         if missing:
             raise KeyError(f"Unknown assets: {missing}.")
+        if len(set(assets)) != len(assets):
+            raise ValueError("asset ids must be unique.")
         return self._replace(cols=np.array([lookup[a] for a in assets], dtype=np.intp))
 
     def with_fields(self, **arrays: ArrayLike) -> MarketData:
@@ -882,6 +884,10 @@ class MarketData:
         Returns:
             The directory.
 
+        Other files in the directory are kept, a symbolic link to a directory is saved
+        through, and with a read-only parent (no room for the new copy) the files are
+        replaced in place, data first and metadata last.
+
         Raises:
             FileExistsError: If the directory is not empty and `overwrite` is False, or
                 it holds files that are not a saved MarketData (which are never deleted).
@@ -903,15 +909,45 @@ class MarketData:
         for a in assets:
             if isinstance(a, bool) or not isinstance(a, (str, int, float)):
                 raise TypeError(f"save() needs asset ids that are strings or numbers, got {a!r}.")
-        root.parent.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix=f".{root.name}.", suffix=".tmp", dir=root.parent))
+        target = root.resolve() if root.is_symlink() else root  # where a link points
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            tmp = Path(
+                tempfile.mkdtemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+            )
+        except PermissionError:  # the parent is read-only: replace the files one by one
+            target.mkdir(exist_ok=True)
+            self._save_in_place(target, assets)
+            return root
         try:
             self._write(tmp, assets)
-            _replace_dir(tmp, root)
+            _replace_dir(tmp, target)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
         return root
+
+    def _save_in_place(self, root: Path, assets: list[Any]) -> None:
+        """`save` into `root` file by file (data first, metadata last), for a directory
+        whose parent can't hold the new copy that `save` otherwise swaps in."""
+        tmp = Path(tempfile.mkdtemp(prefix=".save.", dir=root))
+        try:
+            self._write(tmp, assets)
+            for sub in ("fields", "exogenous"):
+                (root / sub).mkdir(exist_ok=True)
+                for f in (tmp / sub).iterdir():
+                    os.replace(f, root / sub / f.name)
+                kept = {f.name for f in (tmp / sub).iterdir()} | {
+                    f"{i}.npy"
+                    for i in range(len(self._fields if sub == "fields" else self._exogenous))
+                }
+                for f in (root / sub).glob("*.npy"):  # a field of the previous save only
+                    if f.name not in kept:
+                        f.unlink()
+            for name in ("timestamps.npy", "mask.npy", "returns.npy", "metadata.json"):
+                os.replace(tmp / name, root / name)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _write(self, root: Path, assets: list[Any]) -> None:
         (root / "fields").mkdir()
@@ -1011,7 +1047,11 @@ class MarketData:
     def __reduce_ex__(self, protocol: Any) -> Any:
         if self._origin is not None:
             directory, start, stop, save_id = self._origin
-            return (_load_rows, (directory, start, stop, self._warmup, save_id))
+            if _saved_id(directory) == save_id:  # the files are still this data's
+                return (_load_rows, (directory, start, stop, self._warmup, save_id))
+            # Saved over since (this data reads the old files): pickle the values instead.
+            state = dict(self.__dict__, _origin=None)
+            return (_new_market_data, (), state)
         return super().__reduce_ex__(protocol)
 
     # ------------------------------------------------------------------
@@ -1151,6 +1191,25 @@ def _load_rows(
     return data._replace(rows=slice(start, stop), warmup=warmup)
 
 
+def _new_market_data() -> MarketData:
+    return MarketData.__new__(MarketData)
+
+
+def _saved_id(directory: str) -> str | None:
+    """The save id in `directory`'s metadata (None if it has none or can't be read)."""
+    try:
+        meta = json.loads((Path(directory) / "metadata.json").read_text())
+    except (OSError, ValueError):
+        return "<unreadable>"
+    return meta.get("save_id") if isinstance(meta, dict) else "<unreadable>"
+
+
+# What a save consists of; anything else in its directory is the user's.
+_SAVED_NAMES = frozenset(
+    {"fields", "exogenous", "timestamps.npy", "mask.npy", "returns.npy", "metadata.json"}
+)
+
+
 def _holds_saved_data(root: Path) -> bool:
     try:
         meta = json.loads((root / "metadata.json").read_text())
@@ -1182,6 +1241,16 @@ def _replace_dir(new: Path, root: Path) -> None:
     except BaseException:
         os.replace(old, root)
         raise
+    # Files that aren't part of the save (the user's) move across to the new directory.
+    for entry in old.iterdir():
+        if entry.name not in _SAVED_NAMES:
+            try:
+                os.replace(entry, root / entry.name)
+            except OSError as e:
+                raise OSError(
+                    f"Saved to {root}, but {entry.name!r} from the previous directory could "
+                    f"not be moved there; it is in {old}."
+                ) from e
     shutil.rmtree(old, ignore_errors=True)
 
 

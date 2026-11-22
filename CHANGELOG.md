@@ -35,8 +35,8 @@ All notable changes to sekai are documented here. The format follows
 - Constraints by projection (`sekai.finance.constraints`): `Constraints(long_only,
   max_gross, max_position, dollar_neutral, neutral_to)` and `project()`, which enforces
   gross and per-name caps (exactly; the book follows the scores' direction, not their
-  scale), joint dollar and factor neutrality, untradable and unshortable names,
-  differentiably.
+  scale), joint dollar and factor neutrality (dollar neutrality alone exactly),
+  untradable and unshortable names, differentiably.
 - Factor risk models (`sekai.finance.risk`): `portfolio_variance`, `factor_exposures`, and
   `FactorRiskModel`, which tells an environment where its loadings, factor covariance and
   idiosyncratic variances are in the data; the env reports each step's ex-ante `variance`
@@ -121,9 +121,10 @@ All notable changes to sekai are documented here. The format follows
   splits) pickles as its location, so `ProcVecEnv` workers map the same files instead of
   each holding a copy (on a 154 MB history, 25 MB of private memory per `Market-v1`
   worker instead of 264 MB). `save` writes a new directory that then takes the target's
-  place, so it never leaves a half-written one, never deletes files that aren't a saved
-  `MarketData`, and can save onto the directory the data is mapped from; a pickled slice
-  refuses a directory saved over since. `load` reads nothing until it is used.
+  place, so it never leaves a half-written one, keeps other files in it, never replaces a
+  directory that isn't a saved `MarketData`, saves through symbolic links, and can save onto
+  the directory the data is mapped from (data mapped from replaced files then pickles by
+  value; a slice pickled before refuses the new files). `load` reads nothing until it is used.
   `memory_mapped`, `simple_returns()` (cached), and `validate=False` to skip the checks
   that read every value.
 - `MarketData(..., copy=False)` shares float64 arrays (read-only views of them) instead of

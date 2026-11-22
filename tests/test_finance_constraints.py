@@ -363,3 +363,28 @@ def test_dollar_neutral_with_limited_shorting_is_exactly_neutral() -> None:
         rng.normal(size=4), Constraints(dollar_neutral=True), shortable=np.zeros(4, bool)
     )
     np.testing.assert_array_equal(nothing, np.zeros(4))  # no short side: an empty book
+
+
+def test_projection_is_exact_however_far_apart_the_scores_are() -> None:
+    w = project(np.array([[3.0, 2.0, 1e-16, 1e-16, 1e-16]]), Constraints(max_position=0.3))
+    np.testing.assert_allclose(w, [[0.3, 0.3, 0.4 / 3, 0.4 / 3, 0.4 / 3]], rtol=1e-12)
+    rng = np.random.default_rng(5)
+    logits = rng.normal(0, 12, (200, 20))  # long-only softmax scores
+    scores = np.exp(logits - logits.max(-1, keepdims=True))
+    w = project(scores, Constraints(long_only=True, max_position=0.1))
+    np.testing.assert_allclose(np.abs(w).sum(-1), 1.0, rtol=1e-12)
+    assert np.abs(w).max() <= 0.1
+
+
+def test_dollar_neutral_books_are_exactly_neutral() -> None:
+    rng = np.random.default_rng(6)
+    c = Constraints(max_position=0.1, max_gross=2.0, dollar_neutral=True)
+    w = project(rng.normal(size=(500, 10)), c, gross=np.full(500, 1.0))
+    np.testing.assert_allclose(w.sum(-1), 0.0, atol=1e-14)
+    assert np.abs(w).max() <= 0.1 and np.all(np.abs(w).sum(-1) <= 1.0 + 1e-12)
+    w = project(
+        np.array([[1.0, 1.0, 1.0, -1.0]]),
+        Constraints(max_gross=2, max_position=0.3, dollar_neutral=True),
+        gross=1.2,
+    )
+    np.testing.assert_allclose(w, [[0.1, 0.1, 0.1, -0.3]])

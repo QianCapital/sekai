@@ -172,6 +172,18 @@ def _accepts(fn: Any, name: str) -> bool:
     return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+# Whether a cost model class takes `assets=` (sekai 0.2's models don't), per class.
+_TAKES_ASSETS: dict[type, bool] = {}
+
+
+def _takes_assets(model: Any) -> bool:
+    kind = type(model)
+    takes = _TAKES_ASSETS.get(kind)
+    if takes is None:
+        takes = _TAKES_ASSETS[kind] = _accepts(model, "assets")
+    return takes
+
+
 class NoCost(CostModel):
     """Frictionless trading."""
 
@@ -392,9 +404,6 @@ class CompositeCost(CostModel):
         for model in models:
             flat.extend(model.models if isinstance(model, CompositeCost) else [model])
         self.models = flat
-        # Models written before cost models got `assets=` (sekai 0.2) don't take it.
-        self._takes_assets = tuple(_accepts(m, "assets") for m in flat)
-        self._all_take_assets = all(self._takes_assets)
         self.requires = frozenset().union(*(m.requires for m in flat))
         # An input has a fallback only if every model that reads it has one.
         self.fallbacks = frozenset(
@@ -405,16 +414,15 @@ class CompositeCost(CostModel):
 
     def __call__(self, trades: ArrayLike, **context: Any) -> Array:
         B, like = backend_and_like(trades)
-        takes = getattr(self, "_takes_assets", None)  # absent when pickled by sekai 0.2
-        if takes is None:
-            takes = self._takes_assets = tuple(_accepts(m, "assets") for m in self.models)
-            self._all_take_assets = all(takes)
-        plain = context
-        if "assets" in context and not self._all_take_assets:
-            plain = {k: v for k, v in context.items() if k != "assets"}
+        plain: dict[str, Any] | None = None  # the context without `assets`, if needed
         total: Any = None
-        for model, with_assets in zip(self.models, takes):
-            cost = model(trades, **(context if with_assets else plain))
+        for model in self.models:
+            if "assets" in context and not _takes_assets(model):
+                if plain is None:
+                    plain = {k: v for k, v in context.items() if k != "assets"}
+                cost = model(trades, **plain)
+            else:
+                cost = model(trades, **context)
             total = B.asfloat(cost, like) if total is None else total + cost
         out: Array = total
         return out

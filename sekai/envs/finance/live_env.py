@@ -435,8 +435,9 @@ class LiveMarketEnv(Env[dict[str, Any], Any]):
         """The gross exposure the action map allows (the env's `max_leverage` otherwise)."""
         m = self.action_map
         cap = getattr(m, "max_leverage", None)
-        if cap is None and getattr(m, "constraints", None) is not None:
-            cap = m.constraints.max_gross
+        constraints = getattr(m, "constraints", None)
+        if cap is None and constraints is not None:
+            cap = constraints.max_gross
         return float(self.max_leverage if cap is None else cap)
 
     def _sync(self, state: AccountState) -> None:

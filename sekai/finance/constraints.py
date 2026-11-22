@@ -21,10 +21,9 @@ or a risk model's factor loadings. `project` maps scores to such a book:
    re-neutralised and rescaled to the requested gross, then clipped once more, so the
    caps and the gross cap hold exactly and neutrality to the residual of that last
    clip, which shrinks with `n_iter`. A dollar-neutral book's gross is at most twice
-   what its smaller side can hold, and a row that asks for more gets that. Such rows,
-   and rows with names that can be held but not shorted (where the rounds can stall
-   short of neutral), end with the larger side scaled down to the smaller, so the net
-   is exactly zero (unless `neutral_to` is used as well).
+   what its smaller side can hold, and a row that asks for more gets that; without
+   `neutral_to`, the book then ends with its larger side scaled down to the smaller, so
+   its net is exactly zero (the rounds alone can stall short of neutral).
 
 The caps apply after scaling, so the book follows the scores' direction, not their
 scale. The requested gross is reached whenever it is feasible. Everything broadcasts
@@ -165,27 +164,31 @@ def _water_fill(B: Backend, a: Array, c: Array, target: Array) -> Array:
     `a >= 0` are the scores' sizes (0: not held) and `c >= 0` their caps, along the last
     axis: the book that clipping to the caps and rescaling to the target converges to.
     """
-    held = a > 0
-    reach = B.where(held, c / B.where(held, a, 1.0), math.inf)  # the scale that caps a name
-    order = B.argsort(reach, axis=-1)
-    a_by = B.take_along_axis(a, order, axis=-1)
-    reach_by = B.take_along_axis(reach, order, axis=-1)
-    caps_by = B.take_along_axis(B.where(held, c, 0.0), order, axis=-1)
-    at_cap = B.cumsum(caps_by, axis=-1)  # what the names capped by then hold
-    rest = B.sum(a, axis=-1, keepdims=True) - B.cumsum(a_by, axis=-1)  # the others' sizes
-    with B.errstate():
-        total = at_cap + B.where(rest > 0, reach_by * rest, 0.0)  # the gross at each scale
-    # The names capped at the solution are those whose scale gives a gross within target.
-    k = B.sum(B.asint(total <= target, a), axis=-1, keepdims=True)
     n = int(a.shape[-1])
     if n == 0:
         return a
-    idx = B.clip(k - 1, 0, n - 1)
-    capped = B.where(k > 0, B.take_along_axis(at_cap, idx, axis=-1), 0.0)
-    left = B.where(k > 0, B.take_along_axis(rest, idx, axis=-1), B.sum(a, axis=-1, keepdims=True))
-    scale = (target - capped) / B.where(left > 0, left, 1.0)
-    sizes = B.minimum(scale * a, B.where(held, c, 0.0))
-    return B.where(k >= n, B.where(held, c, 0.0), sizes)
+    held = a > 0
+    caps = B.where(held, c, 0.0)
+    # The scale at which each name reaches its cap, largest first: at the solution, a
+    # leading run of names is below its cap and the rest sit at it. Prefix sums in this
+    # order add the small sizes first, so they don't cancel however far apart sizes are.
+    reach = B.where(held, c / B.where(held, a, 1.0), math.inf)
+    order = B.argsort(-reach, axis=-1)
+    reach_by = B.take_along_axis(reach, order, axis=-1)
+    below = B.cumsum(B.take_along_axis(a, order, axis=-1), axis=-1)  # sizes of the run
+    capped = B.sum(caps, axis=-1, keepdims=True) - B.cumsum(
+        B.take_along_axis(caps, order, axis=-1), axis=-1
+    )  # caps of the names after it
+    with B.errstate():
+        total = capped + B.where(below > 0, reach_by * below, 0.0)  # the gross at each scale
+    # The run is as long as the scales whose gross reaches the target.
+    m = B.sum(B.asint(total >= target, a), axis=-1, keepdims=True)
+    idx = B.clip(m - 1, 0, n - 1)
+    run = B.take_along_axis(below, idx, axis=-1)
+    rest = B.take_along_axis(capped, idx, axis=-1)
+    scale = (target - rest) / B.where(run > 0, run, 1.0)
+    sizes = B.minimum(scale * a, caps)
+    return B.where(m == 0, caps, sizes)
 
 
 def project(
@@ -237,15 +240,10 @@ def project(
     )[..., None]
     # A dollar-neutral book holds as much long as short, so its gross can't exceed twice
     # the smaller side's room (with every name capped, or nothing shortable, it may be
-    # less than asked): those rows get that gross. They, and rows with names that can be
-    # held but not shorted (where clipping and neutralising can stall short of neutral),
-    # end exactly neutral (below).
-    balance = None
+    # less than asked): rows that ask for more get that.
     if constraints.dollar_neutral:
         room = B.minimum(B.sum(hi, axis=-1, keepdims=True), B.sum(-lo, axis=-1, keepdims=True))
-        capped = target > 2.0 * room
-        target = B.where(capped, 2.0 * room, target)
-        balance = capped | B.any(ok & ~can_short, axis=-1)[..., None]
+        target = B.where(target > 2.0 * room, 2.0 * room, target)
     cols = constraint_columns(constraints, ok, exposures, like=x)
 
     def neutral(v: Array) -> Array:
@@ -271,15 +269,16 @@ def project(
     for _ in range(constraints.n_iter):
         w = to_gross(neutral(B.clip(w, lo, hi)))
     w = B.clip(w, lo, hi)
-    if balance is not None and not constraints.neutral_to:
-        # Scale the larger side down to the smaller one: every cap still holds, and the
-        # net is exactly zero.
+    if constraints.dollar_neutral and not constraints.neutral_to:
+        # Clipping and neutralising can stall short of neutral (names that can't be
+        # shorted, scores on the side a cap binds): scale the larger side down to the
+        # smaller one. Every cap still holds, and the net is exactly zero.
         longs = B.sum(B.clip(w, 0.0, None), axis=-1, keepdims=True)
         shorts = B.sum(B.clip(-w, 0.0, None), axis=-1, keepdims=True)
         side = B.minimum(longs, shorts)
         up = B.where(longs > 0, side / B.where(longs > 0, longs, 1.0), 0.0)
         down = B.where(shorts > 0, side / B.where(shorts > 0, shorts, 1.0), 0.0)
-        w = B.where(balance, B.where(w > 0, w * up, w * down), w)
+        w = B.where(w > 0, w * up, w * down)
     return w
 
 
