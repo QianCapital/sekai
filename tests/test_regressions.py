@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 from typing import Any
 
@@ -263,6 +264,38 @@ def test_native_portfolio_is_bit_identical_and_infos_match() -> None:
         xs, ys = native.step(a), sync.step(a)
         assert xs.rewards.tolist() == ys.rewards.tolist()
     assert xs.infos[0].keys() == ys.infos[0].keys()
+
+
+def test_native_portfolio_is_bit_identical_on_openblas_generic_kernel() -> None:
+    """OpenBLAS falls back to a generic kernel on CPUs it does not recognize (some CI runners
+    among them), which sums a dot product differently when the second vector does not start
+    on a 16-byte boundary. The native env must match the single env there too, for odd and
+    even numbers of assets. The kernel is chosen when NumPy loads, so this runs in a new
+    process (without OpenBLAS, the variable does nothing and the check runs as above)."""
+    code = """if True:
+        import numpy as np
+        import sekai
+        from sekai.finance import MarketData
+        for n in (4, 5, 7, 9):  # (64 envs: before the fix, odd n differed within 40 steps)
+            rng = np.random.default_rng(n)
+            prices = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, (400, n)), axis=0))
+            kw = {"episode_length": 30, "lookback": 8, "sampler": 40, "allow_short": True}
+            native = sekai.make_vec("Portfolio-v0", 64, data=MarketData(prices), **kw)
+            sync = sekai.make_vec(
+                "Portfolio-v0", 64, vectorization_mode="sync", data=MarketData(prices), **kw
+            )
+            native.reset(seed=0)
+            sync.reset(seed=0)
+            actions = native.batch_action_space
+            actions.seed(0)
+            for step in range(40):
+                a = actions.sample()
+                x, y = native.step(a).rewards.tolist(), sync.step(a).rewards.tolist()
+                assert x == y, f"{n} assets, step {step}: {x} != {y}"
+    """
+    env = {**os.environ, "OPENBLAS_CORETYPE": "Prescott"}
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
 
 
 def test_native_timestamps_stay_datetimes() -> None:

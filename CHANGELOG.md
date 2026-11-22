@@ -280,6 +280,14 @@ removed: its environments give bit-identical results, its API and pickles keep w
 - The `fn=` keyword of `TransformObservation` / `TransformReward`, announced for removal in
   0.3, is kept and still warns; use `func=`.
 
+### Fixed
+
+- The native vector `Portfolio-v0` matches its single environments bit for bit on every
+  CPU. With an odd number of assets, on CPUs that OpenBLAS does not recognize (where it
+  falls back to its generic kernel), the returns of every other sub-env could differ in
+  the last bit, since that kernel sums a dot product differently when a vector does not
+  start on a 16-byte boundary. Single environments, and every other CPU, are unchanged.
+
 ## [0.2.0] - 2026-10-20
 
 The first release with built-in environments, a finance toolkit, a test suite, CI and a

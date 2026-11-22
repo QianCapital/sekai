@@ -53,6 +53,24 @@ def _batch_action(actions: Any, num_envs: int, shape: tuple[int, ...], space: An
     return a
 
 
+def _row_dots(weights: Array, returns: Array) -> Array:
+    """`weights[k] @ returns[k]` for every row k, bit for bit as the single env's `@`.
+
+    A batched matmul makes the BLAS dot call that the single env makes on its vectors, but
+    OpenBLAS's generic kernel (which it falls back to on CPUs it does not recognize) sums
+    differently when the second vector does not start on a 16-byte boundary, as the single
+    env's newly allocated vectors do. Rows of a new even-width float64 array all start on
+    one; every other row of an odd-width one does not. So the operand whose array has an
+    even width goes second (the products commute, and the kernel sums them in the same
+    order). `weights` are the first columns of the `(rows, n + 1)` target weights.
+    """
+    if returns.shape[1] % 2:  # the target weights have the even width
+        out: Array = np.matmul(returns[:, None, :], weights[..., None])[:, 0, 0]
+    else:
+        out = np.matmul(weights[:, None, :], returns[..., None])[:, 0, 0]
+    return out
+
+
 class _Param:
     """A parameter of the single env, read from and written to the native env's `template`.
 
@@ -552,8 +570,7 @@ class PortfolioVecEnv(_TemplateVecEnv[dict[str, NDArray[np.float32]], NDArray[np
         i = self.lookback + np.minimum(self._t, self.episode_length - 1)
         cost = np.asarray(self.cost_model(trades, **self._cost_context(i)), dtype=np.float64)
         asset_returns = self._paths[ar, i + 1] / self._paths[ar, i] - 1.0
-        # A batched matmul reproduces the single env's `target @ returns` bit for bit.
-        gross_return = np.matmul(target[:, None, :-1], asset_returns[..., None])[:, 0, 0]
+        gross_return = _row_dots(target[:, :-1], asset_returns)  # the single env's `@`
         growth = np.where(cost >= 1.0, 0.0, (1.0 - cost) * (1.0 + gross_return))
         drifted = target * np.concatenate(
             [1.0 + asset_returns, np.ones((self.num_envs, 1))], axis=1
