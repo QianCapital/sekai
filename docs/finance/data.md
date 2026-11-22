@@ -227,11 +227,14 @@ field and exogenous series along.
 series, the timestamps, the validity mask and the returns, with the names, asset ids and
 warm-up in `metadata.json`). It writes to a new directory that then takes the place of
 `path`, so saving again (even onto the directory the data is mapped from) never leaves it
-half-written or destroys data mapped from it. Other files in that directory are kept, it
-refuses to replace a directory that holds anything but a saved `MarketData`, it saves
-through a symbolic link, and under a read-only parent it replaces the files in place. `MarketData.load(path)` memory-maps it back, read-only:
-nothing is read until it is used, and the operating system shares the pages between
-processes. Pickling memory-mapped data sends its location and rows, not the arrays, so
+half-written or destroys data mapped from it. (Windows can't rename files in use: there,
+saving onto a directory while any process has data memory-mapped from it raises an
+`OSError` and leaves the directory as it was, so save to another directory, or load with
+`mmap=False`.) Other files in that directory are kept, it refuses to replace a directory
+that holds anything but a saved `MarketData`, it saves through a symbolic link, and under
+a read-only parent it replaces the files in place. `MarketData.load(path)` memory-maps it
+back, read-only: nothing is read until it is used, and the operating system shares the
+pages between processes. Pickling memory-mapped data sends its location and rows, not the arrays, so
 the workers of a `ProcVecEnv` map the same files instead of each holding a copy: on a
 10,080 x 1,000 history (154 MB of fields), each of 8 `Market-v1` workers held 264 MB of
 private memory with the data in memory, and 25 MB with it memory-mapped. Slicing rows

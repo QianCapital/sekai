@@ -19,8 +19,9 @@ Qian Capital permits you to:
 
 Anything else needs written permission from Qian Capital (opensource@qiancapital.com),
 for example: changing the marks, drawing them anywhere else (such as in a dashboard or
-layout of your own, with branding=True or sekai.rendering.brand's draw_mark and
-draw_wordmark), or using them in a way that suggests Qian Capital endorses you, your work
-or your results. (The gold rule that draw_rule draws is a colour gradient, not a mark.)
+layout of your own, with parameter `branding=True` or `sekai.rendering.brand`'s
+`draw_mark` and `draw_wordmark`), or using them in a way that suggests Qian Capital
+endorses you, your work or your results. (The gold rule that `draw_rule` draws is a
+colour gradient, not a mark.)
 
-To draw sekai's dashboards without the marks, pass branding=False.
+To draw sekai's dashboards without the marks, pass the parameter `branding=False`.

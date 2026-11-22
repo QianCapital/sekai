@@ -6,6 +6,13 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
+Batched and differentiable market environments, tools for research validity and long runs,
+market realism, paper and live trading, and branded dashboards. Nothing from 0.2.0 is
+removed: its environments give bit-identical results, its API and pickles keep working
+(the deprecated parts with a warning), and `branding=False` draws exactly what it drew.
+
 ### Added
 
 **Batched and differentiable market environments**
@@ -258,9 +265,10 @@ All notable changes to sekai are documented here. The format follows
   These functions are annotated as returning `Any`, so type checkers no longer infer NumPy
   arrays from them (code that type-checked still does).
 - Single environments step faster than in 0.2, with bit-identical results: on one core,
-  `Trading-v0` makes about 6% more steps per second and `Portfolio-v0` about 7% more, and
-  `Market-v0` about the same. The finance functions now dispatch on the array type, so a
-  composite cost model called on its own takes about 2.5% longer.
+  `Trading-v0` and `Portfolio-v0` make about 6-9% more steps per second, and `Market-v0`,
+  `MarketMaking-v0` and the native vector environments about as many. The finance
+  functions now dispatch on the array type, so a composite cost model called on its own
+  takes about 4% longer (some 0.8 µs a call) and a composite reward about 1% longer.
 
 ### Deprecated
 
@@ -644,7 +652,8 @@ These change behaviour for code written against 0.1.x:
   core wrappers, typed `EpisodeStats` with pluggable trackers, `Renderer` protocol,
   and `check_env`.
 
-[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/QianCapital/sekai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/QianCapital/sekai/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/QianCapital/sekai/releases/tag/v0.1.1
