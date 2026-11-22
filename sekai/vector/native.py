@@ -93,7 +93,7 @@ def split_infos(infos: InfoArrays, n: int) -> list[InfoDict]:
     """
     out: list[InfoDict] = [{} for _ in range(n)]
     for key, value in infos.items():
-        if isinstance(value, Mapping):
+        if type(value) is not np.ndarray and isinstance(value, Mapping):  # (ABC checks are slow)
             for info, part in zip(out, split_infos(value, n)):
                 info[key] = part
             continue
