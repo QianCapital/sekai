@@ -29,7 +29,11 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike
 
-from sekai.backend import Array, backend_and_like, is_tensor
+from sekai.backend import Array, Backend, backend_and_like, get_backend
+
+_NUMPY = get_backend("numpy")
+# A StepOutcome's fields on the NumPy backend: arrays, and the scalars of 0-d arithmetic.
+_NUMPY_TYPES = (np.ndarray, np.float64)
 
 
 @dataclass(frozen=True)
@@ -191,8 +195,12 @@ class _Combination(RewardFunction):
         self.terms = flat
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        B, like = backend_and_like(outcome.log_return)
         total: Any = 0.0
+        if type(outcome.log_return) in _NUMPY_TYPES:  # NumPy: the calls of 0.2, no dispatch
+            for weight, fn in self.terms:
+                total = total + weight * np.asarray(fn(outcome), dtype=np.float64)
+            return total
+        B, like = backend_and_like(outcome.log_return)
         for weight, fn in self.terms:
             total = total + weight * B.asfloat(fn(outcome), like)
         return total
@@ -223,20 +231,21 @@ class _Stateful(RewardFunction):
     def __init__(self) -> None:
         self._state: dict[str, Array] | None = None
 
-    def _get(self, like: Array) -> dict[str, Array]:
-        """The state, (re)created to match the shape and backend of `like`."""
-        B = backend_and_like(like)[0]
-        shape = tuple(like.shape)
+    def _get(self, like: Array, B: Backend | None = None) -> dict[str, Array]:
+        """The state, (re)created to match the shape and backend of `like` (whose backend
+        `B` callers may pass, as they already know it)."""
+        if B is None:
+            B = backend_and_like(like)[0]
         state = self._state
-        current = None if state is None else next(iter(state.values()))
-        if (
-            state is None
-            or current is None
-            or tuple(current.shape) != shape
-            or is_tensor(current) != is_tensor(like)
-        ):
-            state = {name: B.full(shape, init, like=like) for name, init in self._fields}
-            self._state = state
+        if state is not None:
+            current = next(iter(state.values()))
+            # NumPy state (arrays, or the scalars of 0-d arithmetic) for a NumPy `like`.
+            if (type(current) in _NUMPY_TYPES) == (B.name == "numpy") and (
+                current.shape == like.shape
+            ):
+                return state
+        state = {name: B.full(tuple(like.shape), init, like=like) for name, init in self._fields}
+        self._state = state
         return state
 
     def reset(self, mask: Any = None) -> None:
@@ -353,9 +362,13 @@ class DrawdownPenalty(_Stateful):
     _fields = (("peak", 1.0), ("drawdown", 0.0))
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        B, like = backend_and_like(outcome.equity)
-        equity = B.asfloat(outcome.equity, like)
-        s = self._get(equity)
+        if type(outcome.equity) in _NUMPY_TYPES:  # NumPy: no dispatch
+            B: Backend = _NUMPY
+            equity = np.asarray(outcome.equity, dtype=np.float64)
+        else:
+            B, like = backend_and_like(outcome.equity)
+            equity = B.asfloat(outcome.equity, like)
+        s = self._get(equity, B)
         peak = B.maximum(s["peak"], equity)
         dd = B.where(peak > 0, 1.0 - equity / B.where(peak > 0, peak, 1.0), 1.0)
         penalty = B.maximum(dd - s["drawdown"], 0.0)
@@ -398,9 +411,13 @@ class DifferentialSharpe(_Stateful):
         self._fields = (("A", 0.0), ("B", self.initial_variance))
 
     def __call__(self, outcome: StepOutcome) -> Any:
-        B, like = backend_and_like(outcome.simple_return)
-        r = B.asfloat(outcome.simple_return, like)
-        s = self._get(r)
+        if type(outcome.simple_return) in _NUMPY_TYPES:  # NumPy: no dispatch
+            B: Backend = _NUMPY
+            r = np.asarray(outcome.simple_return, dtype=np.float64)
+        else:
+            B, like = backend_and_like(outcome.simple_return)
+            r = B.asfloat(outcome.simple_return, like)
+        s = self._get(r, B)
         a, b = s["A"], s["B"]
         d_a, d_b = r - a, r * r - b
         var = b - a * a
