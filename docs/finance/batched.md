@@ -283,6 +283,16 @@ The full script,
 learns to lean on the current book, which cuts turnover and costs: on held-out scenarios
 the Sharpe ratio rises from 4.4 to 7.2 and daily turnover falls from 46% to 34%.
 
+**On a GPU**, the host queues each step's work and runs ahead while the device computes,
+except where it has to read a value back: then it waits until the device has finished
+everything queued. A step reads back once: which lanes finished, together with its
+checks of the actions, of their projection and of the cost models' inputs (it raises
+their errors, as on the CPU, before it changes any state). Keep your loop free of reads
+too: `.item()`, `bool(...)`, `.cpu()` or an `if` on a tensor each add a wait. The loop
+above tests `result.dones.all()` at every step; on a GPU, looping
+`range(env.episode_length)` instead avoids that read (a finished lane is frozen, with
+reward 0, until it is reset).
+
 ## The batched API
 
 A `BatchMarketEnv` is a `sekai.vector.BatchEnv`. `reset(seed=None, options=None,
@@ -299,7 +309,7 @@ at the boundary (what `make_vec` returns, and what Stable-Baselines3 sees), and
 are the lane's, so `env.action_mask()` and renderers work unchanged). Any environment that
 keeps its state in arrays can subclass `BatchEnv` the same way.
 
-**Speed.** On 8 CPU cores, `make_vec("Market-v1", num_envs=1024)` steps about 100,000
+**Speed.** On 8 CPU cores, `make_vec("Market-v1", num_envs=1024)` steps about 170,000
 sub-envs per second with the default observation (10 assets, a 20-day window), against
 about 11,000 for `Market-v0` in a `SyncVecEnv`.
 

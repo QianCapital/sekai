@@ -153,3 +153,26 @@ jobs:
           assert "LicenseRef-Qian-Capital-Trademarks" in metadata("sekai")["License-Expression"]
           print("rendered branded and plain frames with", sekai.__file__)
           EOF
+      - name: Draw the games from the installed wheel (their artwork and licences)
+        working-directory: /tmp
+        run: |
+          /tmp/wheel-env/bin/python - <<'EOF'
+          from importlib.metadata import files, metadata
+
+          import numpy as np
+
+          import sekai
+          from sekai.envs.games import ChessRenderer, XiangqiRenderer
+
+          assert "wheel-env" in sekai.__file__, sekai.__file__
+          for env_id, renderer in (("Chess-v0", ChessRenderer), ("Xiangqi-v0", XiangqiRenderer)):
+              env = sekai.make(env_id)
+              env.reset(seed=0)
+              frame = renderer().render(env)  # the pieces' and characters' artwork (.npz)
+              assert frame.dtype == np.uint8 and frame.ndim == 3 and frame.std() > 10, env_id
+          names = [f.name for f in files("sekai")]
+          assert "LICENSE-chess-pieces.txt" in names and names.count("OFL.txt") >= 2, names
+          expression = metadata("sekai")["License-Expression"]
+          assert "BSD-3-Clause" in expression and "OFL-1.1" in expression, expression
+          print("drew chess and xiangqi from", sekai.__file__)
+          EOF

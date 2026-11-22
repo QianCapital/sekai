@@ -67,7 +67,9 @@ All notable changes to sekai are documented here. The format follows
   bit (rewards, observations, infos and gradients). A torch step of 32 lanes holding a
   dollar-neutral book, with costs and a factor risk model, went from 3.8 to 2.6 ms; one
   of 1,024 lanes of the default market from 1.9 to 1.3 ms; and a NumPy step of 64 lanes
-  (`make_vec("Market-v1")`) from 369 to 276 µs. Work is no longer repeated:
+  (`make_vec("Market-v1")`) from 369 to 276 µs, while `make_vec("Market-v1",
+  num_envs=1024)` steps about 170,000 sub-envs per second, up from about 115,000. Work is
+  no longer repeated:
   - a neutral book's projection builds its Gram matrix once, not in each of its 21 rounds;
   - observations and cost models gather their windows once per step;
   - the torch backend asks opt_einsum for a contraction's order once per shape, where
