@@ -6,6 +6,13 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-22
+
+Strategy games (chess, go, xiangqi, heads-up hold'em and blackjack), market models
+simulated on a GPU, a torch `BatchMarketEnv` that waits for its GPU once per step, and
+`BatchMarketEnv` steps 20-30% faster on the CPU. Nothing from 0.3.0 changes: its
+environments give bit-identical results, and its API and pickles keep working.
+
 ### Added
 
 **Strategy games** (`sekai.envs.games`)
@@ -747,7 +754,8 @@ These change behaviour for code written against 0.1.x:
   core wrappers, typed `EpisodeStats` with pluggable trackers, `Renderer` protocol,
   and `check_env`.
 
-[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/QianCapital/sekai/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QianCapital/sekai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/QianCapital/sekai/compare/v0.1.1...v0.1.2
