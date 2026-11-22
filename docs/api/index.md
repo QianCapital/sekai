@@ -11,7 +11,7 @@ top-level `sekai` package unless the page says otherwise.
 | [Vector](vector.md) | `SyncVecEnv`, `AsyncVecEnv`, `ProcVecEnv`, `NativeVecEnv`, batched environments (`BatchEnv` and its adapters), results and vector wrappers |
 | [Registry](registry.md) | `register`, `make`, `make_vec`, `EnvSpec`, ... |
 | [Environments](envs.md) | built-in environment classes (and native vector versions), renderers and price simulators in `sekai.envs` |
-| [Finance](finance.md) | the `sekai.finance` toolkit: market data and panels, samplers, simulators, features, costs, accounts, constraints, risk models, action maps, observation builders, rewards, metrics, universe slots, order book, market charts |
+| [Financial Markets](finance.md) | the `sekai.finance` toolkit: market data and panels, samplers, simulators, features, costs, accounts, constraints, risk models, action maps, observation builders, rewards, metrics, universe slots, order book, market charts |
 | [Backend](backend.md) | `sekai.backend`: the NumPy and torch array backends |
 | [Rendering](rendering.md) | `sekai.rendering`: `Renderer`, `Canvas`, `RecordFrames`, `save_gif`, `save_video`, dashboards, charts and themes |
 | [Statistics](stats.md) | `EpisodeStats` and trackers |

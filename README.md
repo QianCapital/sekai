@@ -45,14 +45,14 @@ while not result.done:
 
 - **Structured results.** `step()` returns a frozen `StepResult` dataclass, not a 5-tuple you can unpack in the wrong order.
 - **Dynamic dimensionality.** `MaskedBox` padded sets and `Sequence` spaces for observations whose size changes (a universe that gains and loses assets, the trades since the last decision), plus a standard action-mask convention that `check_env`, wrappers and MaskablePPO understand.
-- **Time-aware.** Frame stacking and normalisation over any (nested) space, exponentially weighted statistics for non-stationary data, observation and order latency wrappers, and `timestamp` / `dt` in every finance env's info.
+- **Time-aware.** Frame stacking and normalisation over any (nested) space, exponentially weighted statistics for non-stationary data, observation and order latency wrappers, and `timestamp` / `dt` in every financial markets env's info.
 - **Fast vectorisation.** Native vector environments that step thousands of sub-envs with array operations (over a million env-steps per second), plus sync, asyncio and multiprocessing backends with shared-memory observations, autoreset, and worker processes that restart after a crash or a hang. Memory-mapped market data is shared by every worker instead of copied, and any environment can be snapshotted and restored.
 - **Batched and differentiable markets.** `Market-v1` is one implementation that runs as a single env, a native vector env, or a batch of torch tensors on a GPU whose rewards are differentiable in the actions, so policies can be trained by backpropagating through the market. Explicit execution timing (no fills at the close the agent just observed), hard constraints by projection (gross and per-name caps, dollar and factor neutrality), holding costs, factor risk models, and scenarios from your own generative models.
-- **A finance toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
+- **A financial markets toolkit.** Point-in-time `MarketData` with walk-forward splits and a look-ahead detector, market simulators (stochastic volatility, jumps, regimes, listings), cost and impact models, account rules, reward functions, performance metrics and a limit order book, which the built-in environments are assembled from, and yours can be too.
 - **Built-in environments.** Classic control with dynamics bit-for-bit identical to gymnasium; trading, portfolio, dynamic-universe, market-making, optimal-execution and order-book environments (single- and multi-agent), with closed-form baselines.
 - **From backtest to paper and live trading.** `LiveMarketEnv` gives a trained policy the same observations and actions over a data feed and a broker you plug in; replaying history through it with the paper broker reproduces `Market-v1` exactly. Hard risk limits (position, gross, net and turnover caps, a drawdown kill switch) sit between any policy and any broker.
 - **Honest evaluation.** Reproducible benchmark tasks with classical baselines, and the statistics that account for how many things were tried: probabilistic and deflated Sharpe ratios, minimum track-record length, and the probability of backtest overfitting (CSCV).
-- **Renderers for every environment, in NumPy alone.** The finance ones draw each episode as a dashboard: prices with positions and trades, equity, allocations, order-book depth with your orders in the queue. They are built from charts (`sekai.rendering.Dashboard`, `sekai.finance.rendering`) that render your own environments as well.
+- **Renderers for every environment, in NumPy alone.** The financial markets ones draw each episode as a dashboard: prices with positions and trades, equity, allocations, order-book depth with your orders in the queue. They are built from charts (`sekai.rendering.Dashboard`, `sekai.finance.rendering`) that render your own environments as well.
 - **Async-native.** Every environment has `async_step()` / `async_reset()`; `AsyncVecEnv` runs I/O-bound envs (live feeds, remote simulators) concurrently.
 - **Ecosystem-compatible.** `sekai.compat` converts to and from gymnasium (Stable-Baselines3, CleanRL, RLlib) and PettingZoo.
 - **Production quality.** Fully typed (`mypy --strict`), tested on Python 3.10–3.14 on Linux and on macOS and Windows, with `check_env` and a `sekai` CLI for validating and benchmarking environments.
@@ -225,8 +225,8 @@ model.learn(total_timesteps=10_000)
 | `LimitOrderBook-v0` | Dict (MaskedBox) | MultiDiscrete([6, 6, 3]) | Make markets in an event-driven limit order book |
 
 The classic control environments match gymnasium's dynamics exactly, verified step by step
-in the test suite. The finance environments simulate markets by default, and `Trading-v0`
-and `Portfolio-v0` also accept your own price history:
+in the test suite. The financial markets environments simulate markets by default, and
+`Trading-v0` and `Portfolio-v0` also accept your own price history:
 
 ```python
 import numpy as np
@@ -236,12 +236,12 @@ prices = np.cumprod(1 + np.random.default_rng(0).normal(0, 0.01, (1000, 4)), axi
 env = sekai.make("Portfolio-v0", prices=prices, episode_length=126)  # random 6-month windows
 ```
 
-`Market-v0`, the general-purpose finance environment, takes a `MarketData` history with
-listings and delistings (or simulates a regime-switching market whose assets come and go),
-per-asset features, market-wide series, any cost model and reward function, leverage and
-financing. `sekai.envs.finance.LimitOrderBookMarket` is a multi-agent order-book market in
-which traders act on their own clocks. The four classic finance environments also have native
-vector implementations, which `make_vec()` uses automatically.
+`Market-v0`, the general-purpose financial markets environment, takes a `MarketData` history
+with listings and delistings (or simulates a regime-switching market whose assets come and
+go), per-asset features, market-wide series, any cost model and reward function, leverage
+and financing. `sekai.envs.finance.LimitOrderBookMarket` is a multi-agent order-book market
+in which traders act on their own clocks. The four classic financial markets environments
+also have native vector implementations, which `make_vec()` uses automatically.
 
 The microstructure environments come with their textbook solutions as baselines, e.g.
 `env.almgren_chriss_actions()` and `env.avellaneda_stoikov_action()`. On
@@ -259,13 +259,13 @@ Run `sekai list` to see every registered environment, or browse the
 | Async environments | Not supported | `async_step` / `async_reset` on every env, `AsyncVecEnv` |
 | Multi-agent | Delegated to PettingZoo | `MultiAgentEnv` with per-agent typed spaces, event-driven turns, PettingZoo bridge |
 | Variable-size observations | `Sequence` / `Graph` spaces (not batchable) | `MaskedBox` padded sets that batch and flatten, `Sequence` with padding |
-| Vectorised simulators | `vector_entry_point` | `NativeVecEnv` base class, native finance envs, shared-memory `ProcVecEnv` |
+| Vectorised simulators | `vector_entry_point` | `NativeVecEnv` base class, native financial markets envs, shared-memory `ProcVecEnv` |
 | Rendering | `render()` on Env, mode fixed at construction | Separate `Renderer` objects: swap, record, or skip freely |
 | Episode statistics | Untyped `info["episode"]["r"]` | Typed `EpisodeStats` with pluggable trackers |
 | Vector env naming | `AsyncVectorEnv` means multiprocessing | `SyncVecEnv`, `AsyncVecEnv` (asyncio), `ProcVecEnv` (processes) |
 | Registry plugins | Entry-point plugins | `register_namespace("qc", loader)` for lazy plugin namespaces |
 | Env checking | Passive checker wraps every env | `check_env()` in your tests; zero overhead in training |
-| Finance | Not in scope | `sekai.finance` toolkit and six finance environments |
+| Financial Markets | Not in scope | `sekai.finance` toolkit and seven financial markets environments |
 
 Coming from gymnasium? The [migration guide](https://sekai.qiancapital.com/guide/gymnasium/)
 maps every API, and `sekai.compat` lets you mix both while you move over.
@@ -285,7 +285,7 @@ sekai -m my_package.envs list            # import a plugin package first
 Contributions are welcome. See [CONTRIBUTING.md](https://github.com/QianCapital/sekai/blob/master/CONTRIBUTING.md)
 for the development setup, and the [examples](https://github.com/QianCapital/sekai/tree/master/examples)
 for runnable scripts, from a pure-NumPy agent that solves CartPole in under a second to
-finance baselines.
+financial markets baselines.
 
 ## Citing
 
@@ -297,8 +297,8 @@ If you use sekai in research, please cite it using the metadata in
 Apache 2.0. See [LICENSE](https://github.com/QianCapital/sekai/blob/master/LICENSE). The
 glyph atlases the renderers draw text with are under the SIL Open Font License
 ([OFL.txt](https://github.com/QianCapital/sekai/blob/master/sekai/rendering/fonts/OFL.txt)).
-The Qian Capital name and logo, which the finance dashboards show, are trademarks of Qian
-Capital and covered by neither licence: see
+The Qian Capital name and logo, which the financial markets dashboards show, are trademarks
+of Qian Capital and covered by neither licence: see
 [TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) for what they may
 be used for.
 

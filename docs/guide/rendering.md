@@ -24,10 +24,10 @@ recording is a wrapper you add or remove without touching the environment.
 </figure>
 </div>
 
-The finance environments are drawn as dashboards: the market, the agent's positions and
-trades, and its results, as the episode unfolds. Their header is drawn in the Qian Capital
-house style unless you pass `branding=False` (see [Branding](#branding)); the tabs show
-both.
+The financial markets environments are drawn as dashboards: the market, the agent's
+positions and trades, and its results, as the episode unfolds. Their header is drawn in the
+Qian Capital house style unless you pass `branding=False` (see [Branding](#branding)); the
+tabs show both.
 
 === "Qian Capital (default)"
 
@@ -50,7 +50,7 @@ both.
     { .sk-dashboards }
 
 *These GIFs were produced by the renderers on this page, with `RecordFrames` and
-`save_gif()`; the finance ones, in both styles, by
+`save_gif()`; the financial markets ones, in both styles, by
 [`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).*
 
 ## The Renderer protocol
@@ -96,12 +96,12 @@ frame = renderer.render(env)
 print(frame.shape, frame.dtype)  # (400, 600, 3) uint8
 ```
 
-### Finance
+### Financial Markets
 
-Every finance environment has a renderer in `sekai.envs.finance`. Each draws the episode so
-far as a dashboard: a header with the environment's name, where its prices come from (the
-date, for dated history) and its headline numbers, a progress rule along the episode, and
-charts underneath.
+Every financial markets environment has a renderer in `sekai.envs.finance`. Each draws the
+episode so far as a dashboard: a header with the environment's name, where its prices come
+from (the date, for dated history) and its headline numbers, a progress rule along the
+episode, and charts underneath.
 
 | Renderer | Draws | Charts |
 |---|---|---|
@@ -210,9 +210,9 @@ save_video(frames, "cartpole.mp4", fps=50)   # needs imageio + imageio-ffmpeg
 
 ## Dashboards for your own environments
 
-The finance renderers are `sekai.rendering.Dashboard`s, assembled from charts that you can
-use as well, so an environment of your own gets the same kind of renderer in a few lines.
-A dashboard needs nothing from the environment but readable state:
+The financial markets renderers are `sekai.rendering.Dashboard`s, assembled from charts that
+you can use as well, so an environment of your own gets the same kind of renderer in a few
+lines. A dashboard needs nothing from the environment but readable state:
 
 ```python
 import numpy as np
@@ -389,10 +389,10 @@ renderer = TradingRenderer(theme="plain-light", branding=False)  # no house styl
 
 ### Branding
 
-sekai's finance renderers draw their header in the Qian Capital house style by default:
-the gold Q mark beside the QIAN CAPITAL wordmark, over a title set in Hedvig Letters Serif
-(the heading face of these pages), and the episode's progress drawn as a rule of gold metal
-that fills as the episode goes on.
+sekai's financial markets renderers draw their header in the Qian Capital house style by
+default: the gold Q mark beside the QIAN CAPITAL wordmark, over a title set in Hedvig
+Letters Serif (the heading face of these pages), and the episode's progress drawn as a rule
+of gold metal that fills as the episode goes on.
 
 === "Branded (default)"
 
@@ -430,10 +430,10 @@ default), and draws exactly what sekai 0.2 drew.
 The Qian Capital name and logo are trademarks of Qian Capital, and the artwork is not
 covered by sekai's Apache License (nor by the SIL Open Font License of its fonts). The
 [TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) file lets you show
-them as sekai draws them in its own dashboards, the finance renderers, including in figures
-and recordings of them, and redistribute them unmodified as part of sekai. Anything else,
-such as branding a dashboard of your own (with `branding=True` or the drawing functions in
-`sekai.rendering.brand`), needs written permission from Qian Capital.
+them as sekai draws them in its own dashboards, the financial markets renderers, including
+in figures and recordings of them, and redistribute them unmodified as part of sekai.
+Anything else, such as branding a dashboard of your own (with `branding=True` or the drawing
+functions in `sekai.rendering.brand`), needs written permission from Qian Capital.
 
 ## Canvas
 

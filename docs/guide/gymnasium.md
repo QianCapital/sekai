@@ -256,12 +256,12 @@ print(f"PPO mean return over 10 episodes: {sum(returns) / len(returns):.1f}")  #
 ```
 
 `Dict` observations, like `Portfolio-v0`'s, need SB3's `MultiInputPolicy`. SB3's own
-`check_env` accepts every finance environment. For most of them it only adds advice, such as
-using a symmetric `[-1, 1]` action space, which `RescaleAction` provides. `Market-v0` and
-`LimitOrderBook-v0` are the exception: their [`MaskedBox`](dynamic.md) entry becomes a `Dict`
-inside the observation `Dict`, and SB3 does not support nested observation spaces
-(`check_env` warns about it, and `MultiInputPolicy` raises `NotImplementedError`). Unnest or
-flatten those two first, as [shown below](#nested-observations-unnest-or-flatten).
+`check_env` accepts every financial markets environment. For most of them it only adds
+advice, such as using a symmetric `[-1, 1]` action space, which `RescaleAction` provides.
+`Market-v0` and `LimitOrderBook-v0` are the exception: their [`MaskedBox`](dynamic.md) entry
+becomes a `Dict` inside the observation `Dict`, and SB3 does not support nested observation
+spaces (`check_env` warns about it, and `MultiInputPolicy` raises `NotImplementedError`).
+Unnest or flatten those two first, as [shown below](#nested-observations-unnest-or-flatten).
 
 ```python
 import numpy as np
@@ -294,7 +294,8 @@ print(f"PPO {ppo:+.4f}, equal weight {equal_weight:+.4f}")  # ~ PPO +0.0075, equ
 ```
 
 A 20k-step run is nowhere near converged; the closed-form and heuristic baselines on the
-[finance page](../environments/finance.md) are the bar a learned policy has to clear.
+[financial markets page](../environments/finance.md) are the bar a learned policy has
+to clear.
 
 ### Nested observations: unnest or flatten
 

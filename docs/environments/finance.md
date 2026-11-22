@@ -1,4 +1,4 @@
-# Finance environments
+# Financial Markets environments
 
 Seven environments model the core problems of systematic trading. Each is a standard
 `sekai.Env` (so wrappers, vector envs and the gymnasium bridge all apply), runs on simulated
@@ -17,18 +17,19 @@ that a learned policy has to beat.
 | [`LimitOrderBook-v0`](#limitorderbook-v0) | quote and trade in a limit order book | zero-intelligence order flow, or your historical messages | inventory-skewed quotes |
 
 [`LimitOrderBookMarket`](#limitorderbookmarket) puts several agents in one order book.
-The first four have [native vector versions](#native-vector-environments) that step
-thousands of sub-envs at once. All of them are assembled from the
-[finance toolkit](../finance/index.md), whose parts (market models, cost models, reward
-functions, metrics) they also accept as arguments.
+`Trading-v0`, `Portfolio-v0`, `Market-v1`, `MarketMaking-v0` and `OptimalExecution-v0` have
+[native vector versions](#native-vector-environments) that step thousands of sub-envs at
+once. All of them are assembled from the
+[financial markets toolkit](../finance/index.md), whose parts (market models, cost models,
+reward functions, metrics) they also accept as arguments.
 
 Each has an RGB renderer in `sekai.envs.finance` that draws its episodes as a dashboard
 (`TradingRenderer`, `PortfolioRenderer`, `MarketRenderer`, `MarketMakingRenderer`,
 `OptimalExecutionRenderer`, `LimitOrderBookRenderer` and `LimitOrderBookMarketRenderer`):
 the animations on this page, made by
 [`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).
-See [Rendering](../guide/rendering.md#finance) for what each shows, and for building the same
-kind of renderer for your own environment.
+See [Rendering](../guide/rendering.md#financial-markets) for what each shows, and for
+building the same kind of renderer for your own environment.
 
 Rewards are additive over an episode: log growth of wealth for `Trading-v0`, `Portfolio-v0`
 and `Market-v0` (or any `reward=` you pass), risk-adjusted P&L for market making in both
@@ -345,7 +346,7 @@ print(regimes.n_assets, regimes.observation_space["returns"])  # 4 Box(-inf, inf
 
 Trade a universe whose members list and delist, with per-asset features, market-wide data,
 any cost model, shorting, leverage and financing: the general-purpose environment,
-assembled from the [finance toolkit](../finance/index.md). The class is
+assembled from the [financial markets toolkit](../finance/index.md). The class is
 `sekai.envs.finance.MarketEnv`.
 
 **Data.** Either a historical [`MarketData`](../finance/data.md) (`data=`; NaN prices mark
@@ -545,7 +546,7 @@ random         -0.0086 ± 0.0753
 
 ## Market-v1
 
-`Market-v1` is the general finance environment of sekai 0.3: a one-lane
+`Market-v1` is the general financial markets environment of sekai 0.3: a one-lane
 [`BatchMarketEnv`](../finance/batched.md), the same implementation that `make_vec` runs as a
 native vector env and that runs as a batch of torch tensors on a GPU, differentiable in the
 actions. It takes every argument of `Market-v0` and adds:
@@ -668,9 +669,9 @@ fixed 2.0 / 2.0     +25.7799 ± 8.6182
 ```
 
 The inventory-aware quotes earn more, with less than half the dispersion of the best
-symmetric quote. `make()` adds no wrappers to the finance environments, so methods such as
-`avellaneda_stoikov_action()` can be called on the env directly; once you wrap it, call them
-on `env.unwrapped`.
+symmetric quote. `make()` adds no wrappers to the financial markets environments, so methods
+such as `avellaneda_stoikov_action()` can be called on the env directly; once you wrap it,
+call them on `env.unwrapped`.
 
 ## OptimalExecution-v0
 
@@ -747,8 +748,8 @@ $$
 | `fixed_cost` | `0.0625` | $\epsilon$ (half the bid-ask spread) |
 | `risk_aversion` | `1e-6` | $\lambda$ |
 
-**Baselines.** Every finance env exposes the step index as `env.elapsed_steps`, which
-schedule-based policies need:
+**Baselines.** Every financial markets env exposes the step index as `env.elapsed_steps`,
+which schedule-based policies need:
 
 ```python
 env = sekai.make("OptimalExecution-v0")

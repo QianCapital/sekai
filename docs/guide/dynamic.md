@@ -120,8 +120,8 @@ print(slots.assets, slots.changed)  # ('DYNE', 'BOLT', 'CRUX', None) [ True Fals
 `update()` returns the slot of each present instrument, in order, ready for
 `MaskedBox.pack(values, slots=...)`. `changed` marks slots whose owner differs from before the
 call, so you can clear per-slot state (a lagged return, an open position) when a slot is
-reused; `mask` is the occupancy as `int8`. The [finance toolkit](../finance/index.md) builds
-its dynamic-universe environment on it.
+reused; `mask` is the occupancy as `int8`. The [financial markets
+toolkit](../finance/index.md) builds its dynamic-universe environment on it.
 
 ## Action masks
 
@@ -344,4 +344,4 @@ vec.close()
 ```
 
 For a real dynamic universe on historical or simulated data, with features, costs and
-financing, see `Market-v0` in the [finance toolkit](../finance/index.md).
+financing, see `Market-v0` in the [financial markets toolkit](../finance/index.md).

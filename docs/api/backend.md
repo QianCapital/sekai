@@ -1,7 +1,7 @@
 # Backend
 
-`sekai.backend`: the array operations sekai's batched finance core is written in, on NumPy
-arrays or torch tensors. See
+`sekai.backend`: the array operations sekai's batched financial markets core is written in,
+on NumPy arrays or torch tensors. See
 [Batched and differentiable environments](../finance/batched.md#backends-and-gradients).
 
 ::: sekai.backend
