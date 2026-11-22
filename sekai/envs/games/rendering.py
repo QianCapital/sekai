@@ -137,6 +137,20 @@ def game_theme(theme: GameTheme | str) -> GameTheme:
         raise ValueError(f"Unknown theme {theme!r}; use 'dark', 'light' or a GameTheme.") from None
 
 
+def time_limit_reached(env: Any) -> bool:
+    """Whether a `TimeLimit` around `env` has cut the episode short (it has run out of steps)."""
+    layer = env
+    seen: set[int] = set()
+    while layer is not None and id(layer) not in seen:
+        seen.add(id(layer))
+        limit = getattr(layer, "max_episode_steps", None)
+        elapsed = getattr(layer, "elapsed_steps", None)
+        if isinstance(limit, int) and isinstance(elapsed, int) and elapsed >= limit:
+            return True
+        layer = getattr(layer, "env", None)
+    return False
+
+
 def unwrap(env: Any, expected: type | tuple[type, ...]) -> Any:
     """The base environment, checked to be of the type a renderer draws."""
     base = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -200,6 +214,8 @@ class GameRenderer(BaseRenderer, abc.ABC):
         self.theme = game_theme(theme)
         self.header = bool(header)
         self.names = dict(names or {})
+        self.time_limit_reached = False
+        """Whether the episode drawn last was cut short by a `TimeLimit` (set by `render`)."""
         self._static: dict[Any, tuple[NDArray[np.uint8], tuple[int, int]]] = {}
 
     # -- what subclasses provide -------------------------------------------------------
@@ -239,6 +255,7 @@ class GameRenderer(BaseRenderer, abc.ABC):
     def render(self, env: Any) -> NDArray[np.uint8]:
         base = unwrap(env, self.env_types)
         self.check_ready(base)
+        self.time_limit_reached = time_limit_reached(env)
         width, height = self.frame_size()
         key = (width, height, self.theme.name, self.header, self.static_key(base))
         cached = self._static.get(key)
@@ -491,5 +508,6 @@ __all__ = [
     "game_theme",
     "mix_alpha",
     "ready_or_raise",
+    "time_limit_reached",
     "unwrap",
 ]

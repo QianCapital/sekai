@@ -120,12 +120,21 @@ class Painter:
         color: ColorLike,
         *,
         alpha: float = 1.0,
-        radius: float = 0.0,
+        radius: Radius = 0.0,
     ) -> None:
-        """Fill a rectangle, optionally with rounded corners."""
-        self.canvas.rect(
-            left, self._y(bottom), right, self._y(top), rgb(color), alpha=alpha, radius=radius
-        )
+        """Fill a rectangle, optionally with rounded corners (one radius, or per corner as
+        `Radius` describes)."""
+        if isinstance(radius, (int, float)):
+            self.canvas.rect(
+                left, self._y(bottom), right, self._y(top), rgb(color), alpha=alpha, radius=radius
+            )
+            return
+        box = self._box(left, top, right, bottom)
+        if box is None:
+            return
+        xs, ys = self._centres(box)
+        coverage = rounded_box_coverage(xs, ys, left, top, right, bottom, radius)
+        self._fill(box, coverage, rgb(color), alpha)
 
     def circle(
         self, cx: float, cy: float, r: float, color: ColorLike, *, alpha: float = 1.0
