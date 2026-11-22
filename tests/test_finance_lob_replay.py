@@ -1232,7 +1232,25 @@ class TestLatency:
 # ---------------------------------------------------------------------------
 # tests/data/lob_reference.npz holds per-step digests of rollouts of LimitOrderBook-v0 and
 # LimitOrderBookMarket with their default behaviour, recorded by tests/data/lob_reference.py
-# on the code before this feature (see that module before regenerating it).
+# on the code before this feature (see that module before regenerating it), on x86-64.
+
+
+def uniform_rounds_as_recorded() -> bool:
+    """Whether NumPy's `Generator.uniform` rounds here as on x86-64, where the digests were made.
+
+    It returns `low + (high - low) * u`. x86-64 builds round the product and the sum
+    separately, while arm64 builds (macOS on Apple silicon) may fuse them into one
+    multiply-add, which differs in the last bit for some draws. A jittered
+    LimitOrderBookMarket draws its waits with it, so there its runs can't reproduce the
+    digests, although its code is what it was in 0.2.0 (and 0.2.0 ran the same way there).
+    """
+    low, high = 1 - 0.2, 1 + 0.2
+    a, b = np.random.default_rng(0), np.random.default_rng(0)
+    return all(a.uniform(low, high) == low + (high - low) * b.random() for _ in range(1000))
+
+
+UNIFORM_AS_RECORDED = uniform_rounds_as_recorded()
+JITTER_SKIP = "NumPy's uniform() rounds differently here than on x86-64, where it was recorded"
 
 
 @pytest.fixture(scope="module")
@@ -1254,6 +1272,8 @@ class TestDefaultsUnchanged:
     @pytest.mark.parametrize("seed", [0, 1, 2])
     @pytest.mark.parametrize("config", sorted(MULTI_CONFIGS))
     def test_multi_agent(self, reference: dict[str, np.ndarray], config: str, seed: int) -> None:
+        if MULTI_CONFIGS[config].get("jitter") and not UNIFORM_AS_RECORDED:
+            pytest.skip(JITTER_SKIP)
         digests = multi_rollout(MULTI_CONFIGS[config], seed, reference["multi_actions"])
         expected = reference[f"multi_{config}_{seed}_digests"].tolist()
         assert len(digests) == len(expected)
@@ -1291,6 +1311,8 @@ class TestPickledBy020:
         with warnings.catch_warnings():
             warnings.simplefilter("error")  # loads without a deprecation warning, too
             obj = pickle.loads(pickled_by_020[f"{name}__pickle"].tobytes())
+        if isinstance(obj, LimitOrderBookMarket) and obj.jitter and not UNIFORM_AS_RECORDED:
+            pytest.skip(JITTER_SKIP)  # (recorded on x86-64, like the reference above)
         digests = CONTINUATIONS[name](obj)
         expected = pickled_by_020[f"{name}__digests"].tolist()
         assert len(digests) == len(expected)

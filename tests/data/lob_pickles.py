@@ -17,8 +17,9 @@ pickles load on every later NumPy as well:
     mkdir -p /tmp/sekai-020 && git archive e0eff20 sekai | tar -x -C /tmp/sekai-020
     PYTHONPATH=/tmp/sekai-020 python tests/data/lob_pickles.py tests/data/lob_pickles.npz
 
-(with a Python environment that has NumPy 1.24). Regenerate it only for an outside reason,
-such as a NumPy release that alters a random stream.
+(with a Python environment that has NumPy 1.24, on x86-64: arm64 builds of NumPy round
+`uniform()` differently). Regenerate it only for an outside reason, such as a NumPy
+release that alters a random stream.
 """
 
 from __future__ import annotations

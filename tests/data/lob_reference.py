@@ -10,7 +10,8 @@ with the first step that differs.
 This module uses only what existed then, so it runs on that version. Regenerate the file
 only from a checkout of it (never from later code, which would just record itself), and
 only if the reference must change for an outside reason such as a NumPy release that
-alters a random stream:
+alters a random stream, and only on x86-64 (arm64 builds of NumPy round `uniform()`
+differently; see `uniform_rounds_as_recorded` in the test):
 
     mkdir -p /tmp/sekai-reference && git archive e0eff20 sekai | tar -x -C /tmp/sekai-reference
     PYTHONPATH=/tmp/sekai-reference python tests/data/lob_reference.py tests/data/lob_reference.npz
