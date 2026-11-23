@@ -246,8 +246,9 @@ def test_illegal_action_lose_loses_the_rounds_stake() -> None:
     played = env.table.rounds_played  # type: ignore[union-attr]
     r = env.step(0)  # a stand before the bet: the smallest bet is lost, no cards dealt
     assert r.terminated and r.reward == -1.0 and r.info["net"] == -10
-    assert r.info["phase"] == "betting"
-    assert env.table.rounds_played == played  # type: ignore[union-attr]
+    assert r.info["phase"] == "betting" and r.info["round"]["seats"][0]["forfeit"]
+    assert r.info["round"]["seats"][0]["hands"] == [] and not r.info["round"]["dealer"]["cards"]
+    assert env.table.rounds_played == played + 1  # type: ignore[union-attr]
     assert env.reset(options={"keep_bankroll": True}).info["bankroll"] == 970
     table = env.table
     assert sum(table.bankrolls) + table.chips_on_table + table.house_net == pytest.approx(  # type: ignore[union-attr]

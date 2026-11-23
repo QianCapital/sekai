@@ -234,6 +234,7 @@ print(sorted(env.reset(seed=0).observations), env.action_space("maker"))  # ['ma
 
 The PettingZoo env keeps its own randomness; seeds passed to `reset()` go straight to it.
 An event-driven env keeps its convention through the bridge: observations only for the
-agents that act next, rewards and flags for all. That passes PettingZoo's parallel API test,
-but a consumer that expects an observation for every live agent at every step needs to
-handle it.
+agents that act next, rewards and flags for all. PettingZoo's Parallel API expects every
+live agent to act at every step, so code written for it (`parallel_api_test`,
+`parallel_to_aec`, learners that act for every agent) does not run on an event-driven env:
+step it with actions for the agents in `observations`, as the loops above do.

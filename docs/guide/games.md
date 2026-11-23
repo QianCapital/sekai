@@ -145,7 +145,7 @@ from sekai.envs.games import MultiAgentGame, RandomPolicy
 env = MultiAgentGame(sekai.make("Go9x9-v0"))
 policies = {side: RandomPolicy(seed=i) for i, side in enumerate(env.possible_agents)}
 result = env.reset(seed=0)
-while not result.all_done:
+while env.agents:
     (agent,) = result.observations
     action = policies[agent].act(result.observations[agent], result.info[agent])
     result = env.step({agent: action})

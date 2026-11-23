@@ -147,8 +147,8 @@ class HoldemEnv(Env[Observation, np.intp]):
             legal = ", ".join(ACTION_NAMES[i] for i, a in enumerate(actions) if a is not None)
             raise IllegalAction(
                 f"Action {index} ({ACTION_NAMES[index]}) is not legal here; legal: {legal}. "
-                "Mask your policy with info['legal_action_mask'] (or construct the env with "
-                "illegal_action='lose' to fold the hand instead).",
+                "Mask your policy with info['legal_action_mask'], or construct the env with "
+                "illegal_action='lose' to fold the hand instead of raising.",
                 action=index,
                 legal=hand.legal(),
             )
@@ -224,7 +224,15 @@ class HoldemEnv(Env[Observation, np.intp]):
         what `OpponentWrapper` gives the agent when the opponent's action ends the hand
         (the env's own last observation is the last actor's)."""
         view = self.hand.view(seat)
-        return self._encode(view), {"observer": view.seat, "view": view, "result": view.result}
+        return self._encode(view), self._viewer_info(view)
+
+    def _seat_info(self, seat: int) -> dict[str, Any]:
+        """The `info` entries that depend on the viewer, as `seat` sees them."""
+        return self._viewer_info(self.hand.view(seat))
+
+    @staticmethod
+    def _viewer_info(view: SeatView) -> dict[str, Any]:
+        return {"observer": view.seat, "view": view, "result": view.result}
 
     def _abstract_actions(self) -> list[Action | None]:
         """`abstract_actions(self.hand)`, computed once per state of the hand."""

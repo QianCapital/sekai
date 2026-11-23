@@ -103,18 +103,32 @@ from sekai.envs.games import MultiAgentGame
 
 env = MultiAgentGame(sekai.make("HeadsUpHoldem-v0"))
 result = env.reset(seed=0)
-while not result.all_done:
+while env.agents:  # empty once the game is over
     (agent,) = result.observations  # "p1" or "p2", whoever is to act
     mask = env.action_mask(agent)
     result = env.step({agent: env.action_space(agent).sample(mask=mask)})
 print(result.rewards)  # e.g. {'p1': -1.0, 'p2': 1.0}, each seat's net in big blinds
 ```
 
-On the last step both agents get a final observation. In poker each agent's
-observations and `info` (`observer`, `view`, `result`) are its own seat's, and a wrapper
-that changes observations goes outside the `MultiAgentGame` (poker refuses one inside,
-where it would see both seats' private views). `sekai.compat.to_pettingzoo()` exposes it
-through PettingZoo's Parallel API, with observations only for the agent to move.
+On the last step both agents get a final observation: in poker each its own seat's view,
+in the board games both the final position as the game encodes it, from the side to move
+(so for a game a `TimeLimit` stops, one agent's final observation is from its opponent's
+side, as `OpponentWrapper` documents). In poker each agent's `info` (`observer`, `view`,
+`result`) is its own seat's too. A reset into a position that is already over leaves
+`env.agents` empty, as above.
+
+sekai's wrappers take a single-agent `Env`, so they cannot wrap a `MultiAgentGame`, and
+inside one they would see both players' moves in turn: transform each agent's
+observations, actions and rewards in its learner. `MultiAgentGame` refuses the wrappers
+that would act across both players' moves (`FrameStackObservation`, `ActionRepeat`,
+`AutoReset`, `RecordEpisodeStatistics`, ...) and, in poker, any that changes the
+observations; a `TimeLimit` inside is fine.
+
+`sekai.compat.to_pettingzoo()` turns it into a PettingZoo `ParallelEnv` whose
+observations are only the agent to move's, as the loop above steps it. Most Parallel-API
+code (`pettingzoo.test.parallel_api_test`, `pettingzoo.utils.parallel_to_aec`, learners
+that act for every agent at every step) expects every live agent to act at once, so it
+does not run on a turn-based game; PettingZoo's own board games use its AEC API instead.
 
 ### Speed
 

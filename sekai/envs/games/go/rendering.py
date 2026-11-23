@@ -231,7 +231,8 @@ class GoRenderer(BoardRenderer):
     dead, and the header the result, both from `scoring.final_score` with dead stones
     estimated by a fixed number of seeded playouts (so a position is always scored the
     same way). That score, which counts dead stones as captured, can differ from the
-    environment's own Tromp-Taylor result (`info["result"]`).
+    environment's own Tromp-Taylor result (`info["result"]`). A game lost by an illegal
+    move (`illegal_action="lose"`) shows no score: the header names the winner.
 
     Args:
         size: The board's width in pixels, its wooden border included.
@@ -439,7 +440,9 @@ class GoRenderer(BoardRenderer):
         ys = [top + (r + PAD) * unit for r in range(size)]
         pixels = painter.canvas.pixels
         dead: set[int] = set()
-        if self.finished(env):  # in order: territory, stones, then the last move's ring
+        outcome = env.outcome
+        forfeit = outcome is not None and outcome.reason == REASON_ILLEGAL_MOVE
+        if self.finished(env) and not forfeit:  # territory, stones, then the last move's ring
             score = self.final(env)
             for owner, color in (("black", BLACK), ("white", WHITE)):
                 for vertex in score.territory.get(owner, ()):

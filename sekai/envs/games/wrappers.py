@@ -17,28 +17,63 @@ from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import ObservationWrapper, Wrapper
 from sekai.envs.games.policies import Policy, RandomPolicy
 from sekai.utils.seeding import make_seed_sequence
+from sekai.wrappers import (
+    ActionRepeat,
+    AutoReset,
+    DelayAction,
+    DelayObservation,
+    FrameStackObservation,
+    NormalizeObservation,
+    NormalizeReward,
+    RecordEpisodeStatistics,
+    StickyAction,
+)
 
 MAX_REDEALS = 100
 """How many games in a row the opponent may end before the agent's first move."""
 
 
-def check_private_views(env: Env[Any, Any], name: str) -> None:
-    """Refuse observation wrappers around a game of hidden information (poker) inside the
-    adapter `name`: each observation is one seat's private view, which the adapter hands
-    to the right seat from the env itself, and a wrapper inside would see both seats'."""
+# Wrappers that work across steps or episodes: inside an adapter that plays a game's two
+# sides they would act on both players' moves at once (and AutoReset would hide the ends
+# of the games the adapter has to see).
+_ACROSS_STEPS = (
+    ActionRepeat,
+    AutoReset,
+    DelayAction,
+    DelayObservation,
+    FrameStackObservation,
+    NormalizeObservation,
+    NormalizeReward,
+    RecordEpisodeStatistics,
+    StickyAction,
+)
+
+
+def check_inner_wrappers(env: Env[Any, Any], adapter: str, instead: str) -> None:
+    """Refuse the wrappers inside the adapter `adapter` (`OpponentWrapper`, `MultiAgentGame`)
+    that cannot work there, saying what to do `instead`: those that work across steps or
+    episodes, another two-player adapter, and in a game of hidden information (poker) any
+    that changes the observations, each of which is one seat's private view."""
     base = env.unwrapped
-    if getattr(base, "_seat_view", None) is None:
-        return
+    hidden = getattr(base, "_seat_view", None) is not None
     layer: Any = env
     while isinstance(layer, Wrapper):
         inner = layer.env
-        if isinstance(layer, ObservationWrapper) or (
-            layer.observation_space != inner.observation_space
+        name = type(layer).__name__
+        if isinstance(layer, OpponentWrapper):
+            raise TypeError(f"{adapter} needs the game itself, not an {name} of it.")
+        if isinstance(layer, _ACROSS_STEPS):
+            raise TypeError(
+                f"{name} inside {adapter} would act on both players' moves (or hide the end "
+                f"of a game): {instead}."
+            )
+        if hidden and (
+            isinstance(layer, ObservationWrapper)
+            or layer.observation_space != inner.observation_space
         ):
             raise TypeError(
-                f"{type(layer).__name__} inside {name} would see both seats' private views "
-                f"of {type(base).__name__}: wrap the {name} in it instead (an opponent that "
-                "needs its own can apply it in act())."
+                f"{name} inside {adapter} would see both seats' private views of "
+                f"{type(base).__name__}: {instead}."
             )
         layer = inner
 
@@ -59,11 +94,12 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
 
     Args:
         env: A two-player game env (chess, go, xiangqi or heads-up hold'em), possibly
-            wrapped (e.g. in `TimeLimit`). Wrappers that change the observations, or that
-            work across steps (`ActionRepeat`, `StickyAction`, `NormalizeReward`), go
-            outside (`FrameStackObservation(OpponentWrapper(env))`): inside, they would
-            span both players' turns. Poker refuses observation wrappers inside, where
-            they would see both seats' private views.
+            wrapped (e.g. in `TimeLimit`). Wrappers that work across steps or episodes
+            (`FrameStackObservation`, `ActionRepeat`, `AutoReset`,
+            `RecordEpisodeStatistics`, ...) go outside
+            (`FrameStackObservation(OpponentWrapper(env))`), since inside they would act on
+            both players' moves; they are refused there, as are, in poker, wrappers that
+            change the observations (they would see both seats' private views).
         opponent: Any policy with `act(observation, info) -> action`; by default
             `RandomPolicy`. If it has a `seed()` method, `reset(seed=...)` re-seeds it
             with a seed derived from that one, so its choices are independent of the
@@ -98,7 +134,12 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
             raise TypeError(
                 f"OpponentWrapper needs a two-player game env, got {type(base).__name__}."
             )
-        check_private_views(env, "OpponentWrapper")
+        check_inner_wrappers(
+            env,
+            "OpponentWrapper",
+            "wrap the OpponentWrapper in it instead (an opponent that needs it can apply it "
+            "in act())",
+        )
         self.opponent: Policy = opponent if opponent is not None else RandomPolicy()
         self._players: tuple[Any, Any] = (players[0], players[1])
         self._spec = self._parse(agent_color, tuple(sides))

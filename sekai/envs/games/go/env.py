@@ -47,9 +47,10 @@ Every `reset`/`step` info dict holds `legal_action_mask` (`int8`), `legal_action
 `None`), `ply`, `captures` (`{"black": n, "white": n}`, stones captured **by** each
 colour), `passes` (consecutive), `komi`, `result` (`"*"` while ongoing, else `"B+3.5"`,
 `"W+0.5"` or `"Draw"`) and `winner` (`"black"`, `"white"` or `None`); once the game is
-over also `score` (`{"black": points, "white": points including komi}`) and
-`termination` (`"two passes"`, `"max moves"` or, for a forfeit, `"illegal move"`, when
-`illegal_action` holds the action).
+over also `score` (`{"black": points, "white": points including komi}`; for a forfeit
+the board's area score, which does not decide the result) and `termination` (`"two
+passes"`, `"max moves"` or, for a forfeit, `"illegal move"`, when `illegal_action` holds
+the action).
 """
 
 from __future__ import annotations
@@ -289,7 +290,9 @@ class GoEnv(Env[Observation, np.intp]):
             raise InvalidAction(action, self.action_space)
 
         mover = _COLOR_NAME[self._board.to_play]
-        if self.illegal_action == "lose" and not self.is_legal(int(action)):
+        mask = self._mask  # (computed for this position when its info was built)
+        legal = bool(mask[int(action)]) if mask is not None else self.is_legal(int(action))
+        if self.illegal_action == "lose" and not legal:
             self._outcome = self._forfeit()
             info = self._info()
             info["illegal_action"] = int(action)

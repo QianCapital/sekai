@@ -664,6 +664,11 @@ class BlackjackRenderer(_Named, GameRenderer):
         if done:
             last = view["last_round"]
             net = last["seats"][0]["net"] if last else 0
+            if last and last["seats"][0].get("forfeit"):
+                how = "No cards dealt" if not last["seats"][0]["hands"] else "Every hand lost"
+                bankroll = format_chips(seats[0]["bankroll"])
+                sub = f"An illegal action. {how} \u00b7 bankroll {bankroll}"
+                return Status(f"Round forfeited: {format_signed(net, 0)}", sub, "loss")
             dealer = last["dealer"] if last else view["dealer"]
             if dealer["blackjack"]:
                 sub = "Dealer blackjack"
@@ -1167,12 +1172,14 @@ class BlackjackTextRenderer(_Named, BaseRenderer):
             net = last["seats"][0]["net"] if last else 0
             state = f"round {last['round'] if last else view['round_no']} over, net "
             state += _plain_signed(net)
+            if last and last["seats"][0].get("forfeit"):
+                state += " (forfeited: an illegal action)"
         elif view["to_act"] is None and not playing:
             state = f"round {view['round_no']}, every seat is out of chips"
         else:
             state = f"round {view['round_no']}, {view['phase']}"
         lines = [f"Blackjack ({table.rules.label}), {state}"]
-        if playing or done:
+        if (playing or done) and view["dealer"]["cards"]:  # (none in a round forfeited unplayed)
             dealer = view["dealer"]
             label = dealer_label(dealer).lower()
             lines.append(f"Dealer: {_cards_text(dealer['cards'])} ({label})")

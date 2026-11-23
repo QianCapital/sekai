@@ -203,8 +203,6 @@ def test_no_peek_rules_surrender_waits_for_the_reveal(hole: str, outcome: str, p
 def test_forfeit_loses_the_seats_hands_and_play_moves_on() -> None:
     # Seat 0: 8 and 8; seat 1: 10 and 9; the dealer: 9 up, 7 in the hole.
     t = stacked(["8h", "Tc", "9c", "8d", "9h", "7s", "3c"], seats=2)
-    with pytest.raises(IllegalAction, match="only a seat playing"):
-        t.forfeit()  # betting: nothing to give up yet
     t.act("bet:10")
     t.act("bet:20")
     t.act("split")  # seat 0's first eight gets a three
@@ -216,6 +214,29 @@ def test_forfeit_loses_the_seats_hands_and_play_moves_on() -> None:
     assert [h["outcome"] for h in hands] == ["lose", "lose"] and t.bankrolls[0] == 980
     t.act("stand")  # seat 1's 19 against the dealer's 16, who draws
     assert t.phase == "betting" and t.last_round["seats"][0]["net"] == -20
+    assert t.last_round["seats"][0]["forfeit"] and "forfeit" not in t.last_round["seats"][1]
+    assert_conserved(t)
+
+
+def test_forfeit_before_the_bet_loses_the_stake_unplayed() -> None:
+    t = stacked(["Th", "9c", "6d", "5s", "Tc"], seats=2)
+    with pytest.raises(IllegalAction, match="positive and within the bankroll"):
+        t.forfeit(stake=10**6)
+    t.forfeit(0, stake=10)  # seat 0 sits the round out, 10 chips down
+    assert t.to_act == 1 and t.house_net == 10 and t.bankrolls == [990, 1000]
+    t.act("bet:10")  # seat 1 alone is dealt: 16 against 9 and 5, who busts on the ten
+    t.act("stand")
+    summary = t.last_round["seats"]
+    assert summary[0] == {**summary[0], "played": True, "net": -10, "hands": [], "forfeit": True}
+    assert summary[1]["net"] == 10 and "forfeit" not in summary[1]
+    assert_conserved(t)
+    # With one seat, nobody is dealt: the round ends at once, the shoe untouched.
+    t = stacked(["Th", "9c", "6d", "5s"])
+    remaining, played = t.view()["shoe"]["remaining"], t.rounds_played
+    t.forfeit(stake=25)
+    assert t.rounds_played == played + 1 and t.phase == "betting"
+    assert t.view()["shoe"]["remaining"] == remaining and t.last_round["dealer"]["cards"] == []
+    assert t.last_round["seats"][0]["net"] == -25 and t.house_net == 25
     assert_conserved(t)
 
 

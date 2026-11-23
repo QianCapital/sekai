@@ -56,7 +56,7 @@ Events: `events` is a JSON-friendly ordered log. Every event has `seq` (increasi
 | `action` | `seat`, `hand`, `action` |
 | `dealer_reveal` | `card`, `cards`, `total`, `blackjack` |
 | `dealer_draw` | `card`, `total` |
-| `forfeit` | `seat`, `hand` (the hand to act; every hand the seat had in play is lost) |
+| `forfeit` | `seat`, `hand` (the hand to act; `None` before the bet, with `stake`) |
 | `settle` | `seat`, `hand`, `outcome`, `payout` |
 | `round_end` | `net` (per seat, `None` for seats that sat out), `dealer_total` |
 
@@ -139,6 +139,8 @@ class _Seat:
     """Bet placed for the current round (`None` until placed)."""
     in_round: bool = False
     hands: list[Hand] = field(default_factory=list)
+    forfeit: float | None = None
+    """Chips the seat forfeited this round (`forfeit()`), `None` if it did not."""
 
 
 def _copy_round(summary: dict[str, Any]) -> dict[str, Any]:
@@ -366,28 +368,58 @@ class BlackjackTable:
         else:
             self._play(action, move)
 
-    def forfeit(self, seat: int | None = None) -> None:
-        """The seat to act gives up the round: every hand it still has in it is lost (its
-        whole bet, doubled or split), and play moves on to the next seat or the dealer.
+    def forfeit(self, seat: int | None = None, *, stake: float | None = None) -> None:
+        """The seat to act gives up the round, and play moves on.
 
-        `BlackjackEnv(illegal_action="lose")` plays it for an illegal action. Only while
-        playing: a bet is not lost before it is placed.
+        While playing, every hand it still has in the round is lost (its whole bet, doubled
+        or split). Before its bet, it loses `stake` (default: the table minimum) to the
+        house, with no cards dealt, and sits the round out; a round in which nobody bets
+        ends at once. Either way the round's summary marks the seat with `"forfeit": True`.
+        `BlackjackEnv(illegal_action="lose")` plays it for an illegal action.
 
         Raises:
             NotYourTurn: If `seat` is given and it is not that seat's turn.
-            IllegalAction: If no seat is playing a hand (during betting).
+            IllegalAction: If no seat can act, or `stake` is not a positive amount within
+                the seat's bankroll.
         """
         if seat is not None and seat != self._to_act:
             raise NotYourTurn(seat, self._to_act)
-        i, h = self._to_act, self._active_hand
-        if self._phase != "playing" or i is None or h is None:
-            raise IllegalAction("forfeit", "only a seat playing a hand can forfeit the round")
-        self._log("forfeit", seat=i, hand=h)
-        for k, hand in enumerate(self._seats[i].hands):
-            if hand.outcome is None:
-                hand.status = "done"
-                self._settle(i, k, "lose")
-        self._advance()
+        i = self._to_act
+        if i is None:
+            raise IllegalAction("forfeit", "no seat can act (every seat is out of chips)")
+        s = self._seats[i]
+        if self._phase == "playing":
+            h = self._active_hand
+            assert h is not None
+            self._log("forfeit", seat=i, hand=h)
+            s.forfeit = float(sum(hand.bet for hand in s.hands if hand.outcome is None))
+            for k, hand in enumerate(s.hands):
+                if hand.outcome is None:
+                    hand.status = "done"
+                    self._settle(i, k, "lose")
+            self._advance()
+            return
+        amount = float(self.rules.min_bet if stake is None else stake)
+        if not 0 < amount <= s.bankroll:
+            raise IllegalAction(
+                "forfeit", f"a stake must be positive and within the bankroll, got {stake!r}"
+            )
+        s.bankroll -= amount
+        self.house_net += amount
+        s.forfeit = amount
+        self._log("forfeit", seat=i, hand=None, stake=_num(amount))
+        self._to_act = self._next_bettor()
+        if self._to_act is None:
+            if any(t.bet is not None for t in self._seats):
+                self._deal_round()
+            else:  # nobody to deal to: the round ends unplayed
+                self._dealer = []
+                self._hole_revealed = False
+                self._shuffled_this_round = False
+                for t in self._seats:
+                    t.in_round = False
+                    t.hands = []
+                self._finish_round()
 
     def set_bankroll(self, seat: int, amount: float) -> None:
         """Set a seat's bankroll between rounds (a rebuy or cash-out).
@@ -483,7 +515,7 @@ class BlackjackTable:
 
     def _next_bettor(self) -> int | None:
         for i, s in enumerate(self._seats):
-            if s.bet is None and s.bankroll >= self.rules.min_bet:
+            if s.bet is None and s.forfeit is None and s.bankroll >= self.rules.min_bet:
                 return i
         return None
 
@@ -492,6 +524,7 @@ class BlackjackTable:
         self._active_hand = None
         for s in self._seats:
             s.bet = None
+            s.forfeit = None
         self._to_act = self._next_bettor()
 
     def _place_bet(self, raw: str, move: str) -> None:
@@ -821,6 +854,21 @@ class BlackjackTable:
         seats: list[dict[str, Any]] = []
         nets: list[int | float | None] = []
         for i, s in enumerate(self._seats):
+            if not s.in_round and s.forfeit is not None:  # forfeited before its bet
+                nets.append(_num(-s.forfeit))
+                seats.append(
+                    {
+                        "seat": i,
+                        "played": True,
+                        "bet": None,
+                        "wagered": _num(s.forfeit),
+                        "net": _num(-s.forfeit),
+                        "bankroll": _num(s.bankroll),
+                        "hands": [],
+                        "forfeit": True,
+                    }
+                )
+                continue
             if not s.in_round:
                 seats.append(
                     {
@@ -860,6 +908,8 @@ class BlackjackTable:
                     ],
                 }
             )
+            if s.forfeit is not None:
+                seats[-1]["forfeit"] = True
         summary = {
             "round": self._round_no,
             "shuffled": self._shuffled_this_round,

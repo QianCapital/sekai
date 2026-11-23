@@ -13,7 +13,14 @@ import sekai
 from sekai.envs.games import ChessRenderer, HoldemRenderer, IllegalMove, MultiAgentGame
 from sekai.envs.games.chess import ChessEnv
 from sekai.envs.games.poker import ALL_IN, CHECK_CALL, FOLD, HoldemEnv
-from sekai.wrappers import FrameStackObservation, TimeLimit
+from sekai.wrappers import (
+    ActionRepeat,
+    AutoReset,
+    FlattenObservation,
+    FrameStackObservation,
+    RecordEpisodeStatistics,
+    TimeLimit,
+)
 
 GAMES = ["Chess-v0", "Go9x9-v0", "Xiangqi-v0", "HeadsUpHoldem-v0"]
 DECK = "AsKdQhQc2c7d9hJs3s"
@@ -134,10 +141,38 @@ def test_renderers_draw_it_and_poker_refuses_observation_wrappers_inside() -> No
     poker = MultiAgentGame(HoldemEnv())
     poker.reset(seed=0)
     assert HoldemRenderer().render(poker).dtype == np.uint8
-    with pytest.raises(TypeError, match="both seats' private views"):
-        MultiAgentGame(FrameStackObservation(HoldemEnv(), 2))
     with pytest.raises(TypeError, match="two-player game"):
         MultiAgentGame(sekai.make("Blackjack-v0"))
+
+
+def test_wrappers_that_cannot_work_inside_are_refused() -> None:
+    # Those that work across steps would act on both players' moves (or hide the games'
+    # ends), and in poker any that changes the observations sees both seats' views.
+    across = [
+        AutoReset(ChessEnv()),
+        RecordEpisodeStatistics(ChessEnv()),
+        FrameStackObservation(ChessEnv(), 2),
+        ActionRepeat(HoldemEnv(), 2),
+    ]
+    for inner in across:
+        with pytest.raises(TypeError, match=r"would act on both players' moves.*its learner"):
+            MultiAgentGame(inner)
+    with pytest.raises(TypeError, match="both seats' private views"):
+        MultiAgentGame(FlattenObservation(HoldemEnv()))
+    with pytest.raises(TypeError, match="needs the game itself"):
+        MultiAgentGame(sekai.make("ChessVsRandom-v0"))
+    flat = MultiAgentGame(FlattenObservation(ChessEnv()))  # a perfect-information game's own
+    assert flat.reset(seed=0).observations["white"].shape == (119 * 8 * 8,)
+
+
+def test_a_reset_that_raises_leaves_no_game() -> None:
+    env = MultiAgentGame(sekai.make("Go9x9-v0"))
+    env.reset(seed=0)
+    with pytest.raises(IllegalMove):
+        env.reset(options={"moves": ["D4", "D4"]})
+    assert env.agents == [] and not env.action_mask("black").any()
+    with pytest.raises(sekai.ResetRequired):
+        env.step({"black": 0})
 
 
 def test_to_pettingzoo() -> None:

@@ -24,7 +24,13 @@ from sekai.envs.games.poker import (
     parse_cards,
 )
 from sekai.envs.games.poker import observations as O
-from sekai.wrappers import FrameStackObservation, NormalizeObservation, TimeLimit
+from sekai.wrappers import (
+    AutoReset,
+    FlattenObservation,
+    FrameStackObservation,
+    NormalizeObservation,
+    TimeLimit,
+)
 
 DECK = "AsKdQhQc2c7d9hJs3s"
 
@@ -495,9 +501,14 @@ def test_a_hand_a_time_limit_stops_ends_in_the_agents_own_view() -> None:
 
 def test_observation_wrappers_go_outside_the_opponent_wrapper() -> None:
     # Inside, they would see both seats' private views, one after the other.
+    with pytest.raises(TypeError, match="both seats' private views"):
+        OpponentWrapper(FlattenObservation(HoldemEnv()))
     for inner in (FrameStackObservation(HoldemEnv(), 2), NormalizeObservation(HoldemEnv())):
-        with pytest.raises(TypeError, match="both seats' private views"):
+        with pytest.raises(TypeError, match="would act on both players' moves"):
             OpponentWrapper(inner)
+    # AutoReset inside would hand the agent the next hand's info (the seat to act's view).
+    with pytest.raises(TypeError, match="AutoReset inside OpponentWrapper"):
+        OpponentWrapper(AutoReset(HoldemEnv()))
     outside = FrameStackObservation(OpponentWrapper(HoldemEnv(), agent_color="p1"), 2)
     assert outside.reset(seed=0).observation.shape == (2, 125)
     OpponentWrapper(TimeLimit(HoldemEnv(), max_episode_steps=50))  # not an observation's

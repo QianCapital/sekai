@@ -579,7 +579,10 @@ class HoldemHand:
         for ev in view.events:
             if ev["type"] == "action":
                 kind = ev["kind"]
-                hand.act(Action(kind, ev["to"] if kind in ("bet", "raise") else None))
+                if kind == "fold":  # (as forfeit() logs one, where checking was free)
+                    hand.forfeit()
+                else:
+                    hand.act(Action(kind, ev["to"] if kind in ("bet", "raise") else None))
         return hand
 
     def copy(self) -> HoldemHand:

@@ -41,12 +41,18 @@ environments give bit-identical results, and its API and pickles keep working.
   game becomes a single-agent environment; the opponent keeps acting until it is the
   agent's turn again, as poker needs, and a game it ends before the agent's first move (a
   fold from the small blind) is dealt again, with the agent's rewards from the skipped
-  games in `info["skipped_rewards"]`.
+  games in `info["skipped_rewards"]`. Wrappers that work across steps or episodes
+  (`FrameStackObservation`, `AutoReset`, ...) go outside it, and are refused inside, as in
+  poker are wrappers that change the observations (each is one seat's private view).
 - `MultiAgentGame` makes a two-player game a `sekai.MultiAgentEnv` with an agent for each
   side, as sekai's event-driven multi-agent environments work: `observations` holds only
   the agent to move, rewards are zero-sum and cover both agents, both get a final
   observation, and in poker each agent sees only its own seat. `sekai.compat.to_pettingzoo()`
-  exposes it through PettingZoo's Parallel API.
+  exposes it as a PettingZoo `ParallelEnv` with observations only for the agent to move,
+  for loops that act for the agents in `observations` (PettingZoo's `parallel_api_test`,
+  `parallel_to_aec` and learners that act for every agent at once expect all agents to
+  act at every step). Wrappers that would act across both players' moves are refused
+  inside it.
 - Every game takes `illegal_action="lose"` (raising stays the default): an illegal action
   loses the game for the mover in chess, go (result `"W+F"` or `"B+F"`) and xiangqi, folds
   the hand in poker (`HoldemHand.forfeit()`, even where checking was free), and loses the

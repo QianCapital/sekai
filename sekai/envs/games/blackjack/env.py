@@ -25,9 +25,10 @@ the agent bets, plays its hands, and the episode terminates when the round is se
   settled `net` (chips) and `round` (the round's summary).
 
 An illegal action raises `IllegalAction`, or with `illegal_action="lose"` ends the round
-as a loss of the seat's stake in it: every hand in play is lost (its whole bet, doubled or
-split), and an action before the bet loses the smallest bet level, with no cards dealt.
-Stepping a finished round raises `RoundOver`.
+as a loss of the seat's stake in it (`BlackjackTable.forfeit()`): every hand in play is
+lost (its whole bet, doubled or split), and an action before the bet loses the smallest
+bet level to the house, with no cards dealt. The round's summary then marks the seat with
+`"forfeit": True`. Stepping a finished round raises `RoundOver`.
 """
 
 from __future__ import annotations
@@ -190,23 +191,9 @@ class BlackjackEnv(Env[Observation, np.intp]):
         info_extra: dict[str, Any] = {}
         if legal:
             table.act(action_to_move(a, min_bet=self.rules.min_bet, bet_levels=self.bet_levels))
-        elif table.phase == "playing":  # illegal_action="lose": the round is given up
-            table.forfeit(0)
+        else:  # illegal_action="lose": the round is given up (before the bet, its smallest)
+            table.forfeit(0, stake=self.bet_levels[0] * self.rules.min_bet)
             info_extra["illegal_action"] = a
-        else:  # before the bet: the smallest bet is lost, unplayed
-            stake = self.bet_levels[0] * self.rules.min_bet
-            table.set_bankroll(0, table.bankrolls[0] - stake)
-            self._done = True
-            view = table.view(0)
-            info = self._info(view)
-            info.update(net=-stake, illegal_action=a)
-            return StepResult(
-                observation=encode_view(view, 0, self.bankroll),
-                reward=-stake / self.rules.min_bet,
-                terminated=True,
-                truncated=False,
-                info=info,
-            )
         self._done = table.rounds_played > played
         reward = 0.0
         if self._done:

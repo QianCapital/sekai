@@ -13,8 +13,8 @@ environments (see the multi-agent guide):
 
     env = MultiAgentGame(sekai.make("Chess-v0"))
     result = env.reset(seed=0)
-    while not result.all_done:
-        agent, = result.observations
+    while env.agents:  # (empty once the game is over, or if it was over at the reset)
+        (agent,) = result.observations
         mask = env.action_mask(agent)
         result = env.step({agent: env.action_space(agent).sample(mask=mask)})
     print(result.rewards)  # e.g. {'white': 1.0, 'black': -1.0}
@@ -31,7 +31,7 @@ from sekai._types import SeedType
 from sekai.core.env import Env
 from sekai.core.multi_agent import MultiAgentEnv
 from sekai.core.result import MAResetResult, MAStepResult, StepResult
-from sekai.envs.games.wrappers import check_private_views
+from sekai.envs.games.wrappers import check_inner_wrappers
 from sekai.error import ResetRequired
 from sekai.utils.masking import get_action_mask
 
@@ -50,12 +50,17 @@ class MultiAgentGame(MultiAgentEnv[Any, Any, str]):
     games the final position as the game encodes it, from the side to move, for both.
 
     A reset into a position that is already over (a `fen`, or `moves` replayed, that
-    reaches the end of a game) returns no observations: nobody is to move.
+    reaches the end of a game) returns no observations, and `agents` is empty: nobody is
+    to move. Loop on `while env.agents:`.
 
     Args:
-        env: A two-player game env, possibly wrapped (in `TimeLimit`, say). Wrappers that
-            change the observations go outside: poker refuses them inside, where they
-            would see both seats' private views.
+        env: A two-player game env, possibly in a `TimeLimit` (as `sekai.make` builds it).
+            Wrappers act on the game's single stream of moves, both players' in turn, and
+            sekai's wrappers cannot wrap a `MultiAgentGame`: transform each agent's
+            observations, actions and rewards in its learner instead. Those that would act
+            across both players' moves (`FrameStackObservation`, `ActionRepeat`,
+            `AutoReset`, `RecordEpisodeStatistics`, ...) are refused inside, as are, in
+            poker, any that change the observations (each is one seat's private view).
     """
 
     def __init__(self, env: Env[Any, Any]) -> None:
@@ -66,7 +71,12 @@ class MultiAgentGame(MultiAgentEnv[Any, Any, str]):
             raise TypeError(
                 f"MultiAgentGame needs a two-player game env, got {type(base).__name__}."
             )
-        check_private_views(env, "MultiAgentGame")
+        check_inner_wrappers(
+            env,
+            "MultiAgentGame",
+            "transform each agent's observations, actions and rewards in its learner, and "
+            "reset it yourself, instead",
+        )
         self.env = env
         self.possible_agents = list(sides)
         self.agents: list[str] = []
@@ -85,6 +95,7 @@ class MultiAgentGame(MultiAgentEnv[Any, Any, str]):
         self, *, seed: SeedType = None, options: dict[str, Any] | None = None
     ) -> MAResetResult[Any, str]:
         self._set_rng(seed)
+        self._to_move, self.agents = None, []  # (a reset that raises leaves no game)
         result = self.env.reset(seed=seed, options=options)
         over = bool(getattr(self.env.unwrapped, "done", False))
         self._to_move = None if over else self._side_of[result.info["to_play"]]
@@ -149,12 +160,13 @@ class MultiAgentGame(MultiAgentEnv[Any, Any, str]):
 
     def _info_for(self, agent: str, info: dict[str, Any]) -> dict[str, Any]:
         mine = dict(info)
-        if agent != self._to_move:  # nothing to do until its turn
-            mine["legal_action_mask"] = np.zeros_like(info["legal_action_mask"])
-            mine["legal_actions"] = np.zeros(0, dtype=np.int64)
-        own = self._seat_view(agent)
-        if own is not None:  # a game of hidden information: the agent's own view
-            mine.update(own[1])
+        if agent == self._to_move:  # the game's info is the mover's own
+            return mine
+        mine["legal_action_mask"] = np.zeros_like(info["legal_action_mask"])  # (its turn later)
+        mine["legal_actions"] = np.zeros(0, dtype=np.int64)
+        seat_info = getattr(self.env.unwrapped, "_seat_info", None)
+        if seat_info is not None:  # a game of hidden information: the agent's own view
+            mine.update(seat_info(self._player_of[agent]))
         return mine
 
     def __str__(self) -> str:

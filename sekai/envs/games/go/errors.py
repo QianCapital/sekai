@@ -47,7 +47,8 @@ class IllegalMove(_games.IllegalMove, GoEnvError):
         SekaiError.__init__(
             self,
             f"Move {vertex} (action {action}) is illegal: {explanation}. "
-            "Mask your policy with info['legal_action_mask'].",
+            "Mask your policy with info['legal_action_mask'], or construct the env with "
+            "illegal_action='lose' to forfeit instead of raising.",
         )
 
 
