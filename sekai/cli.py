@@ -29,6 +29,18 @@ def _import_modules(modules: Sequence[str]) -> None:
         importlib.import_module(module)
 
 
+def _vec_has_action_mask(venv: Any) -> bool:
+    """Whether every env of `venv` has `action_mask()`.
+
+    A native VecEnv steps its envs itself and has no per-env `has_attr`: it has a mask if
+    it has an `action_mask()` of its own.
+    """
+    try:
+        return all(venv.call("has_attr", "action_mask"))
+    except AttributeError:
+        return callable(getattr(venv, "action_mask", None))
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     specs = sorted(sekai.all_specs(), key=lambda s: s.id)
     if args.namespace is not None:
@@ -105,7 +117,7 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         single = venv.action_space
         # Discrete actions outside a mask are illegal moves (other masks mark components
         # that must stay at zero, which the envs enforce themselves).
-        masked = isinstance(single, Discrete) and all(venv.call("has_attr", "action_mask"))
+        masked = isinstance(single, Discrete) and _vec_has_action_mask(venv)
         if masked:
             label += ", legal actions"
             single.seed(args.seed)
