@@ -4,9 +4,9 @@ The built-in environment classes, exported from `sekai.envs` and registered unde
 the [catalog](../environments/index.md). Create them with `sekai.make(id)`, or instantiate
 the classes directly (no time limit is applied then).
 
-## Classic control
+## Classic Control
 
-See [Classic control](../environments/classic-control.md).
+See [Classic Control](../environments/classic-control.md).
 
 ::: sekai.envs.CartPoleEnv
 
@@ -31,9 +31,9 @@ frame.
 
 ::: sekai.envs.classic_control.AcrobotRenderer
 
-## Finance
+## Financial Markets
 
-See [Finance](../environments/finance.md).
+See [Financial Markets](../environments/finance.md).
 
 ::: sekai.envs.finance.TradingEnv
 
@@ -59,7 +59,7 @@ See [Finance](../environments/finance.md).
 
 ::: sekai.envs.finance.LimitOrderBookMarket
 
-### Finance renderers
+### Financial Markets renderers
 
 Exported from `sekai.envs.finance`. Each is a `sekai.rendering.Dashboard`; `render(env)`
 returns an `(H, W, 3)` `uint8` frame of the episode so far.
@@ -100,3 +100,98 @@ returns them; see [Native vector environments](../environments/finance.md#native
 ::: sekai.envs.finance.random_correlation
 
 ::: sekai.envs.finance.sample_window
+
+## Strategy Games
+
+See [Strategy Games](../environments/games.md) and [Self-play and search](../guide/games.md).
+Everything below is in `sekai.envs.games`, which imports each game's subpackage the first
+time it is used.
+
+::: sekai.envs.games.chess.ChessEnv
+
+::: sekai.envs.games.go.GoEnv
+
+::: sekai.envs.games.xiangqi.XiangqiEnv
+
+::: sekai.envs.games.poker.HoldemEnv
+
+::: sekai.envs.games.blackjack.BlackjackEnv
+
+### Playing
+
+::: sekai.envs.games.OpponentWrapper
+
+::: sekai.envs.games.MultiAgentGame
+
+::: sekai.envs.games.RandomPolicy
+
+::: sekai.envs.games.Policy
+
+::: sekai.envs.games.GameError
+
+::: sekai.envs.games.IllegalMove
+
+::: sekai.envs.games.GameOver
+
+### Game renderers
+
+Each `render(env)` returns an `(H, W, 3)` `uint8` frame of the current position; the text
+renderers return a string.
+
+::: sekai.envs.games.chess.ChessRenderer
+
+::: sekai.envs.games.go.GoRenderer
+
+::: sekai.envs.games.xiangqi.XiangqiRenderer
+
+::: sekai.envs.games.poker.HoldemRenderer
+
+::: sekai.envs.games.blackjack.BlackjackRenderer
+
+::: sekai.envs.games.GameTheme
+
+### Chess toolkit
+
+::: sekai.envs.games.chess.Board
+
+::: sekai.envs.games.chess.Move
+
+::: sekai.envs.games.chess.ObservationEncoder
+
+::: sekai.envs.games.chess.to_pgn
+
+::: sekai.envs.games.chess.env_pgn
+
+### Go toolkit
+
+::: sekai.envs.games.go.Board
+
+::: sekai.envs.games.go.final_score
+
+::: sekai.envs.games.go.area_score
+
+::: sekai.envs.games.go.to_sgf
+
+### Xiangqi toolkit
+
+::: sekai.envs.games.xiangqi.Position
+
+::: sekai.envs.games.xiangqi.to_wxf
+
+::: sekai.envs.games.xiangqi.to_chinese
+
+### Hold'em toolkit
+
+::: sekai.envs.games.poker.HoldemHand
+
+::: sekai.envs.games.poker.SeatView
+
+::: sekai.envs.games.poker.evaluate
+
+::: sekai.envs.games.poker.format_hand_history
+
+### Blackjack toolkit
+
+::: sekai.envs.games.blackjack.Rules
+
+::: sekai.envs.games.blackjack.BlackjackTable

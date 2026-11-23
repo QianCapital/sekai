@@ -1,8 +1,8 @@
 # Costs, accounts and rewards
 
-The finance environments keep the account in *weight space*: positions are fractions of
-equity, the rest is cash, and equity starts at 1. One decision runs through three
-modules:
+The financial markets environments keep the account in *weight space*: positions are
+fractions of equity, the rest is cash, and equity starts at 1. One decision runs through
+three modules:
 
 1. `sekai.finance.account`: the action becomes target weights that satisfy the account's
    rules (long-only or long/short, a leverage cap, nothing in untradable assets);
@@ -489,7 +489,7 @@ print(round(float(reward(outcome)), 5))  # -0.0303
 
 - [Batched and differentiable environments](batched.md): `BatchMarketEnv`, action maps,
   observation builders and training through the environment.
-- [Finance environments](../environments/finance.md) for `transaction_cost=`, `reward=`
-  and the account options in each environment.
+- [Financial Markets environments](../environments/finance.md) for `transaction_cost=`,
+  `reward=` and the account options in each environment.
 - [Performance metrics](metrics.md) to compare policies whatever they were trained on.
 - [`sekai.finance` API](../api/finance.md#costs).

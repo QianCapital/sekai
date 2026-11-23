@@ -6,6 +6,130 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-23
+
+Strategy Games (chess, go, xiangqi, heads-up hold'em and blackjack), market models
+simulated on a GPU, a torch `BatchMarketEnv` that waits for its GPU once per step, and
+`BatchMarketEnv` steps 20-30% faster on the CPU. Nothing from 0.3.0 changes: its
+environments give bit-identical results, and its API and pickles keep working.
+
+### Added
+
+**Strategy Games** (`sekai.envs.games`)
+
+- Five classic games of strategy, built the way AlphaZero learned its games: `Chess-v0`
+  (and `ChessVsRandom-v0`), `Go9x9-v0`, `Go13x13-v0` and `Go19x19-v0`, `Xiangqi-v0`,
+  `HeadsUpHoldem-v0` (one hand of heads-up no-limit Texas hold'em) and `Blackjack-v0` (a
+  round at a six-deck table whose shoe carries over between episodes). The two-player games
+  are played from both sides by the caller: the player to act sees the game from its side
+  (AlphaZero's 119 planes for chess, AlphaGo Zero's 17 for go, 131 for xiangqi, 125 slots
+  of public and own information in poker), the legal actions come as an `int8` mask in
+  `info["legal_action_mask"]` and from the env's `action_mask()` (`sekai.get_action_mask`
+  through wrappers), and rewards come at the end of the game for the player who just
+  moved. Chess, go and xiangqi have `clone()` for tree search. `sekai.envs.games` is
+  imported only when a game is first made or accessed, so `import sekai` builds none of
+  their tables.
+- Rules engines with their notation: a native chess engine (`chess.Board`, `Move`; legal
+  moves, FEN, SAN, every draw rule; no python-chess, which is GPL-3.0) that matches
+  python-chess's rules where implementations differ and the published perft counts; PGN
+  export; an incremental go board with Zobrist hashing, positional superko, area scoring,
+  dead-stone estimates and SGF export; a xiangqi engine with WXF and Chinese notation; a
+  hold'em dealer with exact pot accounting, a 5-to-7-card hand evaluator and
+  PokerStars-style hand histories; a blackjack table, shoe and `Rules`.
+- `OpponentWrapper` plays one side of a two-player game with a fixed policy (anything with
+  `act(observation, info)`; `RandomPolicy` by default, seeded apart from the env), so a
+  game becomes a single-agent environment; the opponent keeps acting until it is the
+  agent's turn again, as poker needs, and a game it ends before the agent's first move (a
+  fold from the small blind) is dealt again, with the agent's rewards from the skipped
+  games in `info["skipped_rewards"]`. Wrappers that work across steps or episodes
+  (`FrameStackObservation`, `AutoReset`, ...) go outside it, and are refused inside, as in
+  poker are wrappers that change the observations (each is one seat's private view).
+- `MultiAgentGame` makes a two-player game a `sekai.MultiAgentEnv` with an agent for each
+  side, as sekai's event-driven multi-agent environments work: `observations` holds only
+  the agent to move, rewards are zero-sum and cover both agents, both get a final
+  observation, and in poker each agent sees only its own seat. `sekai.compat.to_pettingzoo()`
+  exposes it as a PettingZoo `ParallelEnv` with observations only for the agent to move,
+  for loops that act for the agents in `observations` (PettingZoo's `parallel_api_test`,
+  `parallel_to_aec` and learners that act for every agent at once expect all agents to
+  act at every step). Wrappers that would act across both players' moves are refused
+  inside it.
+- Every game takes `illegal_action="lose"` (raising stays the default): an illegal action
+  loses the game for the mover in chess, go (result `"W+F"` or `"B+F"`) and xiangqi, folds
+  the hand in poker (`HoldemHand.forfeit()`, even where checking was free), and loses the
+  round's stake in blackjack (`BlackjackTable.forfeit()`; before the bet, the smallest bet
+  level). Learners without action masks, and gymnasium's and Stable-Baselines3's
+  `check_env`, then run on every game.
+- Renderers for every game (`ChessRenderer`, `GoRenderer`, `XiangqiRenderer`,
+  `HoldemRenderer`, `BlackjackRenderer`), with dark and light themes, player strips, the
+  last move, checks, territory and showdowns, and text
+  renderers for terminals. The chess pieces are Colin M.L. Burnett's (3-clause BSD) and the
+  xiangqi characters come from Noto Serif CJK TC (OFL); `tools/build_game_assets.py`
+  rebuilds both. The licence expression gains `BSD-3-Clause`.
+- `examples/games_search.py` (PUCT tree search on any board game with nothing but the
+  environment) and `examples/render_games.py` (the documentation's animations). New pages:
+  [Strategy Games](https://sekai.qiancapital.com/environments/games/) and
+  [Self-play and search](https://sekai.qiancapital.com/guide/games/).
+
+**Torch and GPUs**
+
+- `Backend.on_host(x)`: whether reading `x`'s values back costs a wait for a device.
+- Market models simulate on a GPU: `MarketModel.simulate_torch(generator, n_steps, *,
+  n_paths, dtype)` simulates every built-in model with torch on the generator's device, into
+  a `Simulation` of float32 or float64 tensors (the same model as `simulate`, not the same
+  numbers), reading nothing back and copying a model's parameters there once.
+  `ModelScenarios(..., device=, dtype=)` samples panels simulated on a device (from the seeds
+  NumPy takes), `MarketPanel.from_simulation` keeps a tensor simulation where it is, and
+  `BatchMarketEnv(..., simulate_on_device=True)` (with `backend="torch"`, for `model=` or
+  the default market) simulates each reset's paths on the env's device, so a reset copies no
+  paths to it (a `Randomized` model copies the parameters it draws). By default paths are
+  simulated on the host, as before.
+
+### Changed
+
+- A torch `BatchMarketEnv` on a GPU makes the host wait for the device once per step, where
+  it made about 12 waits (and about 16 per reset), plus 21 for a dollar- or factor-neutral
+  book (`torch.linalg.solve` reads back whether its system was singular, and the default
+  projection solves 21 times). Reading a value back from a device, and copying host data
+  to it, waits until the device has finished its queued work, so the host could not queue
+  the next work while the device ran. A step now reads back one thing: which lanes
+  finished, together with its checks of the action, of its projection and of the cost
+  models' inputs. The lanes' counters are kept on the device too, and host scalars become
+  tensors made there. Results and gradients are bit-identical, and the errors are the same
+  (`InvalidAction`, a cost model's `ValueError`, a singular projection's `LinAlgError`),
+  still raised before the step changes any state; the one difference is that the check of
+  a sekai model your own code calls during the step (a `SpreadCost` inside your cost
+  model) is read with the others too, so on a GPU its error comes from `step()`, not from
+  the call. On the CPU, and with NumPy, a step runs as before.
+- `BatchMarketEnv` steps take 20-30% less time on the CPU, with the same results bit for
+  bit (rewards, observations, infos and gradients). A torch step of 32 lanes holding a
+  dollar-neutral book, with costs and a factor risk model, went from 3.8 to 2.6 ms; one
+  of 1,024 lanes of the default market from 1.9 to 1.3 ms; and a NumPy step of 64 lanes
+  (`make_vec("Market-v1")`) from 369 to 276 µs, while `make_vec("Market-v1",
+  num_envs=1024)` steps about 170,000 sub-envs per second, up from about 115,000. Work is
+  no longer repeated:
+  - a neutral book's projection builds its Gram matrix once, not in each of its 21 rounds;
+  - observations and cost models gather their windows once per step;
+  - the torch backend asks opt_einsum for a contraction's order once per shape, where
+    `torch.einsum` asked at every call, and makes the constants it passes to
+    `torch.where` once;
+  - the env reuses each step's slot, row and index arrays, and skips masking frozen
+    lanes when there are none.
+- `sekai bench` draws its random actions from the legal ones for environments with discrete
+  actions and an action mask, such as the games (it stopped at their first illegal move);
+  other environments are sampled as before, so their documented throughputs still apply.
+- `Canvas.clear()`, and so every new canvas, is about 70 times faster (0.9 ms to 0.01 ms
+  for a 480 × 650 frame), with the same pixels.
+- The documentation calls the finance category "Financial Markets" (the `sekai.finance`
+  package and every import path are unchanged), and its environment counts are corrected.
+- The source distribution also carries the whole test suite, with the data and fixtures
+  it lacked since 0.3.0, so `pytest` runs from an unpacked sdist; the changelog; and the
+  sources and licence of the games' artwork (`tools/`). The wheel is unchanged.
+  CONTRIBUTING.md says how to run the GPU tests on a machine with a GPU.
+- The games' IDs (`Chess-v0`, `ChessVsRandom-v0`, `Go9x9-v0`, `Go13x13-v0`,
+  `Go19x19-v0`, `Xiangqi-v0`, `HeadsUpHoldem-v0`, `Blackjack-v0`) are now registered by
+  sekai itself, so a package that registers an environment of its own under one of these
+  names gets `EnvAlreadyRegistered`: register it in a namespace (`"mypkg/Chess-v0"`).
+
 ## [0.3.0] - 2026-11-22
 
 Batched and differentiable market environments, tools for research validity and long runs,
@@ -660,7 +784,8 @@ These change behaviour for code written against 0.1.x:
   core wrappers, typed `EpisodeStats` with pluggable trackers, `Renderer` protocol,
   and `check_env`.
 
-[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/QianCapital/sekai/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QianCapital/sekai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/QianCapital/sekai/compare/v0.1.1...v0.1.2

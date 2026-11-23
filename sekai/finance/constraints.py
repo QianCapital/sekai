@@ -41,12 +41,14 @@ Example:
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from sekai.backend import Array, Backend, backend_and_like
+from sekai.backend._base import _CHECKS
 
 
 @dataclass(frozen=True)
@@ -114,11 +116,46 @@ def neutralize(x: Array, columns: Array, *, ridge: float = 1e-4) -> Array:
     """
     B, like = backend_and_like(x, columns)
     x = B.asfloat(x, like)
-    c = B.asfloat(columns, like)
-    k = c.shape[-1]
-    gram = B.einsum("...nk,...nj->...kj", c, c) + ridge * B.eye(k, like=c)
-    coef = B.solve(gram, B.einsum("...nk,...n->...k", c, x)[..., None])[..., 0]
-    return x - B.einsum("...nk,...k->...n", c, coef)
+    return _Neutralizer(B, B.asfloat(columns, like), ridge)(x)
+
+
+class _Neutralizer:
+    """`neutralize(x, columns)` for many `x` against the same float `columns`: their Gram
+    matrix is computed once (unless the columns are differentiable, whose gradients would
+    then be summed in another order), and a device step collects its singular check once."""
+
+    def __init__(self, B: Backend, columns: Array, ridge: float) -> None:
+        self.B, self.c, self.ridge = B, columns, ridge
+        self.gram = None if getattr(columns, "requires_grad", False) else self._gram()
+        self.checked = False
+
+    def _gram(self) -> Array:
+        B, c = self.B, self.c
+        return B.einsum("...nk,...nj->...kj", c, c) + self.ridge * B.eye(c.shape[-1], like=c)
+
+    def __call__(self, x: Array) -> Array:
+        B, c = self.B, self.c
+        gram = self._gram() if self.gram is None else self.gram
+        rhs = B.einsum("...nk,...n->...k", c, x)[..., None]
+        checks = _CHECKS.get()
+        if checks is None:
+            coef = B.solve(gram, rhs)[..., 0]
+        else:  # a batched env's step on a device: whether `gram` is singular is read later
+            coef, singular = B._solve_unchecked(gram, rhs)
+            if self.gram is None or not self.checked:  # (one check for a shared `gram`)
+                checks.append((singular, functools.partial(_solve_error, B, gram, rhs)))
+                self.checked = True
+            coef = coef[..., 0]
+        return x - B.einsum("...nk,...k->...n", c, coef)
+
+
+def _solve_error(B: Backend, a: Array, b: Array) -> Exception:
+    """The error `B.solve(a, b)` raises, for an `a` with a singular matrix."""
+    try:
+        B.solve(a, b)
+    except Exception as e:  # whatever the backend raises (torch's LinAlgError)
+        return e
+    return ValueError("The neutralisation's least-squares system is singular.")
 
 
 def constraint_columns(
@@ -245,9 +282,10 @@ def project(
         room = B.minimum(B.sum(hi, axis=-1, keepdims=True), B.sum(-lo, axis=-1, keepdims=True))
         target = B.where(target > 2.0 * room, 2.0 * room, target)
     cols = constraint_columns(constraints, ok, exposures, like=x)
+    neutralizer = None if cols is None else _Neutralizer(B, cols, constraints.ridge)
 
     def neutral(v: Array) -> Array:
-        return v if cols is None else neutralize(v, cols, ridge=constraints.ridge)
+        return v if neutralizer is None else neutralizer(v)
 
     def to_gross(v: Array) -> Array:
         # All-zero scores have no direction: the book is empty and its gradient zero (a

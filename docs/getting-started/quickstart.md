@@ -161,5 +161,5 @@ print(round(float(np.mean(returns)), 2))  # 5.16
 
 - [Migrating from gymnasium](../guide/gymnasium.md), including training with Stable-Baselines3.
 - [Environments](../guide/environments.md): the full `Env` API, seeding and metadata.
-- [Finance environments](../environments/finance.md): trading, portfolios, market making
-  and optimal execution.
+- [Financial Markets environments](../environments/finance.md): trading, portfolios, market
+  making and optimal execution.

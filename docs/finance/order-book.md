@@ -432,7 +432,7 @@ baselines and the multi-agent stepping rules are on the
 
 ## See also
 
-- [Finance environments](../environments/finance.md#limitorderbook-v0): `LimitOrderBook-v0` and `LimitOrderBookMarket`.
+- [Financial Markets environments](../environments/finance.md#limitorderbook-v0): `LimitOrderBook-v0` and `LimitOrderBookMarket`.
 - [`MarketMaking-v0`](../environments/finance.md#marketmaking-v0): the reduced-form
   (Avellaneda–Stoikov) market-making problem, with a closed-form baseline.
 - [`sekai.finance.lob` API](../api/finance.md#order-book).

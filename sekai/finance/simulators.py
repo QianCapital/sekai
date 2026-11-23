@@ -17,6 +17,12 @@ market = ListingProcess(Heston(n_assets=5), min_listed=2)
 sim = market.simulate(rng, 252, n_paths=64)
 sim.prices.shape, sim.mask.shape, sim.state["variance"].shape  # (64, 253, 5) each
 ```
+
+The built-in models also simulate with torch, on any device: `model.simulate_torch(generator,
+n_steps, n_paths=k)` draws from a `torch.Generator` and returns tensors on its device, so a
+batched environment on a GPU gets fresh paths without copying them from the host. It is the
+same model (distributions, parameters, shapes, mask and state) as `simulate`, not the same
+numbers. torch is imported only then.
 """
 
 from __future__ import annotations
@@ -24,12 +30,18 @@ from __future__ import annotations
 import abc
 import math
 import operator
-from collections.abc import Callable, Mapping, Sequence
+import weakref
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+from sekai.backend import Array, is_tensor
+
+if TYPE_CHECKING:
+    import torch
 
 __all__ = [
     "Simulation",
@@ -56,7 +68,8 @@ _DEFAULT_DT = 1 / 252
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Simulation:
-    """Simulated market paths returned by `MarketModel.simulate`.
+    """Simulated market paths returned by `MarketModel.simulate`, as NumPy arrays, or by
+    `MarketModel.simulate_torch`, as torch tensors on one device.
 
     Attributes:
         prices: Prices of shape (n_steps + 1, n_assets), or (n_paths, n_steps + 1, n_assets)
@@ -68,15 +81,21 @@ class Simulation:
             array's leading dimensions equal `prices.shape[:-1]`, i.e. (n_steps + 1,) or
             (n_paths, n_steps + 1), followed by the model's per-step shape for that key.
 
+    With tensor prices, the mask (a bool tensor) and the state are tensors on their device.
+
     Raises:
-        ValueError: If the shapes of `prices`, `mask` and `state` are inconsistent.
+        ValueError: If the shapes of `prices`, `mask` and `state` are inconsistent, or tensor
+            prices come with a mask or state that are not tensors on their device.
     """
 
-    prices: NDArray[np.float64]
-    mask: NDArray[np.bool_] | None = None
-    state: Mapping[str, NDArray[np.float64]] = field(default_factory=dict)
+    prices: NDArray[np.float64] | Array
+    mask: NDArray[np.bool_] | Array | None = None
+    state: Mapping[str, NDArray[np.float64] | Array] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if is_tensor(self.prices):
+            self._check_tensors()
+            return
         if not isinstance(self.prices, np.ndarray) or self.prices.ndim not in (2, 3):
             raise ValueError(
                 "prices must be a 2-D (n_steps + 1, n_assets) or 3-D "
@@ -96,13 +115,42 @@ class Simulation:
                     f"must be {lead}."
                 )
 
+    def _check_tensors(self) -> None:
+        """The checks of `__post_init__` for tensor prices (read from shapes, not values)."""
+        import torch
+
+        prices = self.prices
+        if prices.ndim not in (2, 3):
+            raise ValueError(
+                "prices must be a 2-D (n_steps + 1, n_assets) or 3-D "
+                "(n_paths, n_steps + 1, n_assets) array."
+            )
+        shape, device = tuple(prices.shape), prices.device
+        mask = self.mask
+        if mask is not None and not (
+            isinstance(mask, torch.Tensor)
+            and mask.dtype == torch.bool
+            and tuple(mask.shape) == shape
+            and mask.device == device
+        ):
+            raise ValueError(f"mask must be a boolean tensor of shape {shape} on {device}.")
+        lead = shape[:-1]
+        for key, value in self.state.items():
+            if not isinstance(value, torch.Tensor) or value.device != device:
+                raise ValueError(f"state[{key!r}] must be a tensor on {device}, as prices are.")
+            if tuple(value.shape)[: len(lead)] != lead:
+                raise ValueError(
+                    f"state[{key!r}] has shape {tuple(value.shape)}; its leading dimensions "
+                    f"must be {lead}."
+                )
+
 
 class MarketModel(abc.ABC):
     """A generator of synthetic price paths for a fixed universe of `n_assets` assets.
 
     Subclasses implement `simulate`, which must be vectorised over paths and assets, return
     strictly positive prices wherever an asset is listed and honour the shapes documented on
-    `Simulation`.
+    `Simulation`. They may also implement `simulate_torch`, to simulate on a device.
     """
 
     @property
@@ -143,9 +191,54 @@ class MarketModel(abc.ABC):
             TypeError: If n_steps or n_paths is not an integer.
         """
 
+    def simulate_torch(
+        self,
+        generator: torch.Generator,
+        n_steps: int,
+        *,
+        n_paths: int | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Simulation:
+        """Simulate price paths with torch, on the generator's device.
+
+        The same model as `simulate` (the same distributions and parameters, and a
+        `Simulation` of the same shapes, mask and state keys), computed with torch on
+        `generator.device`: the tensors are made there and nothing is read back, so a
+        batched environment on a GPU gets fresh paths without copying them from the host.
+        The numbers differ from those of `simulate`. Every built-in model implements it,
+        copying its parameters to a device on its first simulation there and keeping them
+        for later ones (`Randomized` copies those it draws, on each call), so a model's
+        arrays must not be edited in place (they are read-only, though an unpickled
+        model's are not). A custom model may implement it; by default it raises
+        `NotImplementedError`, and such a model simulates on the host only (`simulate`).
+
+        Args:
+            generator: Source of randomness; the paths are simulated on its device.
+            n_steps: Number of steps (>= 1); the time axis has n_steps + 1 entries.
+            n_paths: Number of independent paths (>= 1). None gives a single path without a
+                leading paths axis; an int (even 1) adds a leading axis of that size.
+            dtype: `torch.float32` or `torch.float64`, the dtype of the prices and state
+                (default: torch's default dtype, usually float32; MPS has no float64). In
+                half precision a simulation would not be the same model.
+
+        Returns:
+            A `Simulation` of tensors, shaped as `simulate` shapes its arrays.
+
+        Raises:
+            NotImplementedError: If the model has no torch simulation.
+            ValueError: If n_steps or n_paths is smaller than 1.
+            TypeError: If n_steps or n_paths is not an integer, `generator` is not a
+                `torch.Generator`, or `dtype` is not `torch.float32` or `torch.float64`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no torch simulation: simulate it on the host with "
+            "simulate() (ModelScenarios without device=), or implement simulate_torch()."
+        )
+
 
 class _Model(MarketModel):
-    """Shared plumbing for the built-in models: read-only attributes and a compact repr."""
+    """Shared plumbing for the built-in models: read-only attributes, a compact repr, and the
+    torch simulation (see "Simulation with torch" below)."""
 
     _n_assets: int
     _dt: float
@@ -157,6 +250,45 @@ class _Model(MarketModel):
     @property
     def dt(self) -> float:
         return self._dt
+
+    def simulate_torch(
+        self,
+        generator: torch.Generator,
+        n_steps: int,
+        *,
+        n_paths: int | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Simulation:
+        """Simulate with torch on the generator's device; see `MarketModel.simulate_torch`."""
+        steps, lead = _sim_shape(n_steps, n_paths)
+        if not _has_torch_simulation(self):
+            raise NotImplementedError(
+                f"{type(self).__name__} overrides simulate() but not simulate_torch(), so it has "
+                "no torch simulation of its own: simulate it on the host with simulate(), or "
+                "implement simulate_torch()."
+            )
+        ctx = _TorchContext(generator, dtype)
+        sim = self._torch_simulate(ctx, _device_params(self, ctx), lead[0] if lead else 1, steps)
+        return sim if lead else _first_path(sim)
+
+    def _torch_key(self) -> Hashable | None:
+        """What the torch simulation depends on besides `_torch_params()` (the class, whether
+        there is a correlation, ...): models with equal keys simulate together, their
+        parameters stacked. None for a model that draws its parameters on each call."""
+        return (type(self),)
+
+    def _torch_params(self) -> dict[str, Any]:
+        """The fixed parameters the torch simulation reads, as float64 arrays (computed in
+        float64 on the host; an inner model's as a nested dict)."""
+        return {}
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        """The torch simulation, with a leading paths axis, from `params`: the tensors of
+        `_torch_params()` with a leading axis of 1 (this model for every path) or n_paths
+        (one model per path, of equal keys). It reads its numbers from `params` only."""
+        raise NotImplementedError
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError(f"{type(self).__name__} is immutable; build a new model instead.")
@@ -342,6 +474,248 @@ def _format_dt(dt: float) -> str:
 
 
 # --------------------------------------------------------------------------------------------
+# Simulation with torch
+# --------------------------------------------------------------------------------------------
+#
+# A built-in model simulates with torch from tensors of the parameters it reads,
+# `_torch_params()`: float64 arrays computed on the host, copied to a device on the model's
+# first simulation there and kept for its lifetime (`_device_params`), so that later
+# simulations copy nothing to the device. `_torch_simulate` always simulates with a leading
+# paths axis, and takes parameters with a leading axis of 1 (one model for every path) or
+# n_paths (a model per path: `Randomized` stacks the parameters of models with equal
+# `_torch_key()` and simulates them together). Nothing is read back from the device, and no
+# operation has a shape that depends on the values (no boolean indexing), so a simulation on
+# a GPU is queued without waiting for it. Recursions (variance, regimes, listings) are loops
+# over time of operations batched over paths and assets: they draw their shocks time-major,
+# (step, path, asset), so that each step reads contiguous ones (and parameters of shape
+# (L, n) broadcast against them as they are), and stack the steps' values once at the end.
+
+
+class _TorchContext:
+    """Where a torch simulation runs: its generator, and the device and dtype of its tensors."""
+
+    __slots__ = ("device", "dtype", "generator")
+
+    def __init__(self, generator: Any, dtype: Any) -> None:
+        import torch
+
+        if not isinstance(generator, torch.Generator):
+            raise TypeError(f"generator must be a torch.Generator, got {type(generator).__name__}.")
+        dtype = torch.get_default_dtype() if dtype is None else dtype
+        if dtype not in (torch.float32, torch.float64):
+            raise TypeError(f"dtype must be torch.float32 or torch.float64, got {dtype!r}.")
+        device = generator.device
+        if device.type != "cpu" and device.index is None:
+            # A generator of torch.Generator(device="cuda") has no index: tensors made for
+            # it go to the current device, which keys the parameters copied there.
+            device = torch.empty(0, device=device).device
+        self.generator = generator
+        self.device = device
+        self.dtype = dtype
+
+    def normal(self, *shape: int) -> torch.Tensor:
+        import torch
+
+        return torch.randn(shape, generator=self.generator, dtype=self.dtype, device=self.device)
+
+    def uniform(self, *shape: int) -> torch.Tensor:
+        import torch
+
+        return torch.rand(shape, generator=self.generator, dtype=self.dtype, device=self.device)
+
+    def integers(self, high: int, *shape: int) -> torch.Tensor:
+        """int64 draws in [0, high)."""
+        import torch
+
+        return torch.randint(high, shape, generator=self.generator, device=self.device)
+
+
+def _owner(model: MarketModel, name: str) -> type:
+    """The class whose method `name` the model has."""
+    return next(c for c in type(model).__mro__ if name in vars(c))
+
+
+def _has_torch_simulation(model: _Model) -> bool:
+    """Whether the model's torch simulation is that of its `simulate`: a subclass of a
+    built-in model that overrides `simulate` alone must not inherit its parent's."""
+    return issubclass(_owner(model, "_torch_simulate"), _owner(model, "simulate"))
+
+
+def _simulates_on_torch(model: MarketModel) -> TypeGuard[_Model]:
+    """Whether a model in another one (`ListingProcess`, `Randomized`) can be simulated with
+    its parameters, `_torch_simulate`: a built-in model with its torch simulation (and not
+    a subclass with its own `simulate_torch`, which is called instead)."""
+    return (
+        isinstance(model, _Model)
+        and _owner(model, "simulate_torch") is _Model
+        and _has_torch_simulation(model)
+    )
+
+
+# The parameters of each model simulated on a device, per (device, dtype); freed with it.
+_DEVICE_PARAMS: weakref.WeakKeyDictionary[MarketModel, dict[tuple[Any, Any], dict[str, Any]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _device_params(model: _Model, ctx: _TorchContext) -> dict[str, Any]:
+    """`model._torch_params()` as tensors on the context's device, in its dtype, with a
+    leading axis of 1: copied there on the model's first simulation with that device and
+    dtype, and reused by later ones."""
+    key = (ctx.device, ctx.dtype)
+    try:
+        cache = _DEVICE_PARAMS.setdefault(model, {})
+    except TypeError:  # a subclass that is not hashable: copy them for every simulation
+        return _to_device([model._torch_params()], ctx)
+    params = cache.get(key)
+    if params is None:
+        params = cache[key] = _to_device([model._torch_params()], ctx)
+    return params
+
+
+def _to_device(params: Sequence[dict[str, Any]], ctx: _TorchContext) -> dict[str, Any]:
+    """The `_torch_params()` of models with equal keys as tensors on the context's device, in
+    its dtype, stacked along a new leading axis, all copied in one transfer (and converted to
+    the dtype on the host: MPS has no float64)."""
+    import torch
+
+    arrays: list[NDArray[np.float64]] = []
+
+    def stack(trees: list[Any]) -> Any:  # the layout of the parameters: indices into arrays
+        if trees[0] is None:  # an inner model without parameters of this kind
+            return None
+        if isinstance(trees[0], dict):
+            return {key: stack([tree[key] for tree in trees]) for key in trees[0]}
+        arrays.append(np.stack([np.asarray(tree, dtype=np.float64) for tree in trees]))
+        return len(arrays) - 1
+
+    layout = stack(list(params))
+    tensors: list[torch.Tensor] = []
+    if arrays:
+        host = torch.from_numpy(np.concatenate([a.ravel() for a in arrays])).to(ctx.dtype)
+        pieces = torch.split(host.to(ctx.device), [a.size for a in arrays])
+        tensors = [piece.view(a.shape) for piece, a in zip(pieces, arrays)]
+
+    def build(node: Any) -> Any:
+        if node is None:
+            return None
+        if isinstance(node, dict):
+            return {key: build(value) for key, value in node.items()}
+        return tensors[node]
+
+    out: dict[str, Any] = build(layout)
+    return out
+
+
+def _first_path(sim: Simulation) -> Simulation:
+    """A simulation of one path without its paths axis (`n_paths=None`)."""
+    return Simulation(
+        prices=sim.prices[0],
+        mask=None if sim.mask is None else sim.mask[0],
+        state={key: value[0] for key, value in sim.state.items()},
+    )
+
+
+def _correlated(
+    z: torch.Tensor, chol_t: torch.Tensor | None, *, time_major: bool = False
+) -> torch.Tensor:
+    """Shocks `z` (P, S, n), or (S, P, n) when `time_major`, correlated across the last axis,
+    `z @ chol.T`, given the transposed Cholesky factors `chol_t`: (1, n, n) for every path, or
+    (P, n, n) for each."""
+    import torch
+
+    if chol_t is None:
+        return z
+    if chol_t.shape[0] == 1:
+        out: torch.Tensor = z @ chol_t[0]
+        return out
+    return torch.einsum("spi,pij->spj" if time_major else "psi,pij->psj", z, chol_t)
+
+
+def _torch_prices(s0: torch.Tensor, log_increments: torch.Tensor) -> torch.Tensor:
+    """Prices (P, n_steps + 1, n) from log increments (P, n_steps, n); `s0` is (L, n)."""
+    import torch
+
+    first = torch.zeros_like(log_increments[:, :1])
+    log_paths = torch.cat([first, torch.cumsum(log_increments, dim=1)], dim=1)
+    return s0[:, None] * torch.exp(log_paths)
+
+
+def _host_rng(generator: torch.Generator) -> np.random.Generator:
+    """A NumPy generator for randomness drawn on the host, seeded from `generator`'s state,
+    which then moves on: a given state gives the same numbers, and the next call others.
+    Every device's generator keeps its state on the host, so nothing is read from the
+    device."""
+    import torch
+
+    rng = np.random.default_rng(generator.get_state().numpy())
+    # Move the state on, by a float32 draw: every device has float32 (MPS has no float64),
+    # and the state then moves on alike whatever torch's default dtype.
+    torch.empty(1, device=generator.device, dtype=torch.float32).uniform_(generator=generator)
+    return rng
+
+
+def _poisson_table(rate: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Inverse-CDF tables of Poisson(rate), for each entry of `rate` (n,): the first count
+    `low` (n,) and the CDF from it, `cdf` (n, K), so that `low + #{k : cdf[:, k] <= u}` for
+    u uniform in [0, 1) is a Poisson draw. The counts outside a table (more than 9 standard
+    deviations and 10 from the mean) have a total probability below 1e-16. K, a multiple of
+    16, is the same over wide ranges of rates."""
+    mean = np.floor(rate)
+    width = np.ceil(9.0 * np.sqrt(rate)) + 10.0
+    low = np.maximum(mean - width, 0.0)
+    size = 16 * math.ceil((float(np.max(mean + width - low)) + 1.0) / 16.0)
+    counts = low[:, None] + np.arange(size)
+    # log(k!) for the counts of each table, summed up from log(low!)
+    log_factorial = np.array([math.lgamma(x + 1.0) for x in low])[:, None] + np.concatenate(
+        [np.zeros((len(low), 1)), np.cumsum(np.log(counts[:, 1:]), axis=1)], axis=1
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_pmf = counts * np.log(rate)[:, None] - rate[:, None] - log_factorial
+    pmf = np.where(rate[:, None] > 0, np.exp(log_pmf), (counts == 0).astype(np.float64))
+    return low, np.minimum(np.cumsum(pmf, axis=1), 1.0)
+
+
+def _poisson_counts(
+    ctx: _TorchContext, low: torch.Tensor, cdf: torch.Tensor, n_paths: int, n_steps: int
+) -> torch.Tensor:
+    """Poisson counts (P, n_steps, n), as floats, by inverting the tables of `_poisson_table`
+    (`low` (L, n) and `cdf` (L, n, K)), with operations every device has (torch's Poisson
+    sampler is not on MPS).
+
+    A uniform of exactly 0 (one float32 draw in 2**24) would invert to a table's lowest
+    count, far below the mean of a large rate; it stands for the half step above 0 instead
+    (torch's uniforms are multiples of eps / 2)."""
+    import torch
+
+    n = cdf.shape[1]
+    half_step = torch.finfo(ctx.dtype).eps / 4
+    if cdf.shape[0] == 1:  # the same tables for every path
+        u = ctx.uniform(n, n_paths * n_steps)
+        u.masked_fill_(u == 0, half_step)
+        index = torch.searchsorted(cdf[0], u, right=True).view(n, n_paths, n_steps)
+        index = index.permute(1, 2, 0)
+    else:
+        u = ctx.uniform(n_paths, n, n_steps)
+        u.masked_fill_(u == 0, half_step)
+        index = torch.searchsorted(cdf, u, right=True)
+        index = index.transpose(1, 2)
+    return low[:, None] + index.to(ctx.dtype)
+
+
+def _torch_categorical(cumulative: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+    """`_sample_categorical` on tensors: categories (P,) for uniforms `u` (P,) given cumulative
+    probabilities (P, K) or (1, K)."""
+    index: torch.Tensor = (u[:, None] >= cumulative).sum(dim=-1)
+    return index.clamp_(max=cumulative.shape[-1] - 1)
+
+
+# The most comparisons a regime chain makes at once ((steps, P, K, K)): it works out its
+# steps' moves a chunk of steps at a time, so that its memory does not grow with n_steps.
+_MOVES_ELEMENTS = 2**22
+
+
+# --------------------------------------------------------------------------------------------
 # Models
 # --------------------------------------------------------------------------------------------
 
@@ -405,6 +779,26 @@ class GBM(_Model):
         drift = (self.mu - 0.5 * self.sigma**2) * self._dt
         log_increments = drift + self.sigma * np.sqrt(self._dt) * shocks
         return Simulation(prices=_prices(self.s0, log_increments))
+
+    def _torch_key(self) -> Hashable:
+        return (type(self), self._chol is not None)
+
+    def _torch_params(self) -> dict[str, Any]:
+        params = {
+            "drift": (self.mu - 0.5 * self.sigma**2) * self._dt,
+            "vol": self.sigma * np.sqrt(self._dt),
+            "s0": self.s0,
+        }
+        if self._chol is not None:
+            params["chol_t"] = self._chol.T
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        z = _correlated(ctx.normal(n_paths, n_steps, self._n_assets), params.get("chol_t"))
+        log_increments = params["drift"][:, None] + params["vol"][:, None] * z
+        return Simulation(prices=_torch_prices(params["s0"], log_increments))
 
     def _repr_fields(self) -> dict[str, str]:
         return {
@@ -526,6 +920,52 @@ class Heston(_Model):
         prices: NDArray[np.float64] = self.s0 * np.exp(log_rel)
         return Simulation(prices=prices, state={"variance": variance})
 
+    def _torch_key(self) -> Hashable:
+        return (type(self), self._chol is not None)
+
+    def _torch_params(self) -> dict[str, Any]:
+        n, dt = self._n_assets, self._dt
+        params = {
+            "mu_dt": self.mu * dt,
+            "half_dt": np.full(n, 0.5 * dt),
+            "kappa_dt": self.kappa * dt,
+            "theta": self.theta,
+            "sqrt_dt": np.full(n, np.sqrt(dt)),
+            "xi_sqrt_dt": self.xi * np.sqrt(dt),
+            "rho": self.rho,
+            "rho_c": np.sqrt(1.0 - self.rho**2),
+            "v0": self.v0,
+            "s0": self.s0,
+        }
+        if self._chol is not None:
+            params["chol_t"] = self._chol.T
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        z1 = _correlated(ctx.normal(n_steps, n_paths, n), p.get("chol_t"), time_major=True)
+        z2 = p["rho"] * z1 + p["rho_c"] * ctx.normal(n_steps, n_paths, n)
+        dw1 = p["sqrt_dt"] * z1  # sqrt(v+ dt) z1 = sqrt(v+) dw1
+        dw2 = p["xi_sqrt_dt"] * z2
+        mu_dt, half_dt, kappa_dt, theta = p["mu_dt"], p["half_dt"], p["kappa_dt"], p["theta"]
+        x = torch.zeros((n_paths, n), dtype=ctx.dtype, device=ctx.device)
+        v = p["v0"].expand(n_paths, n)
+        log_rel, variance = [x], []
+        for t in range(n_steps):
+            v_plus = torch.clamp(v, min=0.0)
+            root = torch.sqrt(v_plus)
+            x = torch.addcmul(x + mu_dt, half_dt, v_plus, value=-1.0).addcmul_(root, dw1[t])
+            v = torch.addcmul(v, kappa_dt, theta - v_plus).addcmul_(root, dw2[t])
+            log_rel.append(x)
+            variance.append(v_plus)
+        variance.append(torch.clamp(v, min=0.0))
+        prices = p["s0"][:, None] * torch.exp(torch.stack(log_rel, dim=1))
+        return Simulation(prices=prices, state={"variance": torch.stack(variance, dim=1)})
+
     def _repr_fields(self) -> dict[str, str]:
         return {
             "n_assets": str(self._n_assets),
@@ -641,6 +1081,43 @@ class MertonJumpDiffusion(_Model):
         log_increments = drift + self.sigma * np.sqrt(dt) * z + log_jumps
         jumps = np.concatenate([np.zeros((*lead, 1, n)), counts], axis=-2)
         return Simulation(prices=_prices(self.s0, log_increments), state={"jumps": jumps})
+
+    def _torch_key(self) -> Hashable:
+        table = _poisson_table(self.jump_intensity * self._dt)[1]
+        return (type(self), self._chol is not None, table.shape[1])
+
+    def _torch_params(self) -> dict[str, Any]:
+        dt = self._dt
+        k = np.expm1(self.jump_mean + 0.5 * self.jump_std**2)
+        low, cdf = _poisson_table(self.jump_intensity * dt)
+        params = {
+            "drift": (self.mu - 0.5 * self.sigma**2 - self.jump_intensity * k) * dt,
+            "vol": self.sigma * np.sqrt(dt),
+            "jump_mean": self.jump_mean,
+            "jump_std": self.jump_std,
+            "jump_low": low,
+            "jump_cdf": cdf,
+            "s0": self.s0,
+        }
+        if self._chol is not None:
+            params["chol_t"] = self._chol.T
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        z = _correlated(ctx.normal(n_paths, n_steps, n), p.get("chol_t"))
+        counts = _poisson_counts(ctx, p["jump_low"], p["jump_cdf"], n_paths, n_steps)
+        w = ctx.normal(n_paths, n_steps, n)
+        log_jumps = (
+            counts * p["jump_mean"][:, None] + torch.sqrt(counts) * p["jump_std"][:, None] * w
+        )
+        log_increments = p["drift"][:, None] + p["vol"][:, None] * z + log_jumps
+        jumps = torch.cat([torch.zeros_like(counts[:, :1]), counts], dim=1)
+        return Simulation(prices=_torch_prices(p["s0"], log_increments), state={"jumps": jumps})
 
     def _repr_fields(self) -> dict[str, str]:
         return {
@@ -787,6 +1264,60 @@ class RegimeSwitching(_Model):
             state={"regime": regime.astype(np.float64)},
         )
 
+    def _torch_key(self) -> Hashable:
+        return (type(self), tuple(model._chol is not None for model in self.regimes))
+
+    def _torch_params(self) -> dict[str, Any]:
+        dt = self._dt
+        params = {
+            "initial": np.cumsum(self.initial),
+            "transition": np.cumsum(self.transition, axis=1),
+            "drift": np.stack([(m.mu - 0.5 * m.sigma**2) * dt for m in self.regimes]),
+            "vol": np.stack([m.sigma * np.sqrt(dt) for m in self.regimes]),
+            "s0": self.s0,
+        }
+        if any(m._chol is not None for m in self.regimes):  # (identity for those without)
+            eye = np.eye(self._n_assets)
+            params["chol_t"] = np.stack(
+                [eye if m._chol is None else m._chol.T for m in self.regimes]
+            )
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        current = _torch_categorical(p["initial"], ctx.uniform(n_paths))
+        # The regime each one would move to at each step of a chunk (steps, P, K), so that a
+        # step of the chain is a lookup of the current one's.
+        u = ctx.uniform(n_steps, n_paths)
+        cumulative = p["transition"]  # (L, K, K), cumulative along the rows
+        k = cumulative.shape[-1]
+        chunk = max(1, _MOVES_ELEMENTS // (n_paths * k * k))
+        chain = [current]
+        for start in range(0, n_steps, chunk):
+            moves = (u[start : start + chunk, :, None, None] >= cumulative).sum(dim=-1)
+            for step in moves.clamp_(max=k - 1):
+                current = torch.gather(step, 1, current[:, None])[:, 0]
+                chain.append(current)
+        regime = torch.stack(chain, dim=1)
+
+        eps = ctx.normal(n_paths, n_steps, n)
+        active = regime[:, :-1, None]
+        log_increments = eps
+        for index, model in enumerate(self.regimes):
+            z = eps if model._chol is None else _correlated(eps, p["chol_t"][:, index])
+            increment = p["drift"][:, index, None] + p["vol"][:, index, None] * z
+            log_increments = (
+                increment if index == 0 else torch.where(active == index, increment, log_increments)
+            )
+        return Simulation(
+            prices=_torch_prices(p["s0"], log_increments),
+            state={"regime": regime.to(ctx.dtype)},
+        )
+
     def _repr_fields(self) -> dict[str, str]:
         return {
             "regimes": "[" + ", ".join(repr(model) for model in self.regimes) + "]",
@@ -889,6 +1420,42 @@ class GARCH(_Model):
         log_increments = self.mu * self._dt + shocks
         return Simulation(prices=_prices(self.s0, log_increments), state={"variance": variance})
 
+    def _torch_key(self) -> Hashable:
+        return (type(self), self._chol is not None)
+
+    def _torch_params(self) -> dict[str, Any]:
+        params = {
+            "omega": self.omega,
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "h0": self.unconditional_variance,
+            "mu_dt": self.mu * self._dt,
+            "s0": self.s0,
+        }
+        if self._chol is not None:
+            params["chol_t"] = self._chol.T
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        z = _correlated(ctx.normal(n_steps, n_paths, n), p.get("chol_t"), time_major=True)
+        # h' = omega + alpha (sqrt(h) z)^2 + beta h = omega + h (alpha z^2 + beta)
+        growth = torch.addcmul(p["beta"], p["alpha"], z * z)
+        h, omega = p["h0"].expand(n_paths, n), p["omega"]
+        steps = [h]
+        for t in range(n_steps):
+            h = torch.addcmul(omega, h, growth[t])
+            steps.append(h)
+        variance = torch.stack(steps, dim=1)
+        log_increments = torch.sqrt(variance[:, :-1]) * z.transpose(0, 1) + p["mu_dt"][:, None]
+        return Simulation(
+            prices=_torch_prices(p["s0"], log_increments), state={"variance": variance}
+        )
+
     def _repr_fields(self) -> dict[str, str]:
         return {
             "n_assets": str(self._n_assets),
@@ -975,6 +1542,39 @@ class MeanReverting(_Model):
             log_rel[..., t + 1, :] = x
         prices: NDArray[np.float64] = self.s0 * np.exp(log_rel)
         return Simulation(prices=prices)
+
+    def _torch_key(self) -> Hashable:
+        return (type(self), self._chol is not None)
+
+    def _torch_params(self) -> dict[str, Any]:
+        decay, scale = _ou_coefficients(self.theta, self.sigma, self._dt)
+        params = {
+            "target": np.log(self.mean) - np.log(self.s0),  # log(mean) relative to log(s0)
+            "decay": decay,
+            "scale": scale,
+            "s0": self.s0,
+        }
+        if self._chol is not None:
+            params["chol_t"] = self._chol.T
+        return params
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        z = _correlated(ctx.normal(n_steps, n_paths, n), p.get("chol_t"), time_major=True)
+        shocks = p["scale"] * z
+        target, decay = p["target"], p["decay"]
+        # The deviation y = x - target follows y' = y decay + scale z, from x = 0.
+        y = (-target).expand(n_paths, n)
+        deviation = [y]
+        for t in range(n_steps):
+            y = torch.addcmul(shocks[t], y, decay)
+            deviation.append(y)
+        log_rel = target[:, None] + torch.stack(deviation, dim=1)  # exactly 0 at t = 0
+        return Simulation(prices=p["s0"][:, None] * torch.exp(log_rel))
 
     def _repr_fields(self) -> dict[str, str]:
         return {
@@ -1067,6 +1667,39 @@ class CointegratedPair(_Model):
         prices: NDArray[np.float64] = self.s0 * np.exp(log_rel)
         return Simulation(prices=prices, state={"spread": spread})
 
+    def _torch_params(self) -> dict[str, Any]:
+        dt = self._dt
+        decay, scale = _ou_coefficients(self.theta, self.spread_sigma, dt)
+        return {
+            "trend_drift": (self.mu - 0.5 * self.sigma**2) * dt,
+            "trend_vol": self.sigma * np.sqrt(dt),
+            "decay": decay,
+            "scale": scale,
+            "s0": self.s0,
+        }
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p = params
+        trend_shocks = ctx.normal(n_paths, n_steps)
+        trend_increments = p["trend_drift"][:, None] + p["trend_vol"][:, None] * trend_shocks
+        trend = torch.cat(
+            [torch.zeros_like(trend_increments[:, :1]), torch.cumsum(trend_increments, dim=1)], 1
+        )
+        shocks = p["scale"] * ctx.normal(n_steps, n_paths)  # time-major, for the recursion
+        s, decay = torch.zeros(n_paths, dtype=ctx.dtype, device=ctx.device), p["decay"]
+        steps = [s]
+        for t in range(n_steps):
+            s = torch.addcmul(shocks[t], s, decay)
+            steps.append(s)
+        spread = torch.stack(steps, dim=1)
+        log_rel = torch.stack([trend + 0.5 * spread, trend - 0.5 * spread], dim=-1)
+        prices = p["s0"][:, None] * torch.exp(log_rel)
+        return Simulation(prices=prices, state={"spread": spread})
+
     def _repr_fields(self) -> dict[str, str]:
         return {
             "mu": _format(self.mu),
@@ -1139,6 +1772,29 @@ class BlockBootstrap(_Model):
         rows = rows.reshape((*lead, n_blocks * size))[..., :steps]
         return Simulation(prices=_prices(self.s0, self.returns[rows]))
 
+    def _torch_key(self) -> Hashable:
+        return (type(self), self.returns.shape, self.block_size)
+
+    def _torch_params(self) -> dict[str, Any]:
+        return {"returns": self.returns, "s0": self.s0}  # the history is copied to a device once
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        n_rows, size = self.returns.shape[0], self.block_size
+        n_blocks = -(-n_steps // size)
+        starts = ctx.integers(n_rows, n_paths, n_blocks)
+        rows = (starts[..., None] + torch.arange(size, device=ctx.device)) % n_rows
+        rows = rows.reshape(n_paths, n_blocks * size)[:, :n_steps]
+        returns = params["returns"]
+        if returns.shape[0] == 1:  # one history for every path
+            increments = returns[0][rows]
+        else:
+            increments = returns[torch.arange(n_paths, device=ctx.device)[:, None], rows]
+        return Simulation(prices=_torch_prices(params["s0"], increments))
+
     def _repr_fields(self) -> dict[str, str]:
         return {
             "returns": f"<{self.returns.shape[0]}x{self.returns.shape[1]} array>",
@@ -1154,6 +1810,14 @@ class Randomized(_Model):
     `factory(rng)` builds a model with randomly drawn parameters. The model returned for
     `np.random.default_rng(0)` is kept as `reference` and fixes n_assets, dt and state_spec;
     every later model must match them.
+
+    `simulate_torch` builds the models on the host too, with a NumPy generator seeded from
+    the torch generator's state (which it then moves on, so a given state builds the same
+    models and the next call others), and nothing is read back from the device. The built-in
+    models it builds then simulate together, those of a kind (the same class and structure,
+    such as having a correlation) at once, from their parameters stacked and copied to the
+    device in one transfer per kind and call. Other models simulate one path at a time with
+    their own `simulate_torch`.
 
     Args:
         factory: Callable mapping a generator to a `MarketModel`.
@@ -1215,6 +1879,55 @@ class Randomized(_Model):
             )
         state = {key: np.stack([sim.state[key] for sim in sims]) for key in self._spec}
         return Simulation(prices=np.stack([sim.prices for sim in sims]), mask=mask, state=state)
+
+    def _torch_key(self) -> Hashable | None:
+        return None  # its parameters are drawn on each call
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        rng = _host_rng(ctx.generator)
+        models = [self._build(rng) for _ in range(n_paths)]
+        sims: list[Simulation] = []
+        order: list[int] = []  # the path of each simulated path, in the order of `sims`
+        kinds: dict[Hashable, list[tuple[int, _Model]]] = {}  # built-in models, by kind
+        for path, model in enumerate(models):
+            if _simulates_on_torch(model) and (key := model._torch_key()) is not None:
+                kinds.setdefault(key, []).append((path, model))
+            else:  # simulated on its own
+                sims.append(
+                    model.simulate_torch(ctx.generator, n_steps, n_paths=1, dtype=ctx.dtype)
+                )
+                order.append(path)
+        for members in kinds.values():
+            stacked = _to_device([model._torch_params() for _, model in members], ctx)
+            sims.append(members[0][1]._torch_simulate(ctx, stacked, len(members), n_steps))
+            order.extend(path for path, _ in members)
+        if len(sims) == 1:  # one kind of model: the paths are in order
+            return sims[0]
+        # Back to the order of the paths (the one copy to the device of models of many kinds).
+        inverse = torch.as_tensor(np.argsort(order), device=ctx.device)
+
+        def joined(tensors: list[Any]) -> torch.Tensor:
+            return torch.cat(tensors)[inverse]
+
+        prices: list[Any] = [sim.prices for sim in sims]
+        masks: list[Any] = [sim.mask for sim in sims]
+        states: list[Mapping[str, Any]] = [sim.state for sim in sims]
+        mask = None
+        if any(m is not None for m in masks):
+            listed = [
+                torch.ones_like(p, dtype=torch.bool) if m is None else m
+                for p, m in zip(prices, masks)
+            ]
+            mask = joined(listed)
+        return Simulation(
+            prices=joined(prices),
+            mask=mask,
+            state={key: joined([state[key] for state in states]) for key in self._spec},
+        )
 
     def _repr_fields(self) -> dict[str, str]:
         name = getattr(self.factory, "__qualname__", type(self.factory).__name__)
@@ -1320,6 +2033,64 @@ class ListingProcess(_Model):
         mask = listed if inner.mask is None else listed & inner.mask
         prices = np.where(mask, inner.prices, np.nan)
         return Simulation(prices=prices, mask=mask, state=inner.state)
+
+    def _torch_key(self) -> Hashable | None:
+        inner = self.model._torch_key() if _simulates_on_torch(self.model) else None
+        return None if inner is None else (type(self), self.min_listed, inner)
+
+    def _torch_params(self) -> dict[str, Any]:
+        dt = self._dt
+        return {
+            "initial_listed": self.initial_listed,
+            "p_list": -np.expm1(-self.listing_rate * dt),
+            "p_delist": -np.expm1(-self.delisting_rate * dt),
+            "model": self.model._torch_params() if _simulates_on_torch(self.model) else None,
+        }
+
+    @staticmethod
+    def _torch_minimum(listed: torch.Tensor, floor: torch.Tensor | None) -> torch.Tensor:
+        """`_enforce_minimum` on tensors. The k-th unlisted asset (by index) is listed when
+        k <= min_listed - (listed assets), that is when at most `floor` = min_listed - 1 -
+        (its index) assets after it are listed. (Counted in floats: MPS may lack an integer
+        cumsum.)"""
+        if floor is None:  # min_listed = 0
+            return listed
+        import torch
+
+        count = torch.cumsum(listed, dim=-1, dtype=torch.float32)  # listed up to each asset
+        return listed | (count[:, -1:] - count <= floor)
+
+    def _torch_simulate(
+        self, ctx: _TorchContext, params: dict[str, Any], n_paths: int, n_steps: int
+    ) -> Simulation:
+        import torch
+
+        p, n = params, self._n_assets
+        if _simulates_on_torch(self.model):
+            inner = self.model._torch_simulate(ctx, p["model"], n_paths, n_steps)
+        else:
+            inner = self.model.simulate_torch(
+                ctx.generator, n_steps, n_paths=n_paths, dtype=ctx.dtype
+            )
+        floor = None
+        if self.min_listed > 0:
+            index = torch.arange(n, dtype=torch.float32, device=ctx.device)
+            floor = (self.min_listed - 1) - index
+        current = self._torch_minimum(ctx.uniform(n_paths, n) < p["initial_listed"], floor)
+        u = ctx.uniform(n_steps, n_paths, n)  # time-major, for the recursion
+        stays = u >= p["p_delist"]  # a listed asset stays listed
+        lists = u < p["p_list"]  # an unlisted one lists
+        steps = [current]
+        for t in range(n_steps):
+            current = self._torch_minimum(torch.where(current, stays[t], lists[t]), floor)
+            steps.append(current)
+        listed = torch.stack(steps, dim=1)
+        inner_mask: Any = inner.mask
+        mask = listed if inner_mask is None else listed & inner_mask
+        inner_prices: Any = inner.prices
+        return Simulation(
+            prices=torch.where(mask, inner_prices, torch.nan), mask=mask, state=inner.state
+        )
 
     def _repr_fields(self) -> dict[str, str]:
         return {

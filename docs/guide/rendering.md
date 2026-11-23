@@ -24,10 +24,10 @@ recording is a wrapper you add or remove without touching the environment.
 </figure>
 </div>
 
-The finance environments are drawn as dashboards: the market, the agent's positions and
-trades, and its results, as the episode unfolds. Their header is drawn in the Qian Capital
-house style unless you pass `branding=False` (see [Branding](#branding)); the tabs show
-both.
+The financial markets environments are drawn as dashboards: the market, the agent's
+positions and trades, and its results, as the episode unfolds. Their header is drawn in the
+Qian Capital house style unless you pass `branding=False` (see [Branding](#branding)); the
+tabs show both.
 
 === "Qian Capital (default)"
 
@@ -50,7 +50,7 @@ both.
     { .sk-dashboards }
 
 *These GIFs were produced by the renderers on this page, with `RecordFrames` and
-`save_gif()`; the finance ones, in both styles, by
+`save_gif()`; the financial markets ones, in both styles, by
 [`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).*
 
 ## The Renderer protocol
@@ -69,7 +69,7 @@ calls `close()` on exit; the built-in renderers do.
 
 ## Built-in renderers
 
-### Classic control
+### Classic Control
 
 The classic-control environments come with RGB renderers that mirror gymnasium's
 `rgb_array` output, drawn with sekai's own [`Canvas`](#canvas) (no pygame needed):
@@ -96,12 +96,12 @@ frame = renderer.render(env)
 print(frame.shape, frame.dtype)  # (400, 600, 3) uint8
 ```
 
-### Finance
+### Financial Markets
 
-Every finance environment has a renderer in `sekai.envs.finance`. Each draws the episode so
-far as a dashboard: a header with the environment's name, where its prices come from (the
-date, for dated history) and its headline numbers, a progress rule along the episode, and
-charts underneath.
+Every financial markets environment has a renderer in `sekai.envs.finance`. Each draws the
+episode so far as a dashboard: a header with the environment's name, where its prices come
+from (the date, for dated history) and its headline numbers, a progress rule along the
+episode, and charts underneath.
 
 | Renderer | Draws | Charts |
 |---|---|---|
@@ -140,6 +140,55 @@ It recognises a new episode from the env's `elapsed_steps` going back to 0, and 
 can draw several environments at once, keeping a history for each.
 `LimitOrderBookMarket` is multi-agent, and `RecordFrames` wraps single-agent environments
 only, so call `renderer.render(env)` after each step yourself.
+
+### Strategy Games
+
+Every [strategy game](../environments/games.md) has an RGB renderer that draws the current
+position, and a text renderer. A frame has a header with the game's name and its status
+(whose turn it is, the check, the result and how it came about), then the board between a
+strip for each player (their name and colour, the material they have captured, a dot on
+the side to move), or the card table with its seats.
+
+| Renderer | Draws | Shows |
+|---|---|---|
+| `ChessRenderer` | `Chess-v0` | cream and green squares, Colin M.L. Burnett's pieces, the last move tinted gold, a red glow under a king in check, coordinates in the edge squares |
+| `GoRenderer` | `Go9x9-v0`, `Go13x13-v0`, `Go19x19-v0` | a wooden board with its grain, shaded stones, star points and coordinates, the last stone ringed, and at the end the territory and the stones counted as dead |
+| `XiangqiRenderer` | `Xiangqi-v0` | the board with its palaces, river (楚河 漢界) and file numbers, round pieces with their characters, the last move and a general in check |
+| `HoldemRenderer` | `HeadsUpHoldem-v0` | the felt table: board cards, the pot, both seats with their cards, stacks, bets, last actions and the dealer button, and the winning hand at showdown |
+| `BlackjackRenderer` | `Blackjack-v0` | the table: the dealer's cards (the hole card face down until revealed), the seat's hands, totals and outcomes, the bet, and a gauge of the shoe with the count |
+
+They take `theme="dark"` (the default) or `"light"`, `header=False` to leave the header
+out, and `names` to name the players (`{"white": "Agent", "black": "Random"}`; sides
+without a name show their colour). The board renderers take `size=480`, the board's
+width in pixels, and `strips=False` to leave out the player strips; `ChessRenderer` and
+`XiangqiRenderer` also take `orientation` (a colour, or `"mover"` to keep the side to move
+at the bottom, as the network sees the board), and `GoRenderer` takes `perspective`, the
+colour whose strip is at the bottom. The card tables take `width=640`, and
+`BlackjackRenderer` names seats rather than colours (`names="Agent"`, or one name per
+seat of a multi-seat `BlackjackTable`, which it draws too). Drawing
+the board's wood, shadows and grid happens once per layout and is cached, so a frame takes
+a few milliseconds after the first. The poker renderer shows both hands by default, as a
+spectator of two agents would see them; `perspective` (a seat, `0`/`"p1"` by default) is
+the seat at the bottom, and `reveal="perspective"` hides the other seat's cards until the
+hand is over.
+
+```python
+import sekai
+from sekai.envs.games import ChessRenderer, ChessTextRenderer
+from sekai.rendering import RecordFrames
+
+env = RecordFrames(sekai.make("Chess-v0"), ChessRenderer(orientation="white"))
+result = env.reset(seed=0)
+while not result.done:
+    result = env.step(env.action_space.sample(mask=result.info["legal_action_mask"]))
+env.save("chess.gif")
+print(ChessTextRenderer().render(env))
+```
+
+The pieces are Colin M.L. Burnett's chess set (3-clause BSD licence) and the xiangqi
+characters come from Noto Serif CJK TC (SIL Open Font License); both ship with sekai as
+small images resampled to the size a frame needs (`tools/build_game_assets.py` builds
+them).
 
 ## Recording frames
 
@@ -210,9 +259,9 @@ save_video(frames, "cartpole.mp4", fps=50)   # needs imageio + imageio-ffmpeg
 
 ## Dashboards for your own environments
 
-The finance renderers are `sekai.rendering.Dashboard`s, assembled from charts that you can
-use as well, so an environment of your own gets the same kind of renderer in a few lines.
-A dashboard needs nothing from the environment but readable state:
+The financial markets renderers are `sekai.rendering.Dashboard`s, assembled from charts that
+you can use as well, so an environment of your own gets the same kind of renderer in a few
+lines. A dashboard needs nothing from the environment but readable state:
 
 ```python
 import numpy as np
@@ -389,10 +438,10 @@ renderer = TradingRenderer(theme="plain-light", branding=False)  # no house styl
 
 ### Branding
 
-sekai's finance renderers draw their header in the Qian Capital house style by default:
-the gold Q mark beside the QIAN CAPITAL wordmark, over a title set in Hedvig Letters Serif
-(the heading face of these pages), and the episode's progress drawn as a rule of gold metal
-that fills as the episode goes on.
+sekai's financial markets renderers draw their header in the Qian Capital house style by
+default: the gold Q mark beside the QIAN CAPITAL wordmark, over a title set in Hedvig
+Letters Serif (the heading face of these pages), and the episode's progress drawn as a rule
+of gold metal that fills as the episode goes on.
 
 === "Branded (default)"
 
@@ -430,10 +479,10 @@ default), and draws exactly what sekai 0.2 drew.
 The Qian Capital name and logo are trademarks of Qian Capital, and the artwork is not
 covered by sekai's Apache License (nor by the SIL Open Font License of its fonts). The
 [TRADEMARKS](https://github.com/QianCapital/sekai/blob/master/TRADEMARKS) file lets you show
-them as sekai draws them in its own dashboards, the finance renderers, including in figures
-and recordings of them, and redistribute them unmodified as part of sekai. Anything else,
-such as branding a dashboard of your own (with `branding=True` or the drawing functions in
-`sekai.rendering.brand`), needs written permission from Qian Capital.
+them as sekai draws them in its own dashboards, the financial markets renderers, including
+in figures and recordings of them, and redistribute them unmodified as part of sekai.
+Anything else, such as branding a dashboard of your own (with `branding=True` or the drawing
+functions in `sekai.rendering.brand`), needs written permission from Qian Capital.
 
 ## Canvas
 

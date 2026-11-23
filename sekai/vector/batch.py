@@ -190,6 +190,14 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
         self._needs_reset = True
         self._like = self._anchor()
         self._frozen = self.backend.bools((self.num_envs,), False, like=self._like)
+        # `_frozen` on the host, and the lanes being reset (a backend array and its host
+        # values), so that subclasses need not read either back from a device.
+        self._frozen_host = np.zeros(self.num_envs, dtype=bool)
+        self._resetting: tuple[Array, NDArray[np.int64]] | None = None
+        # `_step` may set this to the host values of `(terminated | truncated) & ~frozen`
+        # when it read them back anyway (with its own checks), with the `terminated` and
+        # `truncated` it read them from, so `step()` doesn't again if `_step` returns those.
+        self._finished_host: tuple[NDArray[np.bool_], Array, Array] | None = None
         self._final_terminated = self._frozen
         self._final_truncated = self._frozen
         self.closed = False
@@ -228,6 +236,40 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
     def frozen(self) -> Array:
         """`(num_envs,)` bool: lanes that finished without autoreset and await a reset."""
         return self._frozen
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._fill_derived(state)
+
+    def _fill_derived(self, state: Mapping[str, Any]) -> None:
+        """Rebuild the copies of the state that `state` lacks (as one pickled or
+        snapshotted by sekai 0.3.0 does), from the state they copy."""
+        if "_frozen_host" not in state:
+            self._frozen_host = np.array(self.backend.to_numpy(self._frozen), dtype=bool)
+        self.__dict__.setdefault("_resetting", None)
+        self.__dict__.setdefault("_finished_host", None)
+
+    def _lanes_on_host(self, indices: Array) -> NDArray[np.int64]:
+        """The values of `indices` (as `_reset_lanes` receives them) as a NumPy array,
+        without reading them back from the device when the base class made them."""
+        if self._resetting is not None and indices is self._resetting[0]:
+            return self._resetting[1]
+        return np.asarray(self.backend.to_numpy(indices), dtype=np.int64).reshape(-1)
+
+    def _reset_some(
+        self, idx: Array, idx_host: NDArray[np.int64], options: Sequence[dict[str, Any] | None]
+    ) -> dict[str, Any]:
+        """`_reset_lanes(idx, options)` without autograd, with `idx`'s host values known."""
+        self._resetting = (idx, idx_host)
+        try:
+            with contextlib.ExitStack() as stack:
+                if self.backend.name == "torch":
+                    import torch
+
+                    stack.enter_context(torch.no_grad())
+                return self._reset_lanes(idx, options)
+        finally:
+            self._resetting = None
 
     def _grad(self) -> contextlib.AbstractContextManager[Any]:
         if self.backend.name != "torch":
@@ -273,26 +315,26 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
             )
         B = self.backend
         if indices is None:
+            idx_host = np.arange(self.num_envs, dtype=np.int64)
             idx = B.arange(self.num_envs, like=self._like)
         else:
-            idx = B.asint(np.asarray(to_numpy(indices)).reshape(-1), self._like)
+            idx_host = np.asarray(np.asarray(to_numpy(indices)).reshape(-1), dtype=np.int64)
+            idx = B.asint(idx_host, self._like)
         if indices is None:
             self._needs_reset = False
         elif self._needs_reset:
             raise ResetRequired("Reset every lane (indices=None) before resetting some of them.")
         opts = self._lane_options(options, int(idx.shape[0]))
         self._set_rng(seed)
-        with contextlib.ExitStack() as stack:
-            if B.name == "torch":
-                import torch
-
-                stack.enter_context(torch.no_grad())
-            info = self._reset_lanes(idx, opts)
+        info = self._reset_some(idx, idx_host, opts)
         lanes = B.bools((self.num_envs,), False, like=self._like)
         lanes = B.put_along_axis(
             lanes, idx, B.bools(tuple(idx.shape), True, like=self._like), axis=0
         )
         self._frozen = self._frozen & ~lanes
+        frozen_host = self._frozen_host.copy()
+        frozen_host[idx_host] = False
+        self._frozen_host = frozen_host
         dones = B.bools((self.num_envs,), False, like=self._like)
         return BatchReset(observations=self._observe(), info=info, indices=idx, dones=dones)
 
@@ -302,27 +344,33 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
             raise ResetRequired()
         B = self.backend
         frozen = self._frozen
+        self._finished_host = None
         with self._grad():
             rewards, terminated, truncated, info = self._step(actions)
+        read = self._finished_host
+        self._finished_host = None
+        # (A subclass's `_step` that changes the flags it got from its parent's is read anew.)
+        known = read is not None and read[1] is terminated and read[2] is truncated
         rewards = B.where(frozen, 0.0, B.asfloat(rewards, self._like))
         terminated = B.where(frozen, self._final_terminated, B.asbool(terminated, self._like))
         truncated = B.where(frozen, self._final_truncated, B.asbool(truncated, self._like))
         finished = (terminated | truncated) & ~frozen
         final_obs = reset_info = reset_idx = None
-        if B.item(B.any(finished)):
+        if read is not None and known:
+            finished_host = read[0]
+        else:
+            finished_host = B.to_numpy(finished)  # the step's one read back from a device
+        if finished_host.any():
             if self.autoreset:
                 final_obs = self._observe()
-                reset_idx = B.asint(np.flatnonzero(B.to_numpy(finished)), self._like)
-                with contextlib.ExitStack() as stack:
-                    if B.name == "torch":
-                        import torch
-
-                        stack.enter_context(torch.no_grad())
-                    reset_info = self._reset_lanes(reset_idx, [None] * int(reset_idx.shape[0]))
+                reset_host = np.flatnonzero(finished_host).astype(np.int64)
+                reset_idx = B.asint(reset_host, self._like)
+                reset_info = self._reset_some(reset_idx, reset_host, [None] * len(reset_host))
             else:
                 self._final_terminated = B.where(finished, terminated, self._final_terminated)
                 self._final_truncated = B.where(finished, truncated, self._final_truncated)
                 self._frozen = frozen | finished
+                self._frozen_host = self._frozen_host | finished_host
         return BatchStep(
             observations=self._observe(),
             rewards=rewards,

@@ -24,12 +24,14 @@ complex environments and financial markets.</p>
 **sekai** is a reinforcement-learning environment framework for Python: a modern take on the
 gym/gymnasium API with structured results instead of tuples, async-native environments,
 observations whose size can change, native and multiprocess vectorisation, renderers kept
-outside the environment, and typed episode statistics. Its finance toolkit (point-in-time
-market data, simulators, costs, rewards, metrics and a limit order book) powers
-environments for trading, portfolio allocation over changing universes, market making,
-optimal execution and order-book markets. It ships the classic-control benchmarks too
-(dynamics bit-identical to gymnasium), and two-way gymnasium and PettingZoo bridges mean
-Stable-Baselines3, CleanRL, RLlib and multi-agent libraries work out of the box.
+outside the environment, and typed episode statistics. Its financial markets toolkit
+(point-in-time market data, simulators, costs, rewards, metrics and a limit order book)
+powers environments for trading, portfolio allocation over changing universes, market
+making, optimal execution and order-book markets. It ships the classic-control benchmarks
+too (dynamics bit-identical to gymnasium) and classic strategy games (chess, go, xiangqi,
+heads-up hold'em and blackjack, with the encodings of AlphaZero), and two-way gymnasium and
+PettingZoo bridges mean Stable-Baselines3, CleanRL, RLlib and multi-agent libraries work out
+of the box.
 
 </div>
 
@@ -43,7 +45,7 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
 
 ## A first look
 
-=== "Classic control"
+=== "Classic Control"
 
     ```python
     import sekai
@@ -58,7 +60,7 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
     print(result.terminated, result.truncated, total)  # True False 18.0
     ```
 
-=== "Finance"
+=== "Financial Markets"
 
     ```python
     import sekai
@@ -113,23 +115,33 @@ pip install "sekai[all]"          # + PettingZoo bridge, pandas data loading, vi
 
     [:octicons-arrow-right-24: Variable-size observations](guide/dynamic.md)
 
--   :material-finance:{ .lg .middle } **Financial markets**
+-   :material-finance:{ .lg .middle } **Financial Markets**
 
     ---
 
     Trading, portfolios over changing universes, Avellaneda–Stoikov market making,
     Almgren–Chriss execution and limit order books, on simulated markets or your own history.
 
-    [:octicons-arrow-right-24: Finance environments](environments/finance.md)
+    [:octicons-arrow-right-24: Financial Markets environments](environments/finance.md)
 
--   :material-toolbox:{ .lg .middle } **Finance toolkit**
+-   :material-toolbox:{ .lg .middle } **Financial Markets toolkit**
 
     ---
 
     Point-in-time market data and walk-forward splits, a look-ahead detector, market
     simulators, cost and impact models, rewards and performance metrics.
 
-    [:octicons-arrow-right-24: Finance toolkit](finance/index.md)
+    [:octicons-arrow-right-24: Financial Markets toolkit](finance/index.md)
+
+-   :material-chess-knight:{ .lg .middle } **Strategy Games**
+
+    ---
+
+    Chess, go, xiangqi, heads-up no-limit hold'em and blackjack, for self-play and tree
+    search: the player to act sees the game from its side, legal moves come as a mask, and
+    the board games clone cheaply.
+
+    [:octicons-arrow-right-24: Strategy Games](environments/games.md)
 
 -   :material-swap-horizontal:{ .lg .middle } **gymnasium both ways**
 
@@ -185,7 +197,7 @@ codebases. sekai keeps the familiar shape of the API and fixes these:
 | Episode statistics | `info["episode"]["r"]` in an untyped dict | `info["episode"]` is a typed `EpisodeStats` |
 | Multi-agent | a separate library (PettingZoo) | `MultiAgentEnv` with per-agent spaces, event-driven turns, and a PettingZoo bridge |
 | Variable-size observations | `Sequence` / `Graph` spaces that do not batch | `MaskedBox` padded sets that batch, flatten and normalise; `Sequence` with padding |
-| Fast vector envs | `vector_entry_point` | `NativeVecEnv` base class and native finance envs; shared-memory `ProcVecEnv` |
+| Fast vector envs | `vector_entry_point` | `NativeVecEnv` base class and native financial markets envs; shared-memory `ProcVecEnv` |
 | Registry plugins | register at import time | `register_namespace()` lazy loaders, `sekai -m plugin` on the CLI |
 | Env checking | `PassiveEnvChecker` wrapped into every `make()` | `check_env()` in your test suite; zero overhead in training |
 

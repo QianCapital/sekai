@@ -1,0 +1,7 @@
+# Besides the package, the source distribution carries the whole test suite, with its data
+# and fixtures, so that pytest runs from an unpacked sdist; the changelog; and the sources
+# and licence of the games' artwork (tools/build_game_assets.py rebuilds the assets).
+include CHANGELOG.md
+graft tests
+graft tools
+global-exclude *.py[cod]

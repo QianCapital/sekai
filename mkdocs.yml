@@ -133,11 +133,12 @@ nav:
       - Registry: guide/registry.md
       - Async environments: guide/async.md
       - Multi-agent: guide/multi-agent.md
+      - Self-play and search: guide/games.md
       - Rendering: guide/rendering.md
       - Episode statistics: guide/statistics.md
       - Checking environments: guide/checking.md
       - Command line: guide/cli.md
-  - Finance:
+  - Financial Markets:
       - Overview: finance/index.md
       - Market data and backtesting: finance/data.md
       - Market simulators: finance/simulators.md
@@ -149,8 +150,9 @@ nav:
       - Order books: finance/order-book.md
   - Environments:
       - Catalog: environments/index.md
-      - Classic control: environments/classic-control.md
-      - Finance: environments/finance.md
+      - Classic Control: environments/classic-control.md
+      - Financial Markets: environments/finance.md
+      - Strategy Games: environments/games.md
   - API reference:
       - Overview: api/index.md
       - Core: api/core.md
@@ -159,7 +161,7 @@ nav:
       - Vector: api/vector.md
       - Registry: api/registry.md
       - Environments: api/envs.md
-      - Finance: api/finance.md
+      - Financial Markets: api/finance.md
       - Backend: api/backend.md
       - Rendering: api/rendering.md
       - Statistics: api/stats.md

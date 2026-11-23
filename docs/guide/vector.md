@@ -214,7 +214,7 @@ that finishes is then **frozen** until the next `reset()`, on every backend: it 
 again and its action is ignored, and every later `step()` returns, for that sub-env, its final
 observation, reward `0`, the `terminated` / `truncated` flags it finished with (so `dones[i]`
 stays `True`) and an empty info. So you can keep stepping until every sub-env has finished,
-even with envs that refuse a step after their episode ends (the finance envs raise
+even with envs that refuse a step after their episode ends (the financial markets envs raise
 `ResetRequired`), and `VecRecordEpisodeStatistics` records each episode once. `reset()`
 unfreezes every sub-env. A sub-env that resets itself (one wrapped in `AutoReset`) never
 freezes.
@@ -448,7 +448,7 @@ print(sekai.make_vec("demo/Drift-v0", num_envs=8, vectorization_mode="sync"))  #
 the kwargs passed to `make_vec()`, `max_episode_steps` when the entry has one, and
 `vector_kwargs`. So the native constructor should accept the single env's keyword arguments
 plus `max_episode_steps` and `autoreset`, and pass both on to `NativeVecEnv.__init__`, which
-applies the time limit. The finance envs' native versions do, so
+applies the time limit. The financial markets envs' native versions do, so
 `sekai.make_vec("Trading-v0", 8, max_episode_steps=50)` truncates every sub-env after 50
 steps on every backend. In a package, use
 a string, `vector_entry_point="my_package.envs:DriftVecEnv"`; `sekai list` marks such
@@ -499,15 +499,16 @@ class ScheduledDrift(DriftVecEnv):
 print(ScheduledDrift(4).call("push_schedule")[0])  # [1 1 0 0]
 ```
 
-The finance envs' native versions keep their parameters on `vec.template`, a single env
-built from the same keyword arguments, and read them from there every step. `get_attr` and
-`set_attr` reach them by name, so `vec.set_attr("sigma", 0.0)` changes the simulation just as
-it does for every sub-env of a `SyncVecEnv`. All sub-envs share these parameters: `set_attr`
-takes one value (or a list repeating one value) and raises `ValueError` for different values
-per sub-env, which need `vectorization_mode="sync"`. Parameters that fix array shapes
-(`lookback`, `episode_length`, `n_assets`, `allow_short`) are read-only, as are `prices`,
-`data`, `transaction_cost` (set `cost_model` instead) and `metadata`. State such as `equity`,
-`position`, `price`, `wealth`, `time_remaining` and `elapsed_steps` has one value per sub-env.
+The financial markets envs' native versions keep their parameters on `vec.template`, a
+single env built from the same keyword arguments, and read them from there every step.
+`get_attr` and `set_attr` reach them by name, so `vec.set_attr("sigma", 0.0)` changes the
+simulation just as it does for every sub-env of a `SyncVecEnv`. All sub-envs share these
+parameters: `set_attr` takes one value (or a list repeating one value) and raises
+`ValueError` for different values per sub-env, which need `vectorization_mode="sync"`.
+Parameters that fix array shapes (`lookback`, `episode_length`, `n_assets`, `allow_short`)
+are read-only, as are `prices`, `data`, `transaction_cost` (set `cost_model` instead) and
+`metadata`. State such as `equity`, `position`, `price`, `wealth`, `time_remaining` and
+`elapsed_steps` has one value per sub-env.
 
 A native env that defines `action_mask()` returning an array of shape `(num_envs, ...)` thus
 answers `vec.call("action_mask")` like any other `VecEnv`.

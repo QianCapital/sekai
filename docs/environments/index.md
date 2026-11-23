@@ -1,6 +1,6 @@
 # Environment catalog
 
-Eleven environments are registered when `sekai` is imported. Build any of them with
+Twenty-two environments are registered when `sekai` is imported. Build any of them with
 `sekai.make(id)`; keyword arguments go to the environment's constructor.
 
 | ID | Observation space | Action space | Horizon | Reward threshold |
@@ -18,10 +18,16 @@ Eleven environments are registered when `sekai` is imported. Build any of them w
 | [`Market-v0`](finance.md#market-v0) | `Dict(assets: MaskedBox(lookback, F) × max_assets, portfolio: Box(max_assets + 1,), account: Box(2,))` | `Box(0, 1, (max_assets + 1,))`, or `Box(-1, 1, (max_assets,))` with shorts | `episode_length` = 252 (truncation) | — |
 | [`Market-v1`](finance.md#market-v1) | as `Market-v0`, plus `pending: Box(max_assets + 1,)` with next-close execution (any `ObservationBuilder`) | as `Market-v0` (any `ActionMap`) | `episode_length` = 252 (truncation) | — |
 | [`LimitOrderBook-v0`](finance.md#limitorderbook-v0) | `Dict(book: Box(levels, 4), trades: MaskedBox(3,) × max_trades, agent: Box(6,))` | `MultiDiscrete([K + 1, K + 1, 3])` | `n_steps` = 300 (termination) | — |
+| [`Chess-v0`, `ChessVsRandom-v0`](games.md#chess) | `Box(0, 1, (119, 8, 8))` | `Discrete(4672)` | a game; 512 plies (truncation) | — |
+| [`Go9x9-v0`, `Go13x13-v0`, `Go19x19-v0`](games.md#go) | `Box(0, 1, (17, N, N))` | `Discrete(N² + 1)` | two passes, or 3N² moves (scored either way) | — |
+| [`Xiangqi-v0`](games.md#xiangqi) | `Box(0, 1, (131, 10, 9))` | `Discrete(8100)` | a game; 400 plies (truncation) | — |
+| [`HeadsUpHoldem-v0`](games.md#heads-up-no-limit-holdem) | `Box(125,)` | `Discrete(7)` | one hand (termination) | — |
+| [`Blackjack-v0`](games.md#blackjack) | `Box(43,)` | `Discrete(9)` | one round (termination) | — |
 
 All observation and action `Box`es are `float32`. For the classic-control environments the
-horizon is a `TimeLimit` added by `make()` (override it with `make(id, max_episode_steps=N)`);
-the finance environments end their own episodes, so `make()` adds no wrapper.
+horizon is a `TimeLimit` added by `make()` (override it with `make(id, max_episode_steps=N)`),
+as are the ply limits of chess and xiangqi; the financial markets environments and the other
+games end their own episodes, so `make()` adds no wrapper.
 
 `Trading-v0/v1`, `Portfolio-v0/v1`, `Market-v1`, `MarketMaking-v0` and `OptimalExecution-v0`
 also have [native vector implementations](finance.md#native-vector-environments) that step every
@@ -56,7 +62,7 @@ LimitOrderBook-v0         Dict({book: Box(-inf, inf, (5, 4), float32), trades: M
 (A `Box` prints its overall minimum and maximum bound; see each environment's page for the
 per-dimension ranges.)
 
-## Classic control
+## Classic Control
 
 <div class="sk-gallery" markdown>
 <figure markdown>
@@ -84,7 +90,7 @@ per-dimension ranges.)
 The standard control benchmarks, [bit-identical to gymnasium](classic-control.md), with
 NumPy-only RGB renderers.
 
-## Finance
+## Financial Markets
 
 === "Qian Capital (default)"
 
@@ -123,8 +129,47 @@ Each is drawn by its renderer in `sekai.envs.finance`, with the Qian Capital hea
 [your own price history](finance.md#your-own-price-history).
 [`LimitOrderBookMarket`](finance.md#limitorderbookmarket) is a multi-agent order book (not
 registered; construct it from `sekai.envs.finance`). The components they are built from
-are documented in the [finance toolkit](../finance/index.md). Each has a
-[renderer](../guide/rendering.md#finance) that draws its episodes as a dashboard.
+are documented in the [financial markets toolkit](../finance/index.md). Each has a
+[renderer](../guide/rendering.md#financial-markets) that draws its episodes as a dashboard.
+
+## Strategy Games
+
+<div class="sk-gallery" markdown>
+<figure markdown>
+![Chess-v0](../assets/games_chess.gif){ loading=lazy }
+<figcaption>Chess-v0</figcaption>
+</figure>
+<figure markdown>
+![Go9x9-v0](../assets/games_go.gif){ loading=lazy }
+<figcaption>Go9x9-v0</figcaption>
+</figure>
+<figure markdown>
+![Xiangqi-v0](../assets/games_xiangqi.gif){ loading=lazy }
+<figcaption>Xiangqi-v0</figcaption>
+</figure>
+<figure markdown>
+![HeadsUpHoldem-v0](../assets/games_poker.gif){ loading=lazy }
+<figcaption>HeadsUpHoldem-v0</figcaption>
+</figure>
+<figure markdown>
+![Blackjack-v0](../assets/games_blackjack.gif){ loading=lazy }
+<figcaption>Blackjack-v0</figcaption>
+</figure>
+</div>
+
+[Chess, go, xiangqi, heads-up no-limit hold'em and blackjack](games.md), with the encodings
+of AlphaZero: the player to act sees the game from its side, the legal moves come as a
+mask, and rewards come at the end for the player who just moved, so one network plays both
+sides of a [self-play](../guide/games.md) game. The board games have `clone()` for tree
+search, and every game has an RGB and a text renderer.
+
+| Environment | Players | Hidden information | Records |
+|---|---|---|---|
+| [`Chess-v0`](games.md#chess) | two (self-play), or one against an opponent | — | FEN, SAN, PGN |
+| [`Go9x9-v0`, `Go13x13-v0`, `Go19x19-v0`](games.md#go) | two (self-play) | — | GTP vertices, SGF |
+| [`Xiangqi-v0`](games.md#xiangqi) | two (self-play) | — | FEN, UCCI, WXF and Chinese notation |
+| [`HeadsUpHoldem-v0`](games.md#heads-up-no-limit-holdem) | two (self-play) | the opponent's cards and the deck | hand histories |
+| [`Blackjack-v0`](games.md#blackjack) | one, against the dealer | the dealer's hole card and the shoe | |
 
 ## Adding your own
 

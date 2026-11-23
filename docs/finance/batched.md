@@ -1,6 +1,7 @@
 # Batched and differentiable environments
 
-`BatchMarketEnv` is the general finance environment, written once and run three ways:
+`BatchMarketEnv` is the general financial markets environment, written once and run
+three ways:
 
 - **one environment**: `sekai.make("Market-v1")`, a standard `sekai.Env`;
 - **a native vector environment**: `sekai.make_vec("Market-v1", num_envs=1024)`, every
@@ -12,7 +13,8 @@
 
 Each of the `num_envs` *lanes* is an independent account trading its own episode: a
 window of your history, or a fresh scenario from a market model or a generator of your
-own. It is assembled from the [finance toolkit](index.md), and each part can be swapped:
+own. It is assembled from the [financial markets toolkit](index.md), and each part can be
+swapped:
 
 | Part | Argument | Default |
 |---|---|---|
@@ -83,7 +85,10 @@ you have access to.
 **A market model.** `model=` takes any `sekai.finance.MarketModel` (see
 [Market simulators](simulators.md)); each episode is a freshly simulated path, and the
 model's state series (such as the regime) can be observed with `exogenous=` or passed to
-the policy as privileged information with `privileged_state=True`.
+the policy as privileged information with `privileged_state=True`. The paths are simulated
+on the host with NumPy; with the torch backend, `simulate_on_device=True` simulates them
+on the env's device instead, so a reset copies no paths to it
+([Simulating on a GPU](simulators.md#simulating-on-a-gpu)).
 
 **Your generator.** `scenarios=` takes anything with
 `sample(n_paths, *, seed) -> MarketPanel`: a generative model of markets (a GAN, a
@@ -231,7 +236,8 @@ operations of `view.backend` (`B.abs`, `B.mean`, `B.stack`...) instead.
 `backend="torch"` keeps the data and the state on `device=` in `dtype=` (default: torch's
 default dtype, usually float32). The accounting, costs, constraint projection, risk model
 and rewards are the same code on both (see [`sekai.backend`](../api/backend.md)), and in
-float64 the two give the same results.
+float64 the two give the same results on the same paths (`simulate_on_device=True`
+simulates other ones).
 
 With `env.differentiable = True`, `step()` builds the autograd graph from the actions to
 the rewards; otherwise it runs without one. Prices do not react to the agent (impact is a
@@ -281,6 +287,20 @@ The full script,
 learns to lean on the current book, which cuts turnover and costs: on held-out scenarios
 the Sharpe ratio rises from 4.4 to 7.2 and daily turnover falls from 46% to 34%.
 
+**On a GPU**, the host queues each step's work and runs ahead while the device computes,
+except where it has to read a value back: then it waits until the device has finished
+everything queued. A step reads back once: which lanes finished, together with its
+checks of the actions, of their projection and of the cost models' inputs (it raises
+their errors, as on the CPU, before it changes any state). The checks are made inside
+sekai's models, so a model that your own code calls during a step (a `SpreadCost` in your
+cost model, `neutralize` in your action map) has its check read with the others: on a GPU
+its error comes from `step()`, not from the call, and a `try` around the call does not see
+it (give such a model a fallback instead, as `SpreadCost(fallback_spread=...)`). Keep your
+loop free of reads too: `.item()`, `bool(...)`, `.cpu()` or an `if` on a tensor each add
+a wait. The loop above tests `result.dones.all()` at every step; on a GPU, looping
+`range(env.episode_length)` instead avoids that read (a finished lane is frozen, with
+reward 0, until it is reset).
+
 ## The batched API
 
 A `BatchMarketEnv` is a `sekai.vector.BatchEnv`. `reset(seed=None, options=None,
@@ -297,7 +317,7 @@ at the boundary (what `make_vec` returns, and what Stable-Baselines3 sees), and
 are the lane's, so `env.action_mask()` and renderers work unchanged). Any environment that
 keeps its state in arrays can subclass `BatchEnv` the same way.
 
-**Speed.** On 8 CPU cores, `make_vec("Market-v1", num_envs=1024)` steps about 100,000
+**Speed.** On 8 CPU cores, `make_vec("Market-v1", num_envs=1024)` steps about 170,000
 sub-envs per second with the default observation (10 assets, a 20-day window), against
 about 11,000 for `Market-v0` in a `SyncVecEnv`.
 
@@ -319,7 +339,7 @@ observations, to rounding), which is how it is tested. What changes by default:
 
 - [Costs, accounts and rewards](execution.md): cost models, holding costs, constraints,
   risk models and reward functions.
-- [Finance environments](../environments/finance.md#market-v1).
+- [Financial Markets environments](../environments/finance.md#market-v1).
 - API: [`sekai.envs.finance.BatchMarketEnv`](../api/envs.md#sekai.envs.finance.BatchMarketEnv),
   [`sekai.vector.BatchEnv`](../api/vector.md#batched-environments),
   [`sekai.backend`](../api/backend.md), [`sekai.finance`](../api/finance.md).

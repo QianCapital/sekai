@@ -10,7 +10,11 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
+
 import sekai
+from sekai.spaces.discrete import Discrete
+from sekai.utils.masking import get_action_mask, supports_action_mask
 
 
 def _import_modules(modules: Sequence[str]) -> None:
@@ -23,6 +27,18 @@ def _import_modules(modules: Sequence[str]) -> None:
         sys.path.insert(0, os.getcwd())
     for module in modules:
         importlib.import_module(module)
+
+
+def _vec_has_action_mask(venv: Any) -> bool:
+    """Whether every env of `venv` has `action_mask()`.
+
+    A native VecEnv steps its envs itself and has no per-env `has_attr`: it has a mask if
+    it has an `action_mask()` of its own.
+    """
+    try:
+        return all(venv.call("has_attr", "action_mask"))
+    except AttributeError:
+        return callable(getattr(venv, "action_mask", None))
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -98,9 +114,20 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         venv.reset(seed=args.seed)
         actions = venv.batch_action_space
         actions.seed(args.seed)
+        single = venv.action_space
+        # Discrete actions outside a mask are illegal moves (other masks mark components
+        # that must stay at zero, which the envs enforce themselves).
+        masked = isinstance(single, Discrete) and _vec_has_action_mask(venv)
+        if masked:
+            label += ", legal actions"
+            single.seed(args.seed)
 
         def step_once() -> None:
-            venv.step(actions.sample())
+            if masked:
+                masks = venv.call("action_mask")
+                venv.step(np.array([single.sample(mask=mask) for mask in masks]))
+            else:
+                venv.step(actions.sample())
 
         steps_per_call = venv.num_envs
     else:
@@ -109,9 +136,16 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         label = "single env"
         env.reset(seed=args.seed)
         env.action_space.seed(args.seed)
+        masked = isinstance(env.action_space, Discrete) and supports_action_mask(env)
+        if masked:
+            label += ", legal actions"
 
         def step_once() -> None:
-            if env.step(env.action_space.sample()).done:
+            if masked:
+                action = env.action_space.sample(mask=get_action_mask(env))
+            else:
+                action = env.action_space.sample()
+            if env.step(action).done:
                 env.reset()
 
         steps_per_call = 1
@@ -187,7 +221,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="exit non-zero on warnings too")
     p.set_defaults(func=_cmd_check)
 
-    p = sub.add_parser("bench", help="measure random-action steps per second")
+    p = sub.add_parser(
+        "bench",
+        help="measure random-action steps per second (legal actions only, for discrete "
+        "actions with an action mask)",
+    )
     p.add_argument("env_id")
     p.add_argument(
         "--steps",

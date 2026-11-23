@@ -405,7 +405,56 @@ env = sekai.make("Trading-v0", model=StudentT())
 print(env.reset(seed=0).observation.shape)  # (31,)
 ```
 
+## Simulating on a GPU
+
+`simulate` runs on the host, with NumPy. Every built-in model can also simulate with torch,
+on any device: `simulate_torch(generator, n_steps, *, n_paths=None, dtype=None)` draws from a
+`torch.Generator` and returns a `Simulation` of tensors on the generator's device, in `dtype`:
+float32 or float64 (default: torch's default dtype, usually float32; MPS has no float64).
+It is the same model (the same distributions, parameters, shapes, mask and state) but not
+the same numbers as `simulate`, and torch is imported only when it is called:
+
+```python
+import torch
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+generator = torch.Generator(device=device).manual_seed(0)
+sim = heston.simulate_torch(generator, 252, n_paths=4096)
+print(sim.prices.shape, sim.prices.dtype)  # torch.Size([4096, 253, 2]) torch.float32
+```
+
+Nothing is read back from the device, so the host queues the whole simulation without
+waiting for the device, and a model copies its parameters there once, on its first
+simulation (so make a new model rather than editing one's arrays in place: they are
+read-only, but an unpickled model's are not). `Randomized` still builds its models on the
+host, with a NumPy generator seeded from the torch generator's state (which then moves on,
+so a given state builds the same models), and copies the parameters it draws once per call.
+A model of your own simulates on a device if it implements `simulate_torch`; by default that
+raises `NotImplementedError`, and the model simulates on the host only.
+
+For environments, `ModelScenarios(model, n_steps, device=device)` is a scenario generator
+whose panels are simulated on the device (it takes the seeds NumPy takes), and
+`BatchMarketEnv(..., model=model, backend="torch", simulate_on_device=True)` simulates the
+paths of every reset on the env's device, so a reset copies no paths to it (a `Randomized`
+model copies the parameters it draws):
+
+```python
+from sekai.envs.finance import BatchMarketEnv
+
+env = BatchMarketEnv(4096, model=heston, backend="torch", device=device, simulate_on_device=True)
+```
+
+It pays off when resets simulate many paths at once: a trainer that resets every lane
+together (`autoreset=False`, then `reset()`), or large batches of lanes, which the host would
+otherwise simulate with NumPy and then copy to the device. Models with a recursion (the
+variance of `Heston` and `GARCH`, `MeanReverting`, the spread of `CointegratedPair`, the
+regimes of `RegimeSwitching`, the listings of `ListingProcess`) launch one batch of small
+kernels per time step, however many paths they simulate, so when frequent resets restart a
+few lanes at a time (autoreset), simulating those few paths on the host can be faster. On the
+CPU, torch and NumPy simulate at about the same speed.
+
 ## See also
 
-- [Finance environments](../environments/finance.md): `model=` in each environment.
+- [Financial Markets environments](../environments/finance.md): `model=` in each
+  environment.
 - [`sekai.finance.simulators` API](../api/finance.md#simulators).

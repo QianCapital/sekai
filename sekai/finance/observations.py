@@ -101,6 +101,11 @@ class MarketView:
         self._cols = B.where(self.occupied, slots, 0)
         valid = panel.valid[paths[:, None], rows[:, None], self._cols]
         self.tradable = self.occupied & valid
+        # Window rows by length, and panel arrays gathered per slot by (array, length):
+        # builders and cost models ask for the same ones several times (a panel never
+        # changes, and these never leave the view).
+        self._rows_of: dict[int, Array] = {}
+        self._gathered: dict[tuple[int, int | None], tuple[Array, Array]] = {}
 
     @property
     def num_envs(self) -> int:
@@ -119,15 +124,23 @@ class MarketView:
     def _window_rows(self, length: int) -> Array:
         if not 1 <= length <= self.lookback + 1:
             raise ValueError(f"window length must be in [1, lookback + 1 = {self.lookback + 1}].")
-        B = self.backend
-        offsets = B.arange(length, like=self.rows) - (length - 1)
-        return self.rows[:, None] + offsets[None, :]
+        rows = self._rows_of.get(length)
+        if rows is None:
+            offsets = self.backend.arange(length, like=self.rows) - (length - 1)
+            rows = self._rows_of[length] = self.rows[:, None] + offsets[None, :]
+        return rows
 
     def _assets(self, arr: Array, length: int | None) -> Array:
+        cached = self._gathered.get((id(arr), length))
+        if cached is not None and cached[0] is arr:
+            return cached[1]
         if length is None:
-            return arr[self.paths[:, None], self.rows[:, None], self._cols]
-        r = self._window_rows(length)
-        return arr[self.paths[:, None, None], r[:, None, :], self._cols[:, :, None]]
+            out = arr[self.paths[:, None], self.rows[:, None], self._cols]
+        else:
+            r = self._window_rows(length)
+            out = arr[self.paths[:, None, None], r[:, None, :], self._cols[:, :, None]]
+        self._gathered[(id(arr), length)] = (arr, out)
+        return out
 
     def _mask_like(self, mask: Array, values: Array) -> Array:
         """`mask` (`(B, S)` or `(B, S, L)`) broadcast over the trailing dims of `values`."""
@@ -142,8 +155,8 @@ class MarketView:
         B = self.backend
         r = self._assets(self.panel.returns, length)
         if fill is None:
-            return B.where(self.available(length), r, float("nan"))
-        return B.where(self.available(length), r, fill)
+            return B.where(self._available(length), r, float("nan"))
+        return B.where(self._available(length), r, fill)
 
     def available(self, length: int | None = None) -> Array:
         """Where `returns(length)` is defined: `(B, S)` or `(B, S, L)` bool."""
@@ -151,6 +164,15 @@ class MarketView:
         r = self._assets(self.panel.returns, length)
         occ = self.occupied if length is None else self.occupied[:, :, None]
         return occ & B.isfinite(r)
+
+    def _available(self, length: int | None) -> Array:
+        """`available(length)`, made once per view for sekai's own use (never handed out:
+        a caller could change it in place)."""
+        key = (-1, length)  # (no panel array has the id -1)
+        cached = self._gathered.get(key)
+        if cached is None:
+            cached = self._gathered[key] = (None, self.available(length))
+        return cached[1]
 
     def field(self, name: str, length: int | None = None, *, fill: float | None = 0.0) -> Array:
         """A per-asset field per slot: `(B, S, ...)` at the decision, `(B, S, L, ...)`
@@ -268,7 +290,7 @@ class MarketObservation(ObservationBuilder):
         B = view.backend
         L = view.lookback
         like = view.weights
-        avail = view.available(L)
+        avail = view._available(L)
         log_ret = B.where(avail, B.log1p(view.returns(L, fill=0.0)), 0.0)
         channels = [log_ret[..., None], B.asfloat(avail, like)[..., None]]
         for name in self.fields:

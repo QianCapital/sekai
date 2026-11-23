@@ -27,6 +27,7 @@ when the model is built.
 from __future__ import annotations
 
 import abc
+import functools
 import inspect
 from collections.abc import Sequence
 from typing import Any
@@ -35,6 +36,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from sekai.backend import Array, Backend, backend_and_like
+from sekai.backend._base import _CHECKS
 
 
 class CostModel(abc.ABC):
@@ -108,15 +110,21 @@ def _fill_from_median(
         option: Name of the model's fallback argument, for the error message.
     """
     ok = B.isfinite(values) & (values >= 0)
-    if bool(B.all(ok)):
+    checks = _CHECKS.get()
+    if checks is None and bool(B.all(ok)):  # (collected checks skip it: the fill is the same)
         return values
     any_ok = B.any(ok, axis=-1)
-    if fallback is None and bool(B.any(~any_ok & B.any(traded, axis=-1))):
-        raise ValueError(
+    if fallback is None:
+        unpriced = B.any(~any_ok & B.any(traded, axis=-1))
+        message = (
             f"{model} has no valid {name!r} (finite and >= 0) for any asset in a row with "
             f"trades, so it cannot price them (they would be free). Supply the input, or "
             f"set an explicit fallback value with {model}(..., {option}=...)."
         )
+        if checks is not None:
+            checks.append((unpriced, functools.partial(ValueError, message)))
+        elif bool(unpriced):
+            raise ValueError(message)
     with B.errstate():
         filled = B.where(ok, values, float("nan"))
         median = B.nanmedian(B.where(any_ok[..., None], filled, 0.0), axis=-1)

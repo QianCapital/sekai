@@ -37,7 +37,8 @@
   border-radius: 0.2rem;
 }
 
-/* Finance dashboards: large enough to read their labels, two to a row on wide screens. */
+/* Financial Markets dashboards: large enough to read their labels, two to a row on wide
+   screens. */
 .sk-env-preview--wide {
   max-width: 600px;
   width: 100%;

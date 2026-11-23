@@ -1,8 +1,8 @@
 # Rendering
 
 `sekai.rendering`. See the [Rendering guide](../guide/rendering.md); the classic-control and
-finance renderers are documented under [Environments](envs.md#renderers), and the market
-charts under [Finance](finance.md#rendering).
+financial markets renderers are documented under [Environments](envs.md#renderers), and the
+market charts under [Financial Markets](finance.md#rendering).
 
 ::: sekai.rendering.Renderer
 

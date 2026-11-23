@@ -34,7 +34,7 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 from numpy.typing import NDArray
 
-from sekai.backend import Array, Backend, backend_of, get_backend, is_tensor
+from sekai.backend import Array, Backend, backend_of, get_backend, is_tensor, to_numpy
 from sekai.finance.data import MarketData
 from sekai.finance.simulators import MarketModel, Simulation
 
@@ -277,8 +277,21 @@ class MarketPanel:
         validity mask; its state series are both `exogenous` (so environments can
         observe them) and `state` (privileged information). The prices are kept as the
         `"close"` field.
+
+        With `backend="torch"`, a simulation of tensors (`MarketModel.simulate_torch`)
+        stays where it is (or moves to `device`): the panel is computed there, in `dtype`
+        (default: the simulation's), without a copy to or from the host. With the NumPy
+        backend, its arrays are copied to the host first.
         """
         B = get_backend(backend)
+        if is_tensor(sim.prices):
+            if B.name == "torch":
+                return cls._from_tensor_simulation(sim, device=device, dtype=dtype)
+            sim = Simulation(
+                prices=to_numpy(sim.prices),
+                mask=None if sim.mask is None else to_numpy(sim.mask),
+                state={k: to_numpy(v) for k, v in sim.state.items()},
+            )
         single = np.ndim(sim.prices) == 2  # one path without a paths axis: add it
         prices = np.asarray(sim.prices, dtype=np.float64)
         prices = prices[None] if single else prices
@@ -304,6 +317,39 @@ class MarketPanel:
             state={k: conv(v) for k, v in state.items()},
         )
 
+    @classmethod
+    def _from_tensor_simulation(cls, sim: Simulation, *, device: Any, dtype: Any) -> MarketPanel:
+        """`from_simulation` of tensors, on the torch backend: computed on the device, in the
+        wider of the simulation's dtype and `dtype`, then kept in `dtype`."""
+        import torch
+
+        prices: Any = sim.prices  # a tensor
+        single = prices.ndim == 2  # one path without a paths axis: add it
+
+        def paths(x: Any) -> Any:
+            return x[None] if single else x
+
+        floating = prices.is_floating_point()
+        if dtype is not None:
+            target = dtype
+        else:
+            target = prices.dtype if floating else torch.get_default_dtype()
+        work = torch.promote_types(prices.dtype, target) if floating else target
+        where = prices.device if device is None else torch.device(device)
+        p = paths(prices).to(device=where, dtype=work)
+        valid = torch.isfinite(p)
+        if sim.mask is not None:
+            valid &= paths(sim.mask).to(device=where)
+        returns = torch.cat([torch.full_like(p[:, :1], torch.nan), p[:, 1:] / p[:, :-1] - 1.0], 1)
+        state = {k: paths(v).to(device=where, dtype=target) for k, v in sim.state.items()}
+        return cls(
+            returns=returns.to(target),
+            valid=valid,
+            fields={"close": p.to(target)},
+            exogenous=dict(state),
+            state=state,
+        )
+
 
 @runtime_checkable
 class ScenarioGenerator(Protocol):
@@ -321,25 +367,70 @@ class ScenarioGenerator(Protocol):
 class ModelScenarios:
     """A `ScenarioGenerator` of a `sekai.finance.MarketModel`: fresh simulated paths.
 
+    By default the paths are simulated on the host, with NumPy (`MarketModel.simulate`),
+    and the panels are NumPy arrays. With a torch `device`, they are simulated there
+    (`MarketModel.simulate_torch`, drawing from a `torch.Generator` on the device seeded
+    from the seed's `numpy.random.SeedSequence`, so it takes the seeds NumPy takes) and the
+    panels are tensors made on it, not copied from the host.
+
     Args:
         model: The market model.
         n_steps: Steps per path (the panel has `n_steps + 1` times).
+        device: A torch device to simulate on, or None to simulate on the host.
+        dtype: `torch.float32` or `torch.float64`, the dtype of panels simulated on a
+            device (default: torch's default dtype).
+
+    Raises:
+        TypeError: If model is not a `MarketModel`, or dtype not `torch.float32` or
+            `torch.float64`.
+        ValueError: If n_steps is smaller than 1, or dtype is given without a device.
     """
 
-    def __init__(self, model: MarketModel, n_steps: int) -> None:
+    # The defaults (simulate on the host). Instances set them only when given, so one that
+    # simulates on the host has the attributes, and pickles, it had before.
+    device: Any = None
+    dtype: Any = None
+
+    def __init__(
+        self, model: MarketModel, n_steps: int, *, device: Any = None, dtype: Any = None
+    ) -> None:
         if not isinstance(model, MarketModel):
             raise TypeError(f"Expected a MarketModel, got {model!r}.")
         if n_steps < 1:
             raise ValueError(f"n_steps must be >= 1, got {n_steps}.")
         self.model = model
         self.n_steps = int(n_steps)
+        if device is None:
+            if dtype is not None:
+                raise ValueError("dtype= is for panels simulated on a device: give device= too.")
+            return
+        import torch
+
+        self.device = torch.device(device)
+        if dtype is not None:
+            if dtype not in (torch.float32, torch.float64):
+                raise TypeError(f"dtype must be torch.float32 or torch.float64, got {dtype!r}.")
+            self.dtype = dtype
 
     def sample(self, n_paths: int, *, seed: int) -> MarketPanel:
-        sim = self.model.simulate(np.random.default_rng(seed), self.n_steps, n_paths=n_paths)
-        return MarketPanel.from_simulation(sim)
+        if self.device is None:
+            sim = self.model.simulate(np.random.default_rng(seed), self.n_steps, n_paths=n_paths)
+            return MarketPanel.from_simulation(sim)
+        import torch
+
+        # A seed of any size, as NumPy's (manual_seed takes 64 bits and wraps negative ones).
+        state = np.random.SeedSequence(seed).generate_state(1, np.uint64)
+        generator = torch.Generator(device=self.device).manual_seed(int(state[0]))
+        sim = self.model.simulate_torch(generator, self.n_steps, n_paths=n_paths, dtype=self.dtype)
+        return MarketPanel.from_simulation(
+            sim, backend="torch", device=self.device, dtype=self.dtype
+        )
 
     def __repr__(self) -> str:
-        return f"ModelScenarios({self.model!r}, n_steps={self.n_steps})"
+        on = "" if self.device is None else f", device={str(self.device)!r}"
+        if self.dtype is not None:
+            on += f", dtype={self.dtype}"
+        return f"ModelScenarios({self.model!r}, n_steps={self.n_steps}{on})"
 
 
 __all__ = ["MarketPanel", "ScenarioGenerator", "ModelScenarios"]

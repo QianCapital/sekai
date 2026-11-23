@@ -133,10 +133,10 @@ transition. Steps then have different lengths for different agents; discount by 
 
 `sekai.envs.finance.LimitOrderBookMarket` is the built-in example: several traders in one
 limit order book, trader `i` deciding every `decision_intervals[i]` units of session time
-(the [finance documentation](../finance/index.md) covers the market itself). One trader's
-market order can fill another's resting quote but never its own (self-trade prevention:
-it first cancels the trader's quote on the opposite side). With intervals of 1, 2 and 5,
-all three act first, then only the fast one:
+(the [financial markets documentation](../finance/index.md) covers the market itself). One
+trader's market order can fill another's resting quote but never its own (self-trade
+prevention: it first cancels the trader's quote on the opposite side). With intervals of 1,
+2 and 5, all three act first, then only the fast one:
 
 ```python
 from sekai.envs.finance import LimitOrderBookMarket
@@ -174,6 +174,10 @@ print(decisions)  # {'trader_0': 60, 'trader_1': 30, 'trader_2': 12}
 
 On the last step every agent receives a final observation; `env.agents` is then empty, and
 another `step()` raises `ResetRequired` until the next `reset()`.
+
+The strategy games are event-driven too, with one agent to move at a time:
+`sekai.envs.games.MultiAgentGame(sekai.make("Chess-v0"))` has an agent for each side
+(see [Strategy Games](../environments/games.md#as-multi-agent-environments)).
 
 ## Action masks
 
@@ -230,6 +234,10 @@ print(sorted(env.reset(seed=0).observations), env.action_space("maker"))  # ['ma
 
 The PettingZoo env keeps its own randomness; seeds passed to `reset()` go straight to it.
 An event-driven env keeps its convention through the bridge: observations only for the
-agents that act next, rewards and flags for all. That passes PettingZoo's parallel API test,
-but a consumer that expects an observation for every live agent at every step needs to
-handle it.
+agents that act next, rewards and flags for all. PettingZoo's Parallel API expects every
+live agent to act at every step: code written for it (`parallel_api_test`,
+`parallel_to_aec`, learners that act for every agent) runs while the agents share one
+clock (`LimitOrderBookMarket` at its defaults, where every trader acts at every step), but
+not once they act at different times (unequal `decision_intervals`, `jitter`, or a
+strategy game's turns): step those with actions for the agents in `observations`, as the
+loops above do.

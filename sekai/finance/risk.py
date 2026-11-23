@@ -59,6 +59,14 @@ def portfolio_variance(
         ValueError: If only one of `loadings` and `factor_cov` is given, or neither
             part of the model is.
     """
+    return _variance_and_exposures(weights, loadings, factor_cov, idio_var)[0]
+
+
+def _variance_and_exposures(
+    weights: Array, loadings: Array | None, factor_cov: Array | None, idio_var: Array | None
+) -> tuple[Array, Array | None]:
+    """`portfolio_variance(...)`, and the factor exposures it computes on the way (None
+    without loadings)."""
     B, like = backend_and_like(weights, loadings, factor_cov, idio_var)
     w = B.asfloat(weights, like)
     if (loadings is None) != (factor_cov is None):
@@ -66,6 +74,7 @@ def portfolio_variance(
     if loadings is None and idio_var is None:
         raise ValueError("A factor model needs loadings and factor_cov, idio_var, or both.")
     total: Array = 0.0
+    x = None
     if loadings is not None and factor_cov is not None:
         x = factor_exposures(w, loadings)
         total = B.einsum("...k,...kj,...j->...", x, B.asfloat(factor_cov, like), x)
@@ -73,7 +82,7 @@ def portfolio_variance(
         d = B.asfloat(idio_var, like)
         d = B.where(B.isnan(d) & (w == 0), 0.0, d)
         total = total + B.sum(w * w * d, axis=-1)
-    return total
+    return total, x
 
 
 @dataclass(frozen=True)
