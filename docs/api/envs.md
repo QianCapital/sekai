@@ -121,6 +121,8 @@ time it is used.
 
 ::: sekai.envs.games.OpponentWrapper
 
+::: sekai.envs.games.MultiAgentGame
+
 ::: sekai.envs.games.RandomPolicy
 
 ::: sekai.envs.games.Policy

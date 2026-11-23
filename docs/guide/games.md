@@ -120,6 +120,37 @@ poker = to_gymnasium(OpponentWrapper(sekai.make("HeadsUpHoldem-v0"), agent_color
 model = MaskablePPO("MlpPolicy", poker).learn(200_000)
 ```
 
+A learner that does not mask (Stable-Baselines3's PPO or DQN) needs a game that does not
+raise at an illegal action: build it with `illegal_action="lose"`, and an illegal action
+loses the game (folds the hand in poker, loses the round's stake in blackjack), which the
+learner soon stops doing. gymnasium's and SB3's `check_env` then run on it as well:
+
+```python
+from stable_baselines3 import PPO
+
+model = PPO("MlpPolicy", to_gymnasium(sekai.make("Blackjack-v0", illegal_action="lose")))
+```
+
+## Two learners
+
+`MultiAgentGame` gives each side of a two-player game its own agent, for training two
+policies against each other or a league: each step, `observations` holds the agent to
+move, and both agents get their rewards (zero-sum) and, at the end, a final observation;
+in poker each sees only its own seat
+([Strategy Games](../environments/games.md#as-multi-agent-environments)).
+
+```python
+from sekai.envs.games import MultiAgentGame, RandomPolicy
+
+env = MultiAgentGame(sekai.make("Go9x9-v0"))
+policies = {side: RandomPolicy(seed=i) for i, side in enumerate(env.possible_agents)}
+result = env.reset(seed=0)
+while not result.all_done:
+    (agent,) = result.observations
+    action = policies[agent].act(result.observations[agent], result.info[agent])
+    result = env.step({agent: action})
+```
+
 ## Deploying a trained network
 
 The encodings are the standard ones (AlphaZero's for chess, AlphaGo Zero's for go), so a

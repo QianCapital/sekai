@@ -175,6 +175,10 @@ print(decisions)  # {'trader_0': 60, 'trader_1': 30, 'trader_2': 12}
 On the last step every agent receives a final observation; `env.agents` is then empty, and
 another `step()` raises `ResetRequired` until the next `reset()`.
 
+The strategy games are event-driven too, with one agent to move at a time:
+`sekai.envs.games.MultiAgentGame(sekai.make("Chess-v0"))` has an agent for each side
+(see [Strategy Games](../environments/games.md#as-multi-agent-environments)).
+
 ## Action masks
 
 The [action-mask convention](dynamic.md#action-masks) carries over with the agent as an

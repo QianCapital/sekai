@@ -42,6 +42,17 @@ environments give bit-identical results, and its API and pickles keep working.
   agent's turn again, as poker needs, and a game it ends before the agent's first move (a
   fold from the small blind) is dealt again, with the agent's rewards from the skipped
   games in `info["skipped_rewards"]`.
+- `MultiAgentGame` makes a two-player game a `sekai.MultiAgentEnv` with an agent for each
+  side, as sekai's event-driven multi-agent environments work: `observations` holds only
+  the agent to move, rewards are zero-sum and cover both agents, both get a final
+  observation, and in poker each agent sees only its own seat. `sekai.compat.to_pettingzoo()`
+  exposes it through PettingZoo's Parallel API.
+- Every game takes `illegal_action="lose"` (raising stays the default): an illegal action
+  loses the game for the mover in chess, go (result `"W+F"` or `"B+F"`) and xiangqi, folds
+  the hand in poker (`HoldemHand.forfeit()`, even where checking was free), and loses the
+  round's stake in blackjack (`BlackjackTable.forfeit()`; before the bet, the smallest bet
+  level). Learners without action masks, and gymnasium's and Stable-Baselines3's
+  `check_env`, then run on every game.
 - Renderers for every game (`ChessRenderer`, `GoRenderer`, `XiangqiRenderer`,
   `HoldemRenderer`, `BlackjackRenderer`), with dark and light themes, player strips, the
   last move, checks, territory and showdowns, and text
@@ -104,6 +115,10 @@ environments give bit-identical results, and its API and pickles keep working.
   for a 480 × 650 frame), with the same pixels.
 - The documentation calls the finance category "Financial Markets" (the `sekai.finance`
   package and every import path are unchanged), and its environment counts are corrected.
+- The source distribution also carries the whole test suite, with the data and fixtures
+  it lacked since 0.3.0, so `pytest` runs from an unpacked sdist; the changelog; and the
+  sources and licence of the games' artwork (`tools/`). The wheel is unchanged.
+  CONTRIBUTING.md says how to run the GPU tests on a machine with a GPU.
 - The games' IDs (`Chess-v0`, `ChessVsRandom-v0`, `Go9x9-v0`, `Go13x13-v0`,
   `Go19x19-v0`, `Xiangqi-v0`, `HeadsUpHoldem-v0`, `Blackjack-v0`) are now registered by
   sekai itself, so a package that registers an environment of its own under one of these

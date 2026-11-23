@@ -267,9 +267,11 @@ while not result.done:  # each move is by the player to act, who sees the board 
 print(result.info["result"], result.info["termination"])
 ```
 
-`env.clone()` branches the board games for tree search, and
+`env.clone()` branches the board games for tree search,
 `sekai.envs.games.OpponentWrapper` plays one side with a fixed policy for single-agent
-training.
+training, `sekai.envs.games.MultiAgentGame` gives each side its own agent, and
+`illegal_action="lose"` makes an illegal action lose the game instead of raising, for
+learners without action masks.
 
 Run `sekai list` to see every registered environment, or browse the
 [environment catalogue](https://sekai.qiancapital.com/environments/).

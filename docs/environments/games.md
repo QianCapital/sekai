@@ -35,11 +35,14 @@ play both sides and let tree search work on the environment directly:
   [action-mask convention](../guide/training.md#action-masks-maskableppo), which
   `sekai.check_env`, `action_space.sample(mask=...)` and MaskablePPO understand; through
   wrappers such as `TimeLimit`, `sekai.get_action_mask(env)` finds it), and
-  `info["legal_actions"]` lists them. An illegal action raises `IllegalMove` (chess and
-  xiangqi can instead forfeit the game with `illegal_action="lose"`), so checkers that
-  step with unmasked random actions, such as gymnasium's and Stable-Baselines3's
+  `info["legal_actions"]` lists them. An illegal action raises `IllegalMove`, so checkers
+  that step with unmasked random actions, such as gymnasium's and Stable-Baselines3's
   `check_env`, stop at the first illegal one: check the games with `sekai.check_env` (or
-  `sekai check`), which samples within the mask.
+  `sekai check`), which samples within the mask. Or build any game with
+  `illegal_action="lose"`, and an illegal action loses instead: the game for the mover
+  (reward `-1`, `info["illegal_action"]` set) in chess, go and xiangqi, the hand (a fold)
+  in poker, and the round's stake in blackjack. Learners without masks and gymnasium's
+  checkers then run on every game.
 - **A reset can start where the game is over.** A `fen`, or `moves` replayed, may reach
   the end of a game (mate, stalemate, two passes): the reset returns that position with
   no legal moves, so check `env.done` (or `info["termination"]`) before stepping.
@@ -87,6 +90,31 @@ ends before the agent has moved (a fold from the small blind) is dealt again, wi
 agent's rewards from the games skipped in `info["skipped_rewards"]` for evaluations to
 count. `ChessVsRandom-v0` is `Chess-v0` in this wrapper with a random opponent and a
 random colour.
+
+### As multi-agent environments
+
+`MultiAgentGame` makes a two-player game a `sekai.MultiAgentEnv` with an agent for each
+side, as sekai's [event-driven](../guide/multi-agent.md#event-driven-environments)
+environments work: `observations` holds only the agent to move, `step()` takes that
+agent's action, and the rewards (zero-sum) and flags cover both agents.
+
+```python
+from sekai.envs.games import MultiAgentGame
+
+env = MultiAgentGame(sekai.make("HeadsUpHoldem-v0"))
+result = env.reset(seed=0)
+while not result.all_done:
+    (agent,) = result.observations  # "p1" or "p2", whoever is to act
+    mask = env.action_mask(agent)
+    result = env.step({agent: env.action_space(agent).sample(mask=mask)})
+print(result.rewards)  # e.g. {'p1': -1.0, 'p2': 1.0}, each seat's net in big blinds
+```
+
+On the last step both agents get a final observation. In poker each agent's
+observations and `info` (`observer`, `view`, `result`) are its own seat's, and a wrapper
+that changes observations goes outside the `MultiAgentGame` (poker refuses one inside,
+where it would see both seats' private views). `sekai.compat.to_pettingzoo()` exposes it
+through PettingZoo's Parallel API, with observations only for the agent to move.
 
 ### Speed
 
@@ -205,7 +233,9 @@ Captures, then suicide is illegal; positional superko (no earlier stone configur
 recur; `superko=False` keeps only simple ko). Two consecutive passes end the game
 (`terminated`), and `max_moves` plies (default `3 N²`) cut it short (`truncated`); either
 way it is scored by Tromp-Taylor area scoring with `komi` (default 7.5) for White, and the
-reward is `+1`/`-1`/`0` for the player who just moved. No dead stones are removed inside
+reward is `+1`/`-1`/`0` for the player who just moved (with `illegal_action="lose"`, an
+illegal move loses: `-1`, result `"W+F"` or `"B+F"`, termination `"illegal move"`). No dead
+stones are removed inside
 the environment, as in zero-knowledge training; `scoring.final_score(env)` estimates
 them with playouts for people.
 
@@ -215,12 +245,12 @@ them with playouts for people.
 (a vertex, `"pass"` or `None`), `ply`, `captures` (stones captured by each colour),
 `passes` (consecutive), `komi`, `result` (`"*"`, then `"B+3.5"`, `"W+0.5"` or `"Draw"`)
 and `winner`; once over also `score` (each side's points) and `termination`
-(`"two passes"` or `"max moves"`).
+(`"two passes"`, `"max moves"` or `"illegal move"`).
 
 ### Options
 
 ```python
-GoEnv(size=9, komi=7.5, history_length=8, max_moves=None, superko=True)
+GoEnv(size=9, komi=7.5, history_length=8, max_moves=None, superko=True, illegal_action="raise")
 env.reset(options={"komi": 6.5, "handicap": 4})        # 2-9 stones on the star points
 env.reset(options={"moves": ["D4", "F6", "pass"]})      # replay moves (vertices or actions)
 env.reset(options={"board": board_string, "to_play": "white"})  # set up a position
@@ -301,7 +331,8 @@ two pots, and all-in. Sizes that are not legal (or would repeat a smaller one) a
 
 `0` until the hand ends, then the net chips won by the seat that just acted, in big
 blinds; `info["payoffs"]` holds both seats'. From the other seat's side the reward is the
-negative.
+negative. With `illegal_action="lose"` an illegal action folds the hand for the seat (even
+where checking was free), which loses what it has put in.
 
 ### Info
 
@@ -312,7 +343,7 @@ observer's `SeatView`: everything that seat may know), `last_action` and `result
 ### Options
 
 ```python
-HoldemEnv(small_blind=50, big_blind=100, stack=10_000, history_length=0)
+HoldemEnv(small_blind=50, big_blind=100, stack=10_000, history_length=0, illegal_action="raise")
 env.reset(options={"button": 0, "stacks": (5_000, 15_000)})  # seat 0 on the button
 env.reset(options={"deck": "AsKs QhQd 2c7d9h Th 3s"})  # seat 0, seat 1, flop, turn, river
 ```
@@ -347,7 +378,10 @@ times the table minimum, set by `bet_levels`) for the betting phase.
 ### Rewards
 
 `0` until the round is settled, then the round's net in units of the table minimum (a
-natural at the minimum bet is `+1.5`).
+natural at the minimum bet is `+1.5`). With `illegal_action="lose"` an illegal action
+loses the round's stake: every hand in play is lost (`BlackjackTable.forfeit()`), and one
+before the bet loses the smallest bet level with no cards dealt, so that an illegal action
+never costs less than a round.
 
 ### Info
 
@@ -358,7 +392,7 @@ table), `round_no` and `bankroll`; `rebuy` after a reset, and once the round is 
 ### Options
 
 ```python
-BlackjackEnv(rules=Rules(), bankroll=1000, bet_levels=(1, 2, 4, 8))
+BlackjackEnv(rules=Rules(), bankroll=1000, bet_levels=(1, 2, 4, 8), illegal_action="raise")
 env.reset(options={"keep_bankroll": True})  # or {"bankroll": 500}, {"new_shoe": True}
 ```
 
