@@ -19,7 +19,7 @@ Observations are `float32`. The environments live in `sekai.envs.games` (one sub
 per game: `chess`, `go`, `xiangqi`, `poker`, `blackjack`), which is imported the first
 time one of them is made, so `import sekai` stays as fast as before. None needs anything
 but NumPy: the chess rules are sekai's own (they match python-chess's exactly), and the
-renderers draw with NumPy.
+[renderers](#rendering), which drew the animations on this page, draw with NumPy.
 
 ## How the two-player games work
 
@@ -149,6 +149,8 @@ For chess that is `clone(full_stack=False)`; a full clone copies the whole move 
 
 ## Chess
 
+![Chess-v0, drawn by ChessRenderer: the Opera Game, Paul Morphy against the Duke of Brunswick (Paris, 1858)](../assets/games_chess.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+
 `sekai.envs.games.chess.ChessEnv`: standard chess, with the encodings of AlphaZero.
 
 ### Observation
@@ -223,6 +225,8 @@ PGN.
 
 ## Go
 
+![Go9x9-v0, drawn by GoRenderer: random moves that fill no eyes, played until both sides pass, then scored](../assets/games_go.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+
 `sekai.envs.games.go.GoEnv(size)`: go on a square board of size 2 to 19, with area
 (Tromp-Taylor) scoring, komi, handicaps and positional superko. `Go9x9-v0`, `Go13x13-v0`
 and `Go19x19-v0` fix the size.
@@ -276,6 +280,8 @@ records.
 
 ## Xiangqi
 
+![Xiangqi-v0, drawn by XiangqiRenderer: each side captures when it can and otherwise moves at random](../assets/games_xiangqi.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+
 `sekai.envs.games.xiangqi.XiangqiEnv`: Chinese chess with the full rules (the palace, the
 river, blocked horses and elephants, cannon screens, the flying generals).
 
@@ -320,6 +326,8 @@ env.reset(options={"fen": fen, "moves": ["h2e2", "h9g7"]})  # a position, then m
 ```
 
 ## Heads-up no-limit hold'em
+
+![HeadsUpHoldem-v0, drawn by HoldemRenderer: four hands between two random players](../assets/games_poker.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.poker.HoldemEnv`: one hand of heads-up no-limit Texas hold'em per
 episode, with blinds of 50/100 and stacks of 10,000 by default. The button posts the small
@@ -370,6 +378,8 @@ hand. `sekai.envs.games.poker` also has a 5-to-7-card hand evaluator and PokerSt
 hand histories (`format_hand_history`).
 
 ## Blackjack
+
+![Blackjack-v0, drawn by BlackjackRenderer: six rounds at the minimum bet, hitting below 17](../assets/games_blackjack.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.blackjack.BlackjackEnv`: blackjack as a casino deals it, one round per
 episode, with six decks, dealer stands on all 17s, 3:2 naturals, double after split,
@@ -443,4 +453,24 @@ env = RecordFrames(sekai.make("Chess-v0"), ChessRenderer(orientation="mover"))
 
 They take a `theme` (`"dark"`, the default, or `"light"`), `header=False` to leave out the
 game's name and status, and `names` to name the players. See
-[Rendering](../guide/rendering.md#strategy-games) for each one's options.
+[Rendering](../guide/rendering.md#strategy-games) for each one's options. The animations on
+this page, in both themes, come from
+[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py):
+
+=== "Dark (default)"
+
+    ![Chess-v0, drawn by ChessRenderer](../assets/games_chess.gif){ loading=lazy title="ChessRenderer" }
+    ![Go9x9-v0, drawn by GoRenderer](../assets/games_go.gif){ loading=lazy title="GoRenderer" }
+    ![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi.gif){ loading=lazy title="XiangqiRenderer" }
+    ![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker.gif){ loading=lazy title="HoldemRenderer" }
+    ![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack.gif){ loading=lazy title="BlackjackRenderer" }
+    { .sk-boards }
+
+=== "Light"
+
+    ![Chess-v0, drawn by ChessRenderer in the light theme](../assets/games_chess_light.gif){ loading=lazy title="ChessRenderer" }
+    ![Go9x9-v0, drawn by GoRenderer in the light theme](../assets/games_go_light.gif){ loading=lazy title="GoRenderer" }
+    ![Xiangqi-v0, drawn by XiangqiRenderer in the light theme](../assets/games_xiangqi_light.gif){ loading=lazy title="XiangqiRenderer" }
+    ![HeadsUpHoldem-v0, drawn by HoldemRenderer in the light theme](../assets/games_poker_light.gif){ loading=lazy title="HoldemRenderer" }
+    ![Blackjack-v0, drawn by BlackjackRenderer in the light theme](../assets/games_blackjack_light.gif){ loading=lazy title="BlackjackRenderer" }
+    { .sk-boards }

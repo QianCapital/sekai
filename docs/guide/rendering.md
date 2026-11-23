@@ -49,9 +49,32 @@ tabs show both.
     ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
+The strategy games are drawn as their boards and card tables, in a dark theme by default or
+a light one (`theme="light"`):
+
+=== "Dark (default)"
+
+    ![Chess-v0, drawn by ChessRenderer](../assets/games_chess.gif){ loading=lazy title="ChessRenderer" }
+    ![Go9x9-v0, drawn by GoRenderer](../assets/games_go.gif){ loading=lazy title="GoRenderer" }
+    ![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi.gif){ loading=lazy title="XiangqiRenderer" }
+    ![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker.gif){ loading=lazy title="HoldemRenderer" }
+    ![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack.gif){ loading=lazy title="BlackjackRenderer" }
+    { .sk-boards }
+
+=== "Light"
+
+    ![Chess-v0, drawn by ChessRenderer in the light theme](../assets/games_chess_light.gif){ loading=lazy title="ChessRenderer" }
+    ![Go9x9-v0, drawn by GoRenderer in the light theme](../assets/games_go_light.gif){ loading=lazy title="GoRenderer" }
+    ![Xiangqi-v0, drawn by XiangqiRenderer in the light theme](../assets/games_xiangqi_light.gif){ loading=lazy title="XiangqiRenderer" }
+    ![HeadsUpHoldem-v0, drawn by HoldemRenderer in the light theme](../assets/games_poker_light.gif){ loading=lazy title="HoldemRenderer" }
+    ![Blackjack-v0, drawn by BlackjackRenderer in the light theme](../assets/games_blackjack_light.gif){ loading=lazy title="BlackjackRenderer" }
+    { .sk-boards }
+
 *These GIFs were produced by the renderers on this page, with `RecordFrames` and
 `save_gif()`; the financial markets ones, in both styles, by
-[`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).*
+[`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py),
+and the strategy games, in both themes, by
+[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py).*
 
 ## The Renderer protocol
 

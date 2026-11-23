@@ -59,6 +59,26 @@
   border-radius: 0.2rem;
 }
 
+/* Strategy Games boards and card tables: shown at the size they are drawn (narrower screens
+   scale them down), and side by side at one height. */
+.sk-env-preview--native {
+  max-width: 100%;
+}
+.sk-boards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-end;
+}
+.sk-boards img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 230px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+}
+
 /* Signatures in the API reference: a little more breathing room. */
 .doc-signature {
   margin-bottom: 0.6rem;

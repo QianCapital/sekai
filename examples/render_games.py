@@ -1,9 +1,10 @@
-"""Draw a game of each strategy game and save each as a GIF.
+"""Draw a game of each strategy game and save each as a GIF, in both themes.
 
 Each game has a renderer in `sekai.envs.games`, recorded here with RecordFrames: chess
 replays the Opera Game (Morphy, Paris 1858); go and xiangqi play simple policies to the
-end of a game; poker plays a few hands and blackjack a few rounds. Needs Pillow:
-pip install "sekai[render]".
+end of a game; poker plays a few hands and blackjack a few rounds. Each game is recorded
+once in the dark theme, the default (`games_chess.gif`, ...), and in the light one
+(`games_chess_light.gif`, ...). Needs Pillow: pip install "sekai[render]".
 
 Pass a directory to keep the images (this is how the documentation's animations are
 made):
@@ -13,6 +14,7 @@ made):
 
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -37,19 +39,31 @@ OPERA_GAME = (
 )
 
 
+def themed(env, renderer):
+    """Record `env` in the dark theme (the default) and, around that, in the light one."""
+    return RecordFrames(RecordFrames(env, renderer()), renderer(theme="light"))
+
+
+def hold(env, n):
+    """Show the last frame `n` more times, in both recordings."""
+    for recording in (env.env, env):
+        recording.frames.extend([recording.frames[-1]] * n)
+
+
 def save(env, name, fps):
-    path = env.save(out / f"games_{name}.gif", fps=fps)
-    print(f"{name}: {len(env.frames)} frames -> {path}")
+    for recording, suffix in ((env.env, ""), (env, "_light")):
+        path = recording.save(out / f"games_{name}{suffix}.gif", fps=fps)
+        print(f"{name}{suffix}: {len(recording.frames)} frames -> {path}")
     env.close()
 
 
 # Chess: the Opera Game, from White's side.
 names = {"white": "Paul Morphy", "black": "Duke of Brunswick"}
-env = RecordFrames(sekai.make("Chess-v0"), ChessRenderer(400, names=names))
+env = themed(sekai.make("Chess-v0"), partial(ChessRenderer, 400, names=names))
 env.reset(seed=0)
 for san in OPERA_GAME.split():
     env.step(env.unwrapped.encode_move(san))
-env.frames.extend([env.frames[-1]] * 4)  # hold the final position
+hold(env, 4)  # the final position
 save(env, "chess", fps=1.5)
 
 
@@ -61,11 +75,11 @@ def go_policy(base):
     return int(rng.choice(points)) if points else base.pass_action
 
 
-env = RecordFrames(sekai.make("Go9x9-v0"), GoRenderer(400))
+env = themed(sekai.make("Go9x9-v0"), partial(GoRenderer, 400))
 result = env.reset(seed=0)
 while not result.done:
     result = env.step(go_policy(env.unwrapped))
-env.frames.extend([env.frames[-1]] * 6)
+hold(env, 6)
 save(env, "go", fps=6)
 
 
@@ -82,27 +96,27 @@ def xiangqi_policy(base, info):
     return int(rng.choice(captures if captures else legal))
 
 
-env = RecordFrames(sekai.make("Xiangqi-v0", max_episode_steps=120), XiangqiRenderer(400))
+env = themed(sekai.make("Xiangqi-v0", max_episode_steps=120), partial(XiangqiRenderer, 400))
 result = env.reset(seed=3)
 while not result.done:
     result = env.step(xiangqi_policy(env.unwrapped, result.info))
-env.frames.extend([env.frames[-1]] * 4)
+hold(env, 4)
 save(env, "xiangqi", fps=4)
 
 
 # Poker: a few hands between two random players.
-env = RecordFrames(sekai.make("HeadsUpHoldem-v0"), HoldemRenderer(560))
+env = themed(sekai.make("HeadsUpHoldem-v0"), partial(HoldemRenderer, 560))
 for hand in range(4):
     result = env.reset(seed=hand)
     while not result.done:
         legal = np.flatnonzero(result.info["legal_action_mask"])
         result = env.step(int(rng.choice(legal)))
-    env.frames.extend([env.frames[-1]] * 2)
+    hold(env, 2)
 save(env, "poker", fps=1.5)
 
 
 # Blackjack: bet the minimum, hit below 17.
-env = RecordFrames(sekai.make("Blackjack-v0"), BlackjackRenderer(560))
+env = themed(sekai.make("Blackjack-v0"), partial(BlackjackRenderer, 560))
 for round_ in range(6):
     result = env.reset(seed=7) if round_ == 0 else env.reset()
     while not result.done:
@@ -114,5 +128,5 @@ for round_ in range(6):
             total = view["seats"][0]["hands"][view["active_hand"]]["total"]
             action = 1 if total < 17 and mask[1] else 0
         result = env.step(action)
-    env.frames.extend([env.frames[-1]] * 2)
+    hold(env, 2)
 save(env, "blackjack", fps=1.5)
