@@ -24,10 +24,11 @@ environments give bit-identical results, and its API and pickles keep working.
   are played from both sides by the caller: the player to act sees the game from its side
   (AlphaZero's 119 planes for chess, AlphaGo Zero's 17 for go, 131 for xiangqi, 125 slots
   of public and own information in poker), the legal actions come as an `int8` mask in
-  `info["legal_action_mask"]` and as `env.action_mask()`, and rewards come at the end of
-  the game for the player who just moved. Chess, go and xiangqi have `clone()` for tree
-  search. `sekai.envs.games` is imported only when a game is first made or accessed, so
-  `import sekai` builds none of their tables.
+  `info["legal_action_mask"]` and from the env's `action_mask()` (`sekai.get_action_mask`
+  through wrappers), and rewards come at the end of the game for the player who just
+  moved. Chess, go and xiangqi have `clone()` for tree search. `sekai.envs.games` is
+  imported only when a game is first made or accessed, so `import sekai` builds none of
+  their tables.
 - Rules engines with their notation: a native chess engine (`chess.Board`, `Move`; legal
   moves, FEN, SAN, every draw rule; no python-chess, which is GPL-3.0) that matches
   python-chess's rules where implementations differ and the published perft counts; PGN
@@ -36,11 +37,11 @@ environments give bit-identical results, and its API and pickles keep working.
   hold'em dealer with exact pot accounting, a 5-to-7-card hand evaluator and
   PokerStars-style hand histories; a blackjack table, shoe and `Rules`.
 - `OpponentWrapper` plays one side of a two-player game with a fixed policy (anything with
-  `act(observation, info)`; `RandomPolicy` by default), so a game becomes a single-agent
-  environment; the opponent keeps acting until it is the agent's turn again, as poker
-  needs, and a game it ends before the agent's first move (a fold from the small blind) is
-  dealt again, with the agent's rewards from the skipped games in
-  `info["skipped_rewards"]`.
+  `act(observation, info)`; `RandomPolicy` by default, seeded apart from the env), so a
+  game becomes a single-agent environment; the opponent keeps acting until it is the
+  agent's turn again, as poker needs, and a game it ends before the agent's first move (a
+  fold from the small blind) is dealt again, with the agent's rewards from the skipped
+  games in `info["skipped_rewards"]`.
 - Renderers for every game (`ChessRenderer`, `GoRenderer`, `XiangqiRenderer`,
   `HoldemRenderer`, `BlackjackRenderer`), with dark and light themes, player strips, the
   last move, checks, territory and showdowns, and text
@@ -78,8 +79,10 @@ environments give bit-identical results, and its API and pickles keep working.
   models' inputs. The lanes' counters are kept on the device too, and host scalars become
   tensors made there. Results and gradients are bit-identical, and the errors are the same
   (`InvalidAction`, a cost model's `ValueError`, a singular projection's `LinAlgError`),
-  still raised before the step changes any state. On the CPU, and with NumPy, a step runs
-  as before.
+  still raised before the step changes any state; the one difference is that the check of
+  a sekai model your own code calls during the step (a `SpreadCost` inside your cost
+  model) is read with the others too, so on a GPU its error comes from `step()`, not from
+  the call. On the CPU, and with NumPy, a step runs as before.
 - `BatchMarketEnv` steps take 20-30% less time on the CPU, with the same results bit for
   bit (rewards, observations, infos and gradients). A torch step of 32 lanes holding a
   dollar-neutral book, with costs and a factor risk model, went from 3.8 to 2.6 ms; one
@@ -101,6 +104,10 @@ environments give bit-identical results, and its API and pickles keep working.
   for a 480 × 650 frame), with the same pixels.
 - The documentation calls the finance category "Financial Markets" (the `sekai.finance`
   package and every import path are unchanged), and its environment counts are corrected.
+- The games' IDs (`Chess-v0`, `ChessVsRandom-v0`, `Go9x9-v0`, `Go13x13-v0`,
+  `Go19x19-v0`, `Xiangqi-v0`, `HeadsUpHoldem-v0`, `Blackjack-v0`) are now registered by
+  sekai itself, so a package that registers an environment of its own under one of these
+  names gets `EnvAlreadyRegistered`: register it in a namespace (`"mypkg/Chess-v0"`).
 
 ## [0.3.0] - 2026-11-22
 

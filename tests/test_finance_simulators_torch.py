@@ -385,7 +385,7 @@ class TestMerton:
         monkeypatch.setattr(_TorchContext, "uniform", zeros)
         low, cdf = (torch.as_tensor(a, dtype=dt)[None] for a in _poisson_table(np.array([40.0])))
         if per_path:
-            low, cdf = low.expand(3, -1), cdf.expand(3, -1, -1)
+            low, cdf = low.repeat(3, 1), cdf.repeat(3, 1, 1)  # (contiguous, as real ones)
         counts = _poisson_counts(_TorchContext(gen(), dt), low, cdf, 3, 2)
         assert tuple(counts.shape) == (3, 2, 1) and torch.all(counts == counts[0, 0, 0])
 
