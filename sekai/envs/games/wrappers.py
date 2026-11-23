@@ -38,9 +38,11 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
 
     Args:
         env: A two-player game env (chess, go, xiangqi or heads-up hold'em), possibly
-            wrapped (e.g. in `TimeLimit`). Wrappers that change the observations go
-            outside (`FrameStackObservation(OpponentWrapper(env))`): poker refuses them
-            inside, where they would see both seats' private views.
+            wrapped (e.g. in `TimeLimit`). Wrappers that change the observations, or that
+            work across steps (`ActionRepeat`, `StickyAction`, `NormalizeReward`), go
+            outside (`FrameStackObservation(OpponentWrapper(env))`): inside, they would
+            span both players' turns. Poker refuses observation wrappers inside, where
+            they would see both seats' private views.
         opponent: Any policy with `act(observation, info) -> action`; by default
             `RandomPolicy`. If it has a `seed()` method, `reset(seed=...)` re-seeds it
             with a seed derived from that one, so its choices are independent of the
