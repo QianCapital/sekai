@@ -27,7 +27,6 @@ Example:
 
 from __future__ import annotations
 
-import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -371,17 +370,19 @@ class ModelScenarios:
     By default the paths are simulated on the host, with NumPy (`MarketModel.simulate`),
     and the panels are NumPy arrays. With a torch `device`, they are simulated there
     (`MarketModel.simulate_torch`, drawing from a `torch.Generator` on the device seeded
-    with the seed) and the panels are tensors made on it, not copied from the host.
+    from the seed's `numpy.random.SeedSequence`, so it takes the seeds NumPy takes) and the
+    panels are tensors made on it, not copied from the host.
 
     Args:
         model: The market model.
         n_steps: Steps per path (the panel has `n_steps + 1` times).
         device: A torch device to simulate on, or None to simulate on the host.
-        dtype: The torch float dtype of panels simulated on a device (default: torch's
-            default dtype).
+        dtype: `torch.float32` or `torch.float64`, the dtype of panels simulated on a
+            device (default: torch's default dtype).
 
     Raises:
-        TypeError: If model is not a `MarketModel`, or dtype not a floating torch dtype.
+        TypeError: If model is not a `MarketModel`, or dtype not `torch.float32` or
+            `torch.float64`.
         ValueError: If n_steps is smaller than 1, or dtype is given without a device.
     """
 
@@ -407,8 +408,8 @@ class ModelScenarios:
 
         self.device = torch.device(device)
         if dtype is not None:
-            if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
-                raise TypeError(f"dtype must be a floating-point torch dtype, got {dtype!r}.")
+            if dtype not in (torch.float32, torch.float64):
+                raise TypeError(f"dtype must be torch.float32 or torch.float64, got {dtype!r}.")
             self.dtype = dtype
 
     def sample(self, n_paths: int, *, seed: int) -> MarketPanel:
@@ -417,7 +418,9 @@ class ModelScenarios:
             return MarketPanel.from_simulation(sim)
         import torch
 
-        generator = torch.Generator(device=self.device).manual_seed(operator.index(seed))
+        # A seed of any size, as NumPy's (manual_seed takes 64 bits and wraps negative ones).
+        state = np.random.SeedSequence(seed).generate_state(1, np.uint64)
+        generator = torch.Generator(device=self.device).manual_seed(int(state[0]))
         sim = self.model.simulate_torch(generator, self.n_steps, n_paths=n_paths, dtype=self.dtype)
         return MarketPanel.from_simulation(
             sim, backend="torch", device=self.device, dtype=self.dtype
