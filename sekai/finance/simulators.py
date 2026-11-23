@@ -207,17 +207,19 @@ class MarketModel(abc.ABC):
         batched environment on a GPU gets fresh paths without copying them from the host.
         The numbers differ from those of `simulate`. Every built-in model implements it,
         copying its parameters to a device on its first simulation there and keeping them
-        for later ones (`Randomized` copies those it draws, on each call). A custom model
-        may implement it; by default it raises `NotImplementedError`, and the model is
-        simulated on the host.
+        for later ones (`Randomized` copies those it draws, on each call), so a model's
+        arrays must not be edited in place (they are read-only, though an unpickled
+        model's are not). A custom model may implement it; by default it raises
+        `NotImplementedError`, and such a model simulates on the host only (`simulate`).
 
         Args:
             generator: Source of randomness; the paths are simulated on its device.
             n_steps: Number of steps (>= 1); the time axis has n_steps + 1 entries.
             n_paths: Number of independent paths (>= 1). None gives a single path without a
                 leading paths axis; an int (even 1) adds a leading axis of that size.
-            dtype: Floating-point dtype of the prices and state (default: torch's default
-                dtype, usually float32; MPS has no float64).
+            dtype: `torch.float32` or `torch.float64`, the dtype of the prices and state
+                (default: torch's default dtype, usually float32; MPS has no float64). In
+                half precision a simulation would not be the same model.
 
         Returns:
             A `Simulation` of tensors, shaped as `simulate` shapes its arrays.
@@ -226,7 +228,7 @@ class MarketModel(abc.ABC):
             NotImplementedError: If the model has no torch simulation.
             ValueError: If n_steps or n_paths is smaller than 1.
             TypeError: If n_steps or n_paths is not an integer, `generator` is not a
-                `torch.Generator`, or `dtype` is not a floating-point dtype.
+                `torch.Generator`, or `dtype` is not `torch.float32` or `torch.float64`.
         """
         raise NotImplementedError(
             f"{type(self).__name__} has no torch simulation: simulate it on the host with "
@@ -500,10 +502,15 @@ class _TorchContext:
         if not isinstance(generator, torch.Generator):
             raise TypeError(f"generator must be a torch.Generator, got {type(generator).__name__}.")
         dtype = torch.get_default_dtype() if dtype is None else dtype
-        if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
-            raise TypeError(f"dtype must be a floating-point torch dtype, got {dtype!r}.")
+        if dtype not in (torch.float32, torch.float64):
+            raise TypeError(f"dtype must be torch.float32 or torch.float64, got {dtype!r}.")
+        device = generator.device
+        if device.type != "cpu" and device.index is None:
+            # A generator of torch.Generator(device="cuda") has no index: tensors made for
+            # it go to the current device, which keys the parameters copied there.
+            device = torch.empty(0, device=device).device
         self.generator = generator
-        self.device = generator.device
+        self.device = device
         self.dtype = dtype
 
     def normal(self, *shape: int) -> torch.Tensor:
@@ -642,7 +649,9 @@ def _host_rng(generator: torch.Generator) -> np.random.Generator:
     import torch
 
     rng = np.random.default_rng(generator.get_state().numpy())
-    torch.empty(1, device=generator.device).uniform_(generator=generator)  # move the state on
+    # Move the state on, by a float32 draw: every device has float32 (MPS has no float64),
+    # and the state then moves on alike whatever torch's default dtype.
+    torch.empty(1, device=generator.device, dtype=torch.float32).uniform_(generator=generator)
     return rng
 
 
@@ -672,16 +681,24 @@ def _poisson_counts(
 ) -> torch.Tensor:
     """Poisson counts (P, n_steps, n), as floats, by inverting the tables of `_poisson_table`
     (`low` (L, n) and `cdf` (L, n, K)), with operations every device has (torch's Poisson
-    sampler is not on MPS)."""
+    sampler is not on MPS).
+
+    A uniform of exactly 0 (one float32 draw in 2**24) would invert to a table's lowest
+    count, far below the mean of a large rate; it stands for the half step above 0 instead
+    (torch's uniforms are multiples of eps / 2)."""
     import torch
 
     n = cdf.shape[1]
+    half_step = torch.finfo(ctx.dtype).eps / 4
     if cdf.shape[0] == 1:  # the same tables for every path
         u = ctx.uniform(n, n_paths * n_steps)
+        u.masked_fill_(u == 0, half_step)
         index = torch.searchsorted(cdf[0], u, right=True).view(n, n_paths, n_steps)
         index = index.permute(1, 2, 0)
     else:
-        index = torch.searchsorted(cdf, ctx.uniform(n_paths, n, n_steps), right=True)
+        u = ctx.uniform(n_paths, n, n_steps)
+        u.masked_fill_(u == 0, half_step)
+        index = torch.searchsorted(cdf, u, right=True)
         index = index.transpose(1, 2)
     return low[:, None] + index.to(ctx.dtype)
 
@@ -691,6 +708,11 @@ def _torch_categorical(cumulative: torch.Tensor, u: torch.Tensor) -> torch.Tenso
     probabilities (P, K) or (1, K)."""
     index: torch.Tensor = (u[:, None] >= cumulative).sum(dim=-1)
     return index.clamp_(max=cumulative.shape[-1] - 1)
+
+
+# The most comparisons a regime chain makes at once ((steps, P, K, K)): it works out its
+# steps' moves a chunk of steps at a time, so that its memory does not grow with n_steps.
+_MOVES_ELEMENTS = 2**22
 
 
 # --------------------------------------------------------------------------------------------
@@ -1268,15 +1290,18 @@ class RegimeSwitching(_Model):
 
         p, n = params, self._n_assets
         current = _torch_categorical(p["initial"], ctx.uniform(n_paths))
-        # The regime each one would move to at each step (S, P, K), so that a step of the
-        # chain is a lookup of the current one's.
+        # The regime each one would move to at each step of a chunk (steps, P, K), so that a
+        # step of the chain is a lookup of the current one's.
         u = ctx.uniform(n_steps, n_paths)
         cumulative = p["transition"]  # (L, K, K), cumulative along the rows
-        moves = (u[:, :, None, None] >= cumulative).sum(dim=-1).clamp_(max=cumulative.shape[-1] - 1)
+        k = cumulative.shape[-1]
+        chunk = max(1, _MOVES_ELEMENTS // (n_paths * k * k))
         chain = [current]
-        for t in range(n_steps):
-            current = torch.gather(moves[t], 1, current[:, None])[:, 0]
-            chain.append(current)
+        for start in range(0, n_steps, chunk):
+            moves = (u[start : start + chunk, :, None, None] >= cumulative).sum(dim=-1)
+            for step in moves.clamp_(max=k - 1):
+                current = torch.gather(step, 1, current[:, None])[:, 0]
+                chain.append(current)
         regime = torch.stack(chain, dim=1)
 
         eps = ctx.normal(n_paths, n_steps, n)

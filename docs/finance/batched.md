@@ -87,7 +87,7 @@ you have access to.
 model's state series (such as the regime) can be observed with `exogenous=` or passed to
 the policy as privileged information with `privileged_state=True`. The paths are simulated
 on the host with NumPy; with the torch backend, `simulate_on_device=True` simulates them
-on the env's device instead, so a reset copies nothing to it
+on the env's device instead, so a reset copies no paths to it
 ([Simulating on a GPU](simulators.md#simulating-on-a-gpu)).
 
 **Your generator.** `scenarios=` takes anything with
@@ -236,7 +236,8 @@ operations of `view.backend` (`B.abs`, `B.mean`, `B.stack`...) instead.
 `backend="torch"` keeps the data and the state on `device=` in `dtype=` (default: torch's
 default dtype, usually float32). The accounting, costs, constraint projection, risk model
 and rewards are the same code on both (see [`sekai.backend`](../api/backend.md)), and in
-float64 the two give the same results.
+float64 the two give the same results on the same paths (`simulate_on_device=True`
+simulates other ones).
 
 With `env.differentiable = True`, `step()` builds the autograd graph from the actions to
 the rewards; otherwise it runs without one. Prices do not react to the agent (impact is a

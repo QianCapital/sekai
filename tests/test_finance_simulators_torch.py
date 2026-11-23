@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import gc
+import math
 import pickle
 import subprocess
 import sys
@@ -163,11 +164,14 @@ class TestContract:
         with pytest.raises(error):
             model.simulate_torch(gen(), n_steps, n_paths=n_paths)
 
-    def test_rejects_a_numpy_generator_and_integer_dtypes(self, model: MarketModel) -> None:
+    def test_rejects_a_numpy_generator_and_dtypes_but_float32_and_float64(
+        self, model: MarketModel
+    ) -> None:
         with pytest.raises(TypeError, match=r"torch\.Generator"):
             model.simulate_torch(np.random.default_rng(0), 5)  # type: ignore[arg-type]
-        with pytest.raises(TypeError, match="floating-point"):
-            model.simulate_torch(gen(), 5, dtype=torch.int64)
+        for dtype in (torch.int64, torch.float16, torch.bfloat16):  # (half: not the same model)
+            with pytest.raises(TypeError, match=r"torch\.float32 or torch\.float64"):
+                model.simulate_torch(gen(), 5, dtype=dtype)
 
     def test_numpy_integer_counts(self, model: MarketModel) -> None:
         sim = model.simulate_torch(gen(), np.int64(3), n_paths=np.int32(2))  # type: ignore[arg-type]
@@ -364,6 +368,35 @@ class TestMerton:
             p = np.exp(-rate) * rate**k / np.prod(np.arange(1, k + 1))
             assert np.mean(counts == k) == pytest.approx(p, abs=6 * np.sqrt(p * (1 - p) / n))
 
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    @pytest.mark.parametrize("per_path", [False, True])
+    def test_a_uniform_of_zero_inverts_to_the_half_step_above_it(
+        self, dtype: str, per_path: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """torch.rand gives exactly 0 once in 2**24 float32 draws. It stands for the half step
+        above 0, whose quantile at 40 jumps a step is 15 or so, not the table's lowest count
+        (0 jumps, where Poisson gives 4e-18)."""
+        from sekai.finance.simulators import _poisson_counts, _poisson_table, _TorchContext
+
+        def zeros(self: Any, *shape: int) -> torch.Tensor:
+            return torch.zeros(shape, dtype=self.dtype)
+
+        dt = getattr(torch, dtype)
+        monkeypatch.setattr(_TorchContext, "uniform", zeros)
+        low, cdf = (torch.as_tensor(a, dtype=dt)[None] for a in _poisson_table(np.array([40.0])))
+        if per_path:
+            low, cdf = low.expand(3, -1), cdf.expand(3, -1, -1)
+        counts = _poisson_counts(_TorchContext(gen(), dt), low, cdf, 3, 2)
+        assert tuple(counts.shape) == (3, 2, 1) and torch.all(counts == counts[0, 0, 0])
+
+        def poisson_cdf(k: float) -> float:
+            return sum(
+                math.exp(j * math.log(40.0) - 40.0 - math.lgamma(j + 1)) for j in range(int(k) + 1)
+            )
+
+        half_step, count = torch.finfo(dt).eps / 4, float(counts[0, 0, 0])
+        assert poisson_cdf(count - 1) <= half_step < poisson_cdf(count)
+
     def test_fat_tails_without_jumps_gbm(self) -> None:
         def kurtosis(model: MarketModel) -> float:
             r = log_returns(host(model.simulate_torch(gen(2), 1000, n_paths=50).prices)).ravel()
@@ -407,6 +440,23 @@ class TestRegimeSwitching:
         sim = RegimeSwitching([GBM(0.0, 0.2, n_assets=2)], [[1.0]]).simulate_torch(gen(), 10)
         assert tuple(sim.prices.shape) == (11, 2)
         assert torch.all(sim.state["regime"] == 0)
+
+    def test_the_chain_is_the_same_whatever_its_chunks_of_steps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The moves are worked out a chunk of steps at a time, so that the memory does not
+        grow with the number of steps; the chunks change no regime and no price."""
+        from sekai.finance import simulators
+
+        def factory(r: np.random.Generator) -> MarketModel:  # a transition matrix per path
+            stay = r.uniform(0.5, 0.99)
+            return RegimeSwitching([GBM(0.0, 0.1), GBM(0.0, 0.3)], [[stay, 1 - stay]] * 2)
+
+        for model in (two_regimes(), Randomized(factory)):
+            whole = model.simulate_torch(gen(3), 50, n_paths=7)  # one chunk
+            for steps in (1, 4, 11, 49):
+                monkeypatch.setattr(simulators, "_MOVES_ELEMENTS", steps * 7 * 2 * 2)
+                same_simulation(model.simulate_torch(gen(3), 50, n_paths=7), whole)
 
 
 class TestGARCH:
@@ -537,6 +587,19 @@ class TestRandomized:
         s0 = r.uniform(50.0, 150.0)
         return GBM(sigma=s0 / 500, s0=s0, n_assets=2)  # the path's s0 tells its sigma
 
+    def test_the_default_dtype_changes_nothing(self) -> None:
+        """Seeding its host generator moves the torch generator on by a float32 draw, which
+        every device has (MPS has no float64), whatever torch's default dtype."""
+        model = Randomized(self.factory)
+        want = model.simulate_torch(gen(4), 20, n_paths=6, dtype=torch.float32)
+        default = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float64 if default == torch.float32 else torch.float32)
+        try:
+            got = model.simulate_torch(gen(4), 20, n_paths=6, dtype=torch.float32)
+        finally:
+            torch.set_default_dtype(default)
+        same_simulation(got, want)
+
     def test_each_path_has_its_own_parameters(self) -> None:
         sim = Randomized(self.factory).simulate_torch(gen(0), 500, n_paths=64)
         prices = host(sim.prices)
@@ -646,7 +709,8 @@ class TestModelScenarios:
         )
         c = scenarios.sample(3, seed=8)
         assert not torch.equal(torch.nan_to_num(c.returns), torch.nan_to_num(a.returns))
-        sim = model.simulate_torch(gen(7), 30, n_paths=3, dtype=torch.float64)
+        seed = int(np.random.SeedSequence(7).generate_state(1, np.uint64)[0])  # (the seed's)
+        sim = model.simulate_torch(gen(seed), 30, n_paths=3, dtype=torch.float64)
         torch.testing.assert_close(a.fields["close"], sim.prices, rtol=0, atol=0, equal_nan=True)
         assert ModelScenarios(model, 30, device="cpu").sample(2, seed=0).returns.dtype == (
             torch.get_default_dtype()
@@ -664,11 +728,28 @@ class TestModelScenarios:
         assert isinstance(panel.returns, np.ndarray)
         np.testing.assert_array_equal(panel.returns, want.returns)
 
+    def test_on_a_device_it_takes_the_seeds_numpy_takes(self) -> None:
+        model = GBM(n_assets=2)
+        on_device, on_host = ModelScenarios(model, 10, device="cpu"), ModelScenarios(model, 10)
+        entropy = np.random.SeedSequence().entropy  # 128 bits, as sekai draws when unseeded
+        assert isinstance(entropy, int)
+        for seed in (0, 2**63, 2**64, 2**100, entropy):
+            on_host.sample(2, seed=seed)
+            same(on_device.sample(2, seed=seed).returns, on_device.sample(2, seed=seed).returns)
+        returns = [on_device.sample(2, seed=s).returns.nan_to_num() for s in (0, 2**64, 2**64 - 1)]
+        assert not torch.equal(returns[0], returns[1]) and not torch.equal(returns[1], returns[2])
+        for scenarios in (on_device, on_host):
+            with pytest.raises(ValueError, match="non-negative"):
+                scenarios.sample(2, seed=-1)
+            with pytest.raises(TypeError):
+                scenarios.sample(2, seed=1.5)  # type: ignore[arg-type]
+
     def test_validation(self) -> None:
         with pytest.raises(ValueError, match="give device= too"):
             ModelScenarios(GBM(), 5, dtype=torch.float32)
-        with pytest.raises(TypeError, match="floating-point"):
-            ModelScenarios(GBM(), 5, device="cpu", dtype=torch.int32)
+        for dtype in (torch.int32, torch.float16, torch.bfloat16):
+            with pytest.raises(TypeError, match=r"torch\.float32 or torch\.float64"):
+                ModelScenarios(GBM(), 5, device="cpu", dtype=dtype)
         with pytest.raises(NotImplementedError):
             ModelScenarios(ConstantModel(), 5, device="cpu").sample(2, seed=0)
 
@@ -710,12 +791,19 @@ def same(a: Any, b: Any) -> None:
         np.testing.assert_array_equal(a, b)
 
 
+def same_simulation(a: Simulation, b: Simulation) -> None:
+    same(
+        {"prices": a.prices, "mask": a.mask, "state": a.state},
+        {"prices": b.prices, "mask": b.mask, "state": b.state},
+    )
+
+
 def rollout(
     env: BatchMarketEnv, steps: list[Any], reset: int | None = None
 ) -> list[dict[str, Any]]:
     out = [] if reset is None else [vars(env.reset(seed=reset))]
     for i, a in enumerate(steps):
-        if not env.autoreset and i in (7, 15):
+        if not env.autoreset and i in (7, 15, 23):
             done = np.flatnonzero(env.backend.to_numpy(env.frozen))
             if len(done):
                 out.append(vars(env.reset(indices=done[::2])))  # some of them
@@ -803,6 +891,9 @@ def test_flag_validation() -> None:
         BatchMarketEnv(2, model=GBM(), simulate_on_device=True)
     with pytest.raises(NotImplementedError, match="ConstantModel"):
         BatchMarketEnv(2, model=ConstantModel(), simulate_on_device=True, backend="torch")
+    for dtype in (torch.float16, torch.bfloat16):  # (simulated on the host, they are allowed)
+        with pytest.raises(TypeError, match=r"torch\.float32 or torch\.float64"):
+            BatchMarketEnv(2, simulate_on_device=True, backend="torch", dtype=dtype)
     default = BatchMarketEnv(
         2, simulate_on_device=True, backend="torch", lookback=5, episode_length=10
     )
@@ -879,3 +970,18 @@ def test_an_env_simulating_on_a_gpu(device: str) -> None:
     assert result.rewards.device.type == device and bool(torch.isfinite(result.rewards).all())
     scenarios = ModelScenarios(default_market(), 20, device=device)
     assert scenarios.sample(4, seed=0).returns.device.type == device
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device")
+def test_a_cuda_generator_without_an_index_simulates_on_the_current_device() -> None:
+    """torch.Generator(device="cuda") may have no index: its simulations, and the parameters
+    kept for them, are on the device current when it simulates."""
+    from sekai.finance.simulators import _TorchContext
+
+    ctx = _TorchContext(torch.Generator(device="cuda"), torch.float32)
+    assert ctx.device == torch.device("cuda", torch.cuda.current_device())
+    model = GBM(n_assets=2)
+    for index in range(min(torch.cuda.device_count(), 2)):
+        with torch.cuda.device(index):
+            sim = model.simulate_torch(torch.Generator(device="cuda"), 5, n_paths=2)
+            assert sim.prices.device == torch.device("cuda", index)
