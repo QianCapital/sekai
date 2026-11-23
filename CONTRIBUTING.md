@@ -30,6 +30,18 @@ mkdocs serve                   # preview the docs at http://127.0.0.1:8000
 Some tests compare sekai against gymnasium (dynamics and rendering). They are skipped
 when gymnasium or pygame is missing; install `gymnasium[classic-control]` to run them all.
 
+The tests of torch on a GPU run on every CUDA or MPS device they find, and are skipped
+elsewhere, as on CI's runners. Before a release that changes the torch code, run them on
+a machine with a GPU (with torch installed for it):
+
+```bash
+pytest tests/test_device_syncs.py tests/test_finance_simulators_torch.py -rs
+```
+
+They check that a step of a torch `BatchMarketEnv` waits for the device once, that its
+results equal the CPU's to rounding, its errors and gradients, and that market models
+simulate there; `-rs` lists any that were skipped.
+
 ## Project layout
 
 | Path | What lives there |
