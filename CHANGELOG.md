@@ -6,7 +6,7 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-11-22
+## [0.3.1] - 2026-11-23
 
 Strategy Games (chess, go, xiangqi, heads-up hold'em and blackjack), market models
 simulated on a GPU, a torch `BatchMarketEnv` that waits for its GPU once per step, and
