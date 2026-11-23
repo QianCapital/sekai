@@ -143,6 +143,22 @@ def test_structure_and_linear_algebra_agree() -> None:
     assert NP.item(np.array([3.5])) == TH.item(torch.tensor([3.5])) == 3.5
 
 
+def test_where_keeps_no_constant_made_under_a_mode() -> None:
+    """`where` makes the scalars it is given into tensors once and keeps them, but not
+    under a mode such as torch.export's FakeTensorMode, whose tensors are fake."""
+    fake = pytest.importorskip("torch._subclasses.fake_tensor")
+    x = torch.tensor([-1.0, 2.0])
+    with fake.FakeTensorMode():
+        fx = torch.tensor([-1.0, 2.0])
+        assert TH.where(fx > 0, fx, 0.3125).shape == (2,)
+        assert TH.where(fx > 0, 0.4375, fx).shape == (2,)
+    assert torch.equal(TH.where(x > 0, x, 0.3125), torch.tensor([0.3125, 2.0]))
+    assert torch.equal(TH.where(x > 0, 0.4375, x), torch.tensor([-1.0, 0.4375]))
+    with fake.FakeTensorMode():  # one kept before is not handed to a fake computation
+        fx = torch.tensor([-1.0, 2.0])
+        assert TH.where(fx > 0, fx, 0.3125).shape == (2,)
+
+
 def test_copy_put_along_axis_does_not_alias() -> None:
     x = torch.zeros(2, 3)
     y = TH.put_along_axis(x, torch.tensor([[0], [2]]), torch.ones(2, 1), axis=1)

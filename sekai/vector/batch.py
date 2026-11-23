@@ -195,8 +195,9 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
         self._frozen_host = np.zeros(self.num_envs, dtype=bool)
         self._resetting: tuple[Array, NDArray[np.int64]] | None = None
         # `_step` may set this to the host values of `(terminated | truncated) & ~frozen`
-        # when it read them back anyway (with its own checks), so `step()` doesn't again.
-        self._finished_host: NDArray[np.bool_] | None = None
+        # when it read them back anyway (with its own checks), with the `terminated` and
+        # `truncated` it read them from, so `step()` doesn't again if `_step` returns those.
+        self._finished_host: tuple[NDArray[np.bool_], Array, Array] | None = None
         self._final_terminated = self._frozen
         self._final_truncated = self._frozen
         self.closed = False
@@ -346,14 +347,18 @@ class BatchEnv(SeededRNG, abc.ABC, Generic[ObsType, ActType]):
         self._finished_host = None
         with self._grad():
             rewards, terminated, truncated, info = self._step(actions)
+        read = self._finished_host
+        self._finished_host = None
+        # (A subclass's `_step` that changes the flags it got from its parent's is read anew.)
+        known = read is not None and read[1] is terminated and read[2] is truncated
         rewards = B.where(frozen, 0.0, B.asfloat(rewards, self._like))
         terminated = B.where(frozen, self._final_terminated, B.asbool(terminated, self._like))
         truncated = B.where(frozen, self._final_truncated, B.asbool(truncated, self._like))
         finished = (terminated | truncated) & ~frozen
         final_obs = reset_info = reset_idx = None
-        finished_host = self._finished_host
-        self._finished_host = None
-        if finished_host is None:
+        if read is not None and known:
+            finished_host = read[0]
+        else:
             finished_host = B.to_numpy(finished)  # the step's one read back from a device
         if finished_host.any():
             if self.autoreset:

@@ -713,27 +713,31 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         idx = self._lanes_on_host(indices)
         n = self.num_envs
         everyone = len(idx) == n and np.array_equal(np.sort(idx), np.arange(n))
+        self._memo.clear()  # (the lanes' starts change in place)
         if self.data is not None:
             n_starts = self.data.n_steps - self._window + 1
-            for lane, opts in zip(idx.tolist(), options):
-                if opts and opts.get("start") is not None:
-                    start = resolve_start(
-                        opts["start"],
-                        timestamps=self.data.timestamps,
-                        lookback=self._lookback,
-                        n_starts=n_starts,
-                        warmup=self.data.warmup,
-                    )
-                else:
-                    start = sample_start(
-                        self._samplers[lane],
-                        self.rng,
-                        n_starts=n_starts,
-                        episode_length=self._episode_length,
-                        lookback=self._lookback,
-                        warmup=self.data.warmup,
-                    )
-                self._start[lane] = start
+            try:
+                for lane, opts in zip(idx.tolist(), options):
+                    if opts and opts.get("start") is not None:
+                        start = resolve_start(
+                            opts["start"],
+                            timestamps=self.data.timestamps,
+                            lookback=self._lookback,
+                            n_starts=n_starts,
+                            warmup=self.data.warmup,
+                        )
+                    else:
+                        start = sample_start(
+                            self._samplers[lane],
+                            self.rng,
+                            n_starts=n_starts,
+                            episode_length=self._episode_length,
+                            lookback=self._lookback,
+                            warmup=self.data.warmup,
+                        )
+                    self._start[lane] = start
+            finally:  # a start that fails to resolve keeps those before it, on the device too
+                self._start_dev = B.asint(self._start, like)
         else:
             if any(opts and opts.get("start") is not None for opts in options):
                 raise ValueError("options['start'] needs historical data (data=...).")
@@ -751,9 +755,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
             0,
         )
         self._t_dev = B.where(lanes, 0, self._t_dev)
-        if self.data is not None:  # new starts, drawn on the host
-            self._start_dev = B.asint(self._start, like)
-        else:
+        if self.data is None:  # (with data, the new starts were drawn on the host above)
             self._start_dev = B.where(lanes, 0, self._start_dev)
         self._weights = B.where(lanes[:, None], 0.0, self._weights)
         self._equity = B.where(lanes, 1.0, self._equity)
@@ -993,7 +995,7 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         terminated = stopped if thawed else ~frozen & stopped
         running = ~terminated if thawed else ~frozen & ~terminated
         truncated = running & (t_dev >= self._episode_length)
-        self._checkpoint(actions, finite, checks, terminated | truncated, deferred)
+        self._checkpoint(actions, finite, checks, terminated, truncated, deferred)
         reward = self.reward_fn(outcome)
         self._weights = drifted if thawed else B.where(frozen[:, None], w, drifted)
         self._equity = equity
@@ -1051,24 +1053,29 @@ class BatchMarketEnv(BatchEnv[dict[str, Any], Any]):
         actions: Any,
         finite: Array,
         checks: list[_Check],
-        finished: Array,
+        terminated: Array,
+        truncated: Array,
         deferred: bool,
     ) -> None:
-        """With deferred checks, read them back in one transfer with `finished` (which the
-        base class then uses), and raise the first that failed before the step changes any
-        state: `InvalidAction` for a non-finite action, else the error the check would have
-        raised (a cost model's `ValueError`, the `LinAlgError` of a singular projection)."""
+        """With deferred checks, read them back in one transfer with `terminated |
+        truncated` (which the base class then uses), and raise the first that failed before
+        the step changes any state: `InvalidAction` for a non-finite action, else the error
+        the check would have raised (a cost model's `ValueError`, the `LinAlgError` of a
+        singular projection). A check on NumPy arrays (a model your own code called on host
+        data) is read as it is, not sent to the device."""
         if not deferred:
             return
         B = self.backend
-        failed = B.stack([~finite] + [flag for flag, _ in checks])
-        host = B.to_numpy(B.concat([failed, finished]))
+        ours = [B.is_array(flag) for flag, _ in checks]
+        failed = B.stack([~finite] + [flag for (flag, _), on in zip(checks, ours) if on])
+        host = B.to_numpy(B.concat([failed, terminated | truncated]))
         if host[0]:
             raise InvalidAction(actions, self.action_space)
-        for (_, error), flag in zip(checks, host[1 : len(checks) + 1]):
-            if flag:
+        read = iter(host[1:])
+        for (flag, error), on in zip(checks, ours):
+            if next(read) if on else bool(flag):
                 raise error()
-        self._finished_host = host[len(checks) + 1 :]
+        self._finished_host = (host[1 + sum(ours) :], terminated, truncated)
 
     def _risk(self, weights: Array, rows: Array) -> tuple[Array, Array | None]:
         risk = self.risk

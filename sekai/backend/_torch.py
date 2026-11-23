@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar
 
 import numpy as np
@@ -42,15 +42,29 @@ def _full_float(value: float, dtype: torch.dtype, device: Any) -> torch.Tensor:
 # 0-d tensors of the Python scalars passed to `where`, by value, dtype and device: torch
 # would make one at every call. (False: a pair that keeps the scalar.)
 _CONSTANTS: dict[tuple[Any, ...], torch.Tensor | bool] = {}
+# Under a mode (FakeTensorMode, a TorchFunctionMode) a new tensor need not be an ordinary
+# one, and under a CUDA graph capture its value is not computed yet: none is cached then.
+_dispatch_modes: Callable[[], int] = getattr(torch._C, "_len_torch_dispatch_stack", lambda: 0)
+_function_modes: Callable[[], bool] = getattr(
+    torch._C, "_is_torch_function_mode_enabled", lambda: False
+)
 
 
 def _constant(value: Any, other: torch.Tensor) -> Any:
     """`value`, a Python scalar beside the tensor `other` in `torch.where`, as a 0-d tensor
     made once that gives the same result: in `other`'s dtype, for a float or int beside a
     floating tensor (within its range), an int beside an int64 tensor and a bool beside a
-    bool tensor. Any other pair keeps the scalar, for torch to promote as it does."""
+    bool tensor. Any other pair keeps the scalar, for torch to promote as it does, as do a
+    tensor subclass, an active mode and a CUDA graph capture."""
     kind = type(value)
     if kind is not float and kind is not int and kind is not bool:
+        return value
+    if (
+        type(other) is not torch.Tensor
+        or _dispatch_modes()
+        or _function_modes()
+        or (other.is_cuda and torch.cuda.is_current_stream_capturing())
+    ):
         return value
     dtype, device = other.dtype, other.device
     key = (kind, struct.pack("<d", value) if kind is float else value, dtype, device)

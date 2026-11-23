@@ -290,9 +290,13 @@ the Sharpe ratio rises from 4.4 to 7.2 and daily turnover falls from 46% to 34%.
 except where it has to read a value back: then it waits until the device has finished
 everything queued. A step reads back once: which lanes finished, together with its
 checks of the actions, of their projection and of the cost models' inputs (it raises
-their errors, as on the CPU, before it changes any state). Keep your loop free of reads
-too: `.item()`, `bool(...)`, `.cpu()` or an `if` on a tensor each add a wait. The loop
-above tests `result.dones.all()` at every step; on a GPU, looping
+their errors, as on the CPU, before it changes any state). The checks are made inside
+sekai's models, so a model that your own code calls during a step (a `SpreadCost` in your
+cost model, `neutralize` in your action map) has its check read with the others: on a GPU
+its error comes from `step()`, not from the call, and a `try` around the call does not see
+it (give such a model a fallback instead, as `SpreadCost(fallback_spread=...)`). Keep your
+loop free of reads too: `.item()`, `bool(...)`, `.cpu()` or an `if` on a tensor each add
+a wait. The loop above tests `result.dones.all()` at every step; on a GPU, looping
 `range(env.episode_length)` instead avoids that read (a finished lane is frozen, with
 reward 0, until it is reset).
 

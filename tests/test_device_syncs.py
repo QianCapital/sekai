@@ -29,6 +29,7 @@ from sekai.error import InvalidAction
 from sekai.finance import (
     BorrowFee,
     Constraints,
+    CostModel,
     FactorRiskModel,
     PortfolioVariance,
     ProportionalCost,
@@ -273,6 +274,83 @@ def test_unpriceable_trades_raise_the_cost_models_error(device_path: bool) -> No
     with pytest.raises(ValueError, match="SpreadCost has no valid 'spread'"):
         env.step(a)
     same(vars(env.step(zero)), vars(twin.step(zero)))  # (no trades: nothing to price)
+
+
+class HostSpread(CostModel):
+    """A cost model of your own that prices on the host, with sekai's `SpreadCost`."""
+
+    requires = frozenset({"spread"})
+
+    def __call__(self, trades: Any, *, spread: Any = None, **context: Any) -> Any:
+        cost = SpreadCost()(trades.detach().numpy(), spread=spread.detach().numpy())
+        return torch.as_tensor(cost, dtype=trades.dtype)
+
+
+def test_a_model_called_on_host_arrays_inside_a_step_is_checked_on_the_host() -> None:
+    results = []
+    for device_path in (False, True):
+        env = make("costs", device_path=device_path, transaction_cost=HostSpread())
+        results.append(rollout(env, actions(env, 12)))
+    for x, y in zip(*results, strict=True):
+        same(x, y)
+    no_spreads = DATA.with_fields(spread=np.full(np.shape(DATA.field("spread")), np.nan))
+    for device_path in (False, True):
+        env = make(
+            "costs",
+            device_path=device_path,
+            data=no_spreads,
+            execution="close",
+            transaction_cost=HostSpread(),
+        )
+        env.reset(seed=0)
+        before = lanes_state(env)
+        with pytest.raises(ValueError, match="SpreadCost has no valid 'spread'"):
+            env.step(actions(env, 1)[0])
+        same(lanes_state(env), before)
+
+
+@pytest.mark.parametrize("autoreset", [True, False])
+def test_the_lanes_a_subclass_ends_end_on_the_device_path_too(autoreset: bool) -> None:
+    """`step()` reuses the finished lanes read back with the checks only for the flags
+    they were read from, not for those a subclass's `_step` makes of them."""
+
+    class EndsAtFive(BatchMarketEnv):
+        def _step(self, actions: Any) -> Any:
+            rewards, terminated, truncated, info = super()._step(actions)
+            fifth = self.backend.asbool(self._t >= 5, self._like)
+            return rewards, terminated, truncated | fifth, info
+
+    envs = []
+    for device_path in (False, True):
+        env = EndsAtFive(
+            N_ENVS, backend="torch", dtype=torch.float32, autoreset=autoreset, **CONFIGS["costs"]
+        )
+        env._defer = device_path
+        envs.append(env)
+    steps = actions(envs[0], 20)
+    host, device = (rollout(env, steps) for env in envs)
+    for x, y in zip(host, device, strict=True):
+        same(x, y)
+    assert sum(bool(r["truncated"].any()) for r in host if "truncated" in r) >= 2
+
+
+@pytest.mark.parametrize("backend", ["numpy", "torch"])
+def test_a_partial_reset_that_raises_leaves_the_lanes_rows_consistent(backend: str) -> None:
+    """A start that fails to resolve leaves those resolved before it set (as in 0.3.0),
+    in every copy of the starts and in what is derived from them."""
+    env = BatchMarketEnv(3, data=DATA, backend=backend, lookback=5, episode_length=20)
+    env._defer = backend == "torch"
+    B = env.backend
+    env.reset(seed=0)
+    env.step(B.zeros((3, *env.action_space.shape), like=env._like))
+    rows = B.to_numpy(env._rows())
+    with pytest.raises(ValueError, match="outside"):
+        env.reset(indices=[0, 1], options=[{"start": 100}, {"start": 10**6}])
+    assert np.array_equal(env._start, B.to_numpy(env._start_dev))
+    moved = B.to_numpy(env._rows())
+    env._memo.clear()
+    assert np.array_equal(moved, B.to_numpy(env._rows()))
+    assert moved[0] != rows[0] and np.array_equal(moved[1:], rows[1:])
 
 
 # What sekai 0.3.0 did not keep: an env it pickled or snapshotted has none of these.
