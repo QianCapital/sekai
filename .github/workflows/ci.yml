@@ -63,6 +63,9 @@ jobs:
           sekai check Market-v0 --steps 200 --determinism
           sekai check LimitOrderBook-v0 --steps 200
           sekai bench Portfolio-v0 --num-envs 256 --steps 50
+          sekai bench Trading-v0 --num-envs 256 --steps 50
+          sekai check Chess-v0 --steps 200 --determinism
+          sekai bench Go9x9-v0 --num-envs 2 --steps 50
 
   torch:
     name: Test with PyTorch (CPU)
