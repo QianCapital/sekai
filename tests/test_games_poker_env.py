@@ -177,6 +177,22 @@ def test_showdown_payoffs_from_winner_perspective() -> None:
     assert r.info["result"] is r.info["view"].result
 
 
+def test_illegal_action_lose_folds_the_hand() -> None:
+    env = HoldemEnv(illegal_action="lose")
+    env.reset(options={"button": 0, "deck": DECK})
+    env.step(CHECK_CALL)  # the small blind limps, so the big blind may check
+    assert not env.action_mask()[FOLD]
+    r = env.step(FOLD)  # a fold where checking is free: illegal, so the hand is given up
+    assert r.terminated and r.reward == pytest.approx(-1.0) and r.info["payoffs"] == [1.0, -1.0]
+    assert r.info["illegal_action"] == FOLD and r.info["last_action"] == "Folds"
+    assert r.info["observer"] == 1 and env.hand.is_complete
+    assert [e["kind"] for e in env.hand.events if e["type"] == "action"] == ["call", "fold"]
+    with pytest.raises(HandComplete):
+        env.step(CHECK_CALL)
+    with pytest.raises(ValueError, match="illegal_action"):
+        HoldemEnv(illegal_action="ignore")  # type: ignore[arg-type]
+
+
 def test_illegal_actions() -> None:
     env = HoldemEnv()
     with pytest.raises(sekai.ResetRequired):

@@ -230,6 +230,33 @@ def test_reset_mid_round_finishes_the_round_first() -> None:
         vec.step(np.array([5, 5]))
 
 
+def test_illegal_action_lose_loses_the_rounds_stake() -> None:
+    env = BlackjackEnv(illegal_action="lose")
+    env.reset(seed=0)
+    env.table._shoe.stack_top(["8h", "9c", "8d", "7s", "3c", "4d"])  # type: ignore[union-attr]
+    env.step(5)  # bet 10
+    env.step(3)  # split the eights against the nine
+    r = env.step(7)  # a bet while playing: both hands are lost
+    assert r.terminated and r.reward == -2.0 and r.info["net"] == -20
+    assert r.info["illegal_action"] == 7
+    assert [h["outcome"] for h in r.info["round"]["seats"][0]["hands"]] == ["lose", "lose"]
+    with pytest.raises(RoundOver):
+        env.step(5)
+    r = env.reset(options={"keep_bankroll": True})
+    played = env.table.rounds_played  # type: ignore[union-attr]
+    r = env.step(0)  # a stand before the bet: the smallest bet is lost, no cards dealt
+    assert r.terminated and r.reward == -1.0 and r.info["net"] == -10
+    assert r.info["phase"] == "betting"
+    assert env.table.rounds_played == played  # type: ignore[union-attr]
+    assert env.reset(options={"keep_bankroll": True}).info["bankroll"] == 970
+    table = env.table
+    assert sum(table.bankrolls) + table.chips_on_table + table.house_net == pytest.approx(  # type: ignore[union-attr]
+        table.chips_in  # type: ignore[union-attr]
+    )
+    with pytest.raises(ValueError, match="illegal_action"):
+        BlackjackEnv(illegal_action="ignore")  # type: ignore[arg-type]
+
+
 def test_bet_levels_the_table_cannot_take_are_refused() -> None:
     with pytest.raises(ValueError, match="above the table maximum"):
         BlackjackEnv(rules=Rules(max_bet=50), bet_levels=(8, 16))

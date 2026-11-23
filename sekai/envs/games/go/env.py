@@ -13,7 +13,8 @@ interface, which is what AlphaZero-style self-play needs:
   step.
 - `info["legal_action_mask"]` (also `env.action_mask()`) is the `int8` legal-move mask
   over all `size * size + 1` actions (pass is always legal while the game is on). An
-  illegal action raises `sekai.envs.games.go.IllegalMove`.
+  illegal action raises `sekai.envs.games.go.IllegalMove`, or with
+  `illegal_action="lose"` forfeits the game: reward `-1`, result `"W+F"` or `"B+F"`.
 
 Rules
 -----
@@ -47,7 +48,8 @@ Every `reset`/`step` info dict holds `legal_action_mask` (`int8`), `legal_action
 colour), `passes` (consecutive), `komi`, `result` (`"*"` while ongoing, else `"B+3.5"`,
 `"W+0.5"` or `"Draw"`) and `winner` (`"black"`, `"white"` or `None`); once the game is
 over also `score` (`{"black": points, "white": points including komi}`) and
-`termination` (`"two passes"` or `"max moves"`).
+`termination` (`"two passes"`, `"max moves"` or, for a forfeit, `"illegal move"`, when
+`illegal_action` holds the action).
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ import math
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -78,6 +80,8 @@ Observation = NDArray[np.float32]
 DEFAULT_KOMI = 7.5
 REASON_TWO_PASSES = "two passes"
 REASON_MAX_MOVES = "max moves"
+REASON_ILLEGAL_MOVE = "illegal move"
+IllegalActionMode = Literal["raise", "lose"]
 _COLOR_NAME = {BLACK: "black", WHITE: "white"}
 _COLOR_CODE = {"black": BLACK, "white": WHITE, "b": BLACK, "w": WHITE}
 _RESET_OPTIONS = frozenset({"komi", "handicap", "moves", "board", "to_play"})
@@ -110,8 +114,9 @@ class GoResult:
         black: Black's area points.
         white: White's area points including komi.
         margin: `black - white`.
-        result: `"B+3.5"`, `"W+0.5"` or `"Draw"`.
-        reason: `"two passes"` or `"max moves"`.
+        result: `"B+3.5"`, `"W+0.5"` or `"Draw"`; `"W+F"` or `"B+F"` for a forfeit, whose
+            points are the board's area score when the illegal move was played.
+        reason: `"two passes"`, `"max moves"` or `"illegal move"` (a forfeit).
     """
 
     winner: str | None
@@ -144,6 +149,8 @@ class GoEnv(Env[Observation, np.intp]):
         max_moves: Plies (passes included) after which the game is truncated and scored;
             default `3 * size * size`.
         superko: Positional superko (default) or, if `False`, simple ko only.
+        illegal_action: `"raise"` (default) raises `IllegalMove` on an illegal action;
+            `"lose"` ends the game as a loss for the mover (reward `-1`) instead.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 4}
@@ -159,7 +166,11 @@ class GoEnv(Env[Observation, np.intp]):
         history_length: int = DEFAULT_HISTORY_LENGTH,
         max_moves: int | None = None,
         superko: bool = True,
+        illegal_action: IllegalActionMode = "raise",
     ) -> None:
+        if illegal_action not in ("raise", "lose"):
+            raise ValueError(f"illegal_action must be 'raise' or 'lose', got {illegal_action!r}.")
+        self.illegal_action: IllegalActionMode = illegal_action
         self.size = check_size(size)
         self._default_komi = _check_komi(komi)
         self.komi = self._default_komi
@@ -278,6 +289,11 @@ class GoEnv(Env[Observation, np.intp]):
             raise InvalidAction(action, self.action_space)
 
         mover = _COLOR_NAME[self._board.to_play]
+        if self.illegal_action == "lose" and not self.is_legal(int(action)):
+            self._outcome = self._forfeit()
+            info = self._info()
+            info["illegal_action"] = int(action)
+            return StepResult(self._observe(), -1.0, True, False, info)
         self._apply(int(action))
 
         reward = 0.0
@@ -546,6 +562,20 @@ class GoEnv(Env[Observation, np.intp]):
             reason=reason,
         )
 
+    def _forfeit(self) -> GoResult:
+        """The side to move loses by its illegal move (the board is as it was)."""
+        black, white = self._board.area_score()
+        white_total = white + self.komi
+        loser = self._board.to_play
+        return GoResult(
+            winner=_COLOR_NAME[3 - loser],
+            black=float(black),
+            white=float(white_total),
+            margin=float(black - white_total),
+            result="W+F" if loser == BLACK else "B+F",
+            reason=REASON_ILLEGAL_MOVE,
+        )
+
     def _observe(self) -> Observation:
         # ObservationEncoder.encode() on the history, without stacking arrays.
         history = self._history
@@ -620,7 +650,9 @@ __all__ = [
     "DEFAULT_KOMI",
     "REASON_TWO_PASSES",
     "REASON_MAX_MOVES",
+    "REASON_ILLEGAL_MOVE",
     "GoEnv",
+    "IllegalActionMode",
     "GoResult",
     "format_result",
     "winner_of",

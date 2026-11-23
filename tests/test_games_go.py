@@ -25,6 +25,7 @@ from sekai.envs.games.go import (
     vertex_to_action,
 )
 from sekai.envs.games.go.env import replay
+from sekai.envs.games.go.rendering import GoRenderer, GoTextRenderer
 
 INFO_KEYS = [
     "legal_action_mask",
@@ -388,6 +389,30 @@ def test_sekai_conventions() -> None:
     copy = pickle.loads(pickle.dumps(excinfo.value))
     assert (copy.action, copy.vertex, copy.reason) == (40, "E5", "occupied")
     assert str(copy) == str(excinfo.value)
+
+
+def test_illegal_action_lose_forfeits_the_game() -> None:
+    env = GoEnv(9, illegal_action="lose")
+    env.reset(seed=0)
+    e5 = env.encode_vertex("E5")
+    env.step(e5)
+    r = env.step(e5)  # White plays on Black's stone
+    assert r.terminated and not r.truncated and r.reward == -1.0
+    assert r.info["result"] == "B+F" and r.info["winner"] == "black"
+    assert r.info["termination"] == "illegal move" and r.info["illegal_action"] == e5
+    assert not r.info["legal_action_mask"].any() and env.to_play == "white"
+    assert env.outcome is not None and env.outcome.reason == "illegal move"
+    assert GoRenderer().status(env).sub == "Black wins by an illegal move."
+    assert "Game over (illegal move): B+F." in GoTextRenderer().render(env)
+    with pytest.raises(GameOver):
+        env.step(env.pass_action)
+    with pytest.raises(ValueError, match="illegal_action"):
+        GoEnv(9, illegal_action="ignore")  # type: ignore[arg-type]
+    # Legal moves play as before.
+    raised, lost = GoEnv(9), GoEnv(9, illegal_action="lose")
+    for env in (raised, lost):
+        env.reset(seed=1, options={"moves": ["E5", "D4", "C3", "pass"]})
+    assert raised.board_string() == lost.board_string()
 
 
 def test_reset_info() -> None:

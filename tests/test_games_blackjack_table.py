@@ -200,6 +200,25 @@ def test_no_peek_rules_surrender_waits_for_the_reveal(hole: str, outcome: str, p
         assert t.last_round["seats"][0]["hands"][0]["payout"] == -5
 
 
+def test_forfeit_loses_the_seats_hands_and_play_moves_on() -> None:
+    # Seat 0: 8 and 8; seat 1: 10 and 9; the dealer: 9 up, 7 in the hole.
+    t = stacked(["8h", "Tc", "9c", "8d", "9h", "7s", "3c"], seats=2)
+    with pytest.raises(IllegalAction, match="only a seat playing"):
+        t.forfeit()  # betting: nothing to give up yet
+    t.act("bet:10")
+    t.act("bet:20")
+    t.act("split")  # seat 0's first eight gets a three
+    with pytest.raises(NotYourTurn):
+        t.forfeit(1)
+    t.forfeit(0)
+    assert t.to_act == 1 and "forfeit" in types(t)
+    hands = t.view()["seats"][0]["hands"]
+    assert [h["outcome"] for h in hands] == ["lose", "lose"] and t.bankrolls[0] == 980
+    t.act("stand")  # seat 1's 19 against the dealer's 16, who draws
+    assert t.phase == "betting" and t.last_round["seats"][0]["net"] == -20
+    assert_conserved(t)
+
+
 def test_a_round_that_needs_more_cards_than_the_shoe_raises_a_blackjack_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

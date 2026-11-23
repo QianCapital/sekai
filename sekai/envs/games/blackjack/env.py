@@ -24,14 +24,17 @@ the agent bets, plays its hands, and the episode terminates when the round is se
   `view` (the public table view), `round_no`, `bankroll`, `rebuy` after a reset, and once
   settled `net` (chips) and `round` (the round's summary).
 
-An illegal action raises `IllegalAction`; stepping a finished round raises `RoundOver`.
+An illegal action raises `IllegalAction`, or with `illegal_action="lose"` ends the round
+as a loss of the seat's stake in it: every hand in play is lost (its whole bet, doubled or
+split), and an action before the bet loses the smallest bet level, with no cards dealt.
+Stepping a finished round raises `RoundOver`.
 """
 
 from __future__ import annotations
 
 import functools
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -57,6 +60,7 @@ from sekai.error import InvalidAction, ResetRequired
 from sekai.spaces.discrete import Discrete
 
 ENV_ID = "Blackjack-v0"
+IllegalActionMode = Literal["raise", "lose"]
 
 
 @functools.lru_cache(maxsize=512)
@@ -88,6 +92,9 @@ class BlackjackEnv(Env[Observation, np.intp]):
         rules: Table rules.
         bankroll: The seat's bankroll at the start of every episode.
         bet_levels: Bet sizes in units of `rules.min_bet`, one action each.
+        illegal_action: `"raise"` (default) raises `IllegalAction` on an illegal action;
+            `"lose"` ends the round as a loss of the seat's stake instead (see the module
+            docstring), so that an illegal action never costs less than the round.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
@@ -97,7 +104,11 @@ class BlackjackEnv(Env[Observation, np.intp]):
         rules: Rules = Rules(),  # noqa: B008 - a frozen dataclass
         bankroll: float = 1000,
         bet_levels: Sequence[int] = DEFAULT_BET_LEVELS,
+        illegal_action: IllegalActionMode = "raise",
     ) -> None:
+        if illegal_action not in ("raise", "lose"):
+            raise ValueError(f"illegal_action must be 'raise' or 'lose', got {illegal_action!r}.")
+        self.illegal_action: IllegalActionMode = illegal_action
         self.rules = rules
         self.bet_levels = validate_bet_levels(bet_levels)
         if self.bet_levels[0] * rules.min_bet > rules.max_bet:
@@ -172,19 +183,38 @@ class BlackjackEnv(Env[Observation, np.intp]):
         if not self.action_space.contains(action):
             raise InvalidAction(action, self.action_space)
         a = int(action)
-        if not self._is_legal(table, a):
+        legal = self._is_legal(table, a)
+        if not legal and self.illegal_action == "raise":
             raise IllegalAction(a, self._illegal_reason(a), self.legal_actions().tolist())
         played = table.rounds_played
-        table.act(action_to_move(a, min_bet=self.rules.min_bet, bet_levels=self.bet_levels))
+        info_extra: dict[str, Any] = {}
+        if legal:
+            table.act(action_to_move(a, min_bet=self.rules.min_bet, bet_levels=self.bet_levels))
+        elif table.phase == "playing":  # illegal_action="lose": the round is given up
+            table.forfeit(0)
+            info_extra["illegal_action"] = a
+        else:  # before the bet: the smallest bet is lost, unplayed
+            stake = self.bet_levels[0] * self.rules.min_bet
+            table.set_bankroll(0, table.bankrolls[0] - stake)
+            self._done = True
+            view = table.view(0)
+            info = self._info(view)
+            info.update(net=-stake, illegal_action=a)
+            return StepResult(
+                observation=encode_view(view, 0, self.bankroll),
+                reward=-stake / self.rules.min_bet,
+                terminated=True,
+                truncated=False,
+                info=info,
+            )
         self._done = table.rounds_played > played
         reward = 0.0
-        info_extra: dict[str, Any] = {}
         if self._done:
             last = table.last_round
             assert last is not None
             net = float(last["seats"][0]["net"])
             reward = net / self.rules.min_bet
-            info_extra = {"net": last["seats"][0]["net"], "round": last}
+            info_extra.update(net=last["seats"][0]["net"], round=last)
         view = table.view(0)
         info = self._info(view)
         info.update(info_extra)

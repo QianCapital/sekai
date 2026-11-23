@@ -793,6 +793,25 @@ class HoldemHand:
         self._stacks[seat] += amount
         self._events.append({"type": "return", "seat": seat, "amount": amount})
 
+    def forfeit(self, *, seat: int | None = None) -> None:
+        """The seat to act gives the hand up: a fold, even where checking is free (when
+        `act` refuses a fold). `HoldemEnv(illegal_action="lose")` plays it for an illegal
+        action.
+
+        Raises:
+            HandComplete: If the hand is over.
+            OutOfTurn: If `seat` is given and it is not that seat's turn.
+        """
+        if self._result is not None or self._to_act is None or self._legal is None:
+            raise HandComplete()
+        actor = self._to_act
+        if seat is not None and seat != actor:
+            raise OutOfTurn(
+                f"It is seat {actor}'s turn, not seat {seat}'s.", action="fold", legal=self._legal
+            )
+        self._log_action(actor, "fold", 0)
+        self._finish_fold(winner=1 - actor)
+
     def _finish_fold(self, winner: int) -> None:
         self._return_uncalled()
         pot = self.pot

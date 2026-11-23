@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 from sekai.envs.games._draw import Painter, fractal_noise, rounded_box_coverage
 from sekai.envs.games.go.actions import COLUMNS
 from sekai.envs.games.go.board import BLACK, EMPTY, WHITE
-from sekai.envs.games.go.env import GoEnv
+from sekai.envs.games.go.env import REASON_ILLEGAL_MOVE, GoEnv
 from sekai.envs.games.go.scoring import GoScore, final_score
 from sekai.envs.games.rendering import (
     BoardRenderer,
@@ -313,6 +313,14 @@ class GoRenderer(BoardRenderer):
         return bool(env.done) or self.time_limit_reached
 
     def status(self, env: Any) -> Status:
+        outcome = env.outcome
+        if outcome is not None and outcome.reason == REASON_ILLEGAL_MOVE:
+            winner = self.player(outcome.winner).name
+            return Status(
+                f"{winner} won",
+                f"{self.labels[outcome.winner]} wins by an illegal move.",
+                tone_for_result(outcome.winner),
+            )
         if self.finished(env):
             score = self.final(env)
             margin = abs(score.margin)

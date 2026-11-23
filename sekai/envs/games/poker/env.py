@@ -9,7 +9,8 @@ interface, like the other two-player games: the caller plays both seats (self-pl
   terminal step it is for the seat that just acted.
 - Actions are the seven-action abstraction of `actions`: `0` fold, `1` check/call, `2`
   min-raise, `3` half pot, `4` pot, `5` two pots, `6` all-in. Illegal actions raise
-  `IllegalAction`; `info["legal_action_mask"]` (or `action_mask()`) says which are legal.
+  `IllegalAction` (or, with `illegal_action="lose"`, fold the hand, even where checking
+  was free); `info["legal_action_mask"]` (or `action_mask()`) says which are legal.
 - `reward` is 0 until the hand ends; on the terminal step it is the net chips won by the
   seat that just acted, in big blinds. `info["payoffs"]` holds both seats' net in big
   blinds (zeros until the end), indexed by seat.
@@ -18,12 +19,12 @@ interface, like the other two-player games: the caller plays both seats (self-pl
 act, `None` once the hand is over), `observer` (whose perspective the observation is),
 `street`, `payoffs`, `view` (the observer's `SeatView`, for policies that want the
 structured state), `last_action` (display text or `None`) and `result` (`HandResult` or
-`None`).
+`None`); after an illegal action that folded the hand, also `illegal_action`.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -41,6 +42,7 @@ from sekai.spaces.discrete import Discrete
 ENV_ID = "HeadsUpHoldem-v0"
 
 Observation = NDArray[np.float32]
+IllegalActionMode = Literal["raise", "lose"]
 
 
 class HoldemEnv(Env[Observation, np.intp]):
@@ -52,6 +54,9 @@ class HoldemEnv(Env[Observation, np.intp]):
         stack: Both seats' starting stack (`reset(options={"stacks": ...})` overrides it).
         history_length: The number of most recent actions appended to the observation (6
             slots each); `0` keeps the compact 125-slot observation.
+        illegal_action: `"raise"` (default) raises `IllegalAction` on an illegal action;
+            `"lose"` folds the hand for the seat instead (it loses what it has put in),
+            even where checking was free.
 
     `reset` options: `button` (0 or 1; drawn from the env's generator by default),
     `stacks` (two ints, each larger than the big blind) and `deck` (a fixed card order,
@@ -74,11 +79,15 @@ class HoldemEnv(Env[Observation, np.intp]):
         big_blind: int = 100,
         stack: int = 10000,
         history_length: int = 0,
+        illegal_action: IllegalActionMode = "raise",
     ) -> None:
         if not 0 < small_blind <= big_blind < stack:
             raise ValueError("Need 0 < small_blind <= big_blind < stack.")
         if history_length < 0:
             raise ValueError("history_length must be >= 0.")
+        if illegal_action not in ("raise", "lose"):
+            raise ValueError(f"illegal_action must be 'raise' or 'lose', got {illegal_action!r}.")
+        self.illegal_action: IllegalActionMode = illegal_action
         self.small_blind = int(small_blind)
         self.big_blind = int(big_blind)
         self.stack = int(stack)
@@ -134,29 +143,37 @@ class HoldemEnv(Env[Observation, np.intp]):
         index = int(action)
         actions = self._abstract_actions()
         concrete = actions[index]
-        if concrete is None:
+        if concrete is None and self.illegal_action == "raise":
             legal = ", ".join(ACTION_NAMES[i] for i, a in enumerate(actions) if a is not None)
             raise IllegalAction(
                 f"Action {index} ({ACTION_NAMES[index]}) is not legal here; legal: {legal}. "
-                "Mask your policy with info['legal_action_mask'].",
+                "Mask your policy with info['legal_action_mask'] (or construct the env with "
+                "illegal_action='lose' to fold the hand instead).",
                 action=index,
                 legal=hand.legal(),
             )
         actor = hand.to_act
         assert actor is not None
-        text = format_action(concrete, hand)
-        hand.act(concrete)
+        if concrete is None:  # illegal_action="lose": the seat gives the hand up
+            text = format_action(Action.fold(), hand)
+            hand.forfeit()
+        else:
+            text = format_action(concrete, hand)
+            hand.act(concrete)
         self._last_actor = actor
 
         payoffs = self._payoffs()
         complete = hand.is_complete
         view = hand.view(self._observer())
+        info = self._info(view, text, payoffs)
+        if concrete is None:
+            info["illegal_action"] = index
         return StepResult(
             observation=self._encode(view),
             reward=payoffs[actor] if complete else 0.0,
             terminated=complete,
             truncated=False,
-            info=self._info(view, text, payoffs),
+            info=info,
         )
 
     # ------------------------------------------------------------------

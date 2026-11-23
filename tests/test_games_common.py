@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -201,6 +202,34 @@ def test_an_opponents_forfeit_names_no_move(env_id: str) -> None:
     result = env.step(int(np.flatnonzero(result.info["legal_action_mask"])[0]))
     assert result.terminated and result.reward == 1.0
     assert result.info["termination"] == "ILLEGAL_MOVE" and result.info["opponent_move"] is None
+
+
+@pytest.mark.parametrize(
+    "env_id", ["Chess-v0", "Go9x9-v0", "Xiangqi-v0", "HeadsUpHoldem-v0", "Blackjack-v0"]
+)
+def test_with_illegal_action_lose_unmasked_tools_work(env_id: str) -> None:
+    # gymnasium's check_env steps with unmasked samples, as do learners without masks.
+    pytest.importorskip("gymnasium")
+    from gymnasium.utils.env_checker import check_env
+
+    from sekai.compat import to_gymnasium
+
+    for seed in range(3):
+        env = to_gymnasium(sekai.make(env_id, illegal_action="lose"))
+        env.action_space.seed(seed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            check_env(env, skip_render_check=True)
+        env.reset(seed=seed)
+        forfeits = 0
+        for _ in range(300):
+            _, reward, terminated, truncated, info = env.step(env.action_space.sample())
+            if "illegal_action" in info:
+                forfeits += 1
+                assert terminated and reward < 0
+            if terminated or truncated:
+                env.reset()
+        assert forfeits > 0
 
 
 def test_opponent_wrapper_needs_a_two_player_game() -> None:

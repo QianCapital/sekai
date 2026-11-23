@@ -5,7 +5,8 @@ casino deals it. It is driven by text moves for whichever seat is to act:
 
 - `"bet:<amount>"` during the betting phase (a multiple of `bet_increment` between
   `min_bet` and `min(max_bet, bankroll)`). Bets come off the bankroll when placed.
-- `"hit"`, `"stand"`, `"double"`, `"split"`, `"surrender"` while playing.
+- `"hit"`, `"stand"`, `"double"`, `"split"`, `"surrender"` while playing; `forfeit()`
+  gives the round up instead (every hand of the seat in play is lost).
 
 Round flow:
 
@@ -55,6 +56,7 @@ Events: `events` is a JSON-friendly ordered log. Every event has `seq` (increasi
 | `action` | `seat`, `hand`, `action` |
 | `dealer_reveal` | `card`, `cards`, `total`, `blackjack` |
 | `dealer_draw` | `card`, `total` |
+| `forfeit` | `seat`, `hand` (the hand to act; every hand the seat had in play is lost) |
 | `settle` | `seat`, `hand`, `outcome`, `payout` |
 | `round_end` | `net` (per seat, `None` for seats that sat out), `dealer_total` |
 
@@ -363,6 +365,29 @@ class BlackjackTable:
             self._place_bet(action, move)
         else:
             self._play(action, move)
+
+    def forfeit(self, seat: int | None = None) -> None:
+        """The seat to act gives up the round: every hand it still has in it is lost (its
+        whole bet, doubled or split), and play moves on to the next seat or the dealer.
+
+        `BlackjackEnv(illegal_action="lose")` plays it for an illegal action. Only while
+        playing: a bet is not lost before it is placed.
+
+        Raises:
+            NotYourTurn: If `seat` is given and it is not that seat's turn.
+            IllegalAction: If no seat is playing a hand (during betting).
+        """
+        if seat is not None and seat != self._to_act:
+            raise NotYourTurn(seat, self._to_act)
+        i, h = self._to_act, self._active_hand
+        if self._phase != "playing" or i is None or h is None:
+            raise IllegalAction("forfeit", "only a seat playing a hand can forfeit the round")
+        self._log("forfeit", seat=i, hand=h)
+        for k, hand in enumerate(self._seats[i].hands):
+            if hand.outcome is None:
+                hand.status = "done"
+                self._settle(i, k, "lose")
+        self._advance()
 
     def set_bankroll(self, seat: int, amount: float) -> None:
         """Set a seat's bankroll between rounds (a rebuy or cash-out).
