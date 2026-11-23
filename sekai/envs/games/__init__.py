@@ -11,9 +11,11 @@ and tree search needs nothing else:
 
 - The env is played from both sides by the caller (self-play): each step is a move by
   the player to act, and the observation is always from the point of view of the player
-  to act. `OpponentWrapper` plays one side with a fixed policy instead.
+  to act. `OpponentWrapper` plays one side with a fixed policy instead, and
+  `MultiAgentGame` makes the game a `sekai.MultiAgentEnv` with an agent for each side.
 - `info["legal_action_mask"]` (an `int8` mask; also `env.action_mask()`) marks the
-  legal actions. An illegal action raises `IllegalMove`.
+  legal actions. An illegal action raises `IllegalMove`, or with `illegal_action="lose"`
+  loses the game (in poker it folds the hand, in blackjack it loses the round's stake).
 - Rewards come at the end of the game, for the player who just moved: `+1` win, `-1`
   loss, `0` draw (net big blinds in poker), and `0` on every other step.
 - The board games have `clone()`, an independent copy to search from.
@@ -31,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from sekai.envs.games.errors import GameError, GameOver, IllegalMove
 from sekai.envs.games.policies import Policy, RandomPolicy
 from sekai.envs.games.rendering import DARK, LIGHT, GameRenderer, GameTheme
+from sekai.envs.games.multi_agent import MultiAgentGame
 from sekai.envs.games.wrappers import OpponentWrapper
 
 if TYPE_CHECKING:
@@ -93,6 +96,7 @@ __all__ = [
     "LIGHT",
     # Playing
     "OpponentWrapper",
+    "MultiAgentGame",
     "Policy",
     "RandomPolicy",
     # Errors

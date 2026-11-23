@@ -22,6 +22,27 @@ MAX_REDEALS = 100
 """How many games in a row the opponent may end before the agent's first move."""
 
 
+def check_private_views(env: Env[Any, Any], name: str) -> None:
+    """Refuse observation wrappers around a game of hidden information (poker) inside the
+    adapter `name`: each observation is one seat's private view, which the adapter hands
+    to the right seat from the env itself, and a wrapper inside would see both seats'."""
+    base = env.unwrapped
+    if getattr(base, "_seat_view", None) is None:
+        return
+    layer: Any = env
+    while isinstance(layer, Wrapper):
+        inner = layer.env
+        if isinstance(layer, ObservationWrapper) or (
+            layer.observation_space != inner.observation_space
+        ):
+            raise TypeError(
+                f"{type(layer).__name__} inside {name} would see both seats' private views "
+                f"of {type(base).__name__}: wrap the {name} in it instead (an opponent that "
+                "needs its own can apply it in act())."
+            )
+        layer = inner
+
+
 class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
     """A two-player game against a fixed opponent: one agent, the other side automatic.
 
@@ -77,21 +98,7 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
             raise TypeError(
                 f"OpponentWrapper needs a two-player game env, got {type(base).__name__}."
             )
-        if getattr(base, "_seat_view", None) is not None:
-            # A game of hidden information: each observation is one seat's private view, and
-            # the wrapper hands the agent its own from the env itself.
-            layer: Any = env
-            while isinstance(layer, Wrapper):
-                inner = layer.env
-                if isinstance(layer, ObservationWrapper) or (
-                    layer.observation_space != inner.observation_space
-                ):
-                    raise TypeError(
-                        f"{type(layer).__name__} inside OpponentWrapper would see both seats' "
-                        f"private views of {type(base).__name__}: wrap the OpponentWrapper in "
-                        "it instead (an opponent that needs its own can apply it in act())."
-                    )
-                layer = inner
+        check_private_views(env, "OpponentWrapper")
         self.opponent: Policy = opponent if opponent is not None else RandomPolicy()
         self._players: tuple[Any, Any] = (players[0], players[1])
         self._spec = self._parse(agent_color, tuple(sides))
