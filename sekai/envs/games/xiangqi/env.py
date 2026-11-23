@@ -159,7 +159,9 @@ class XiangqiEnv(Env[Observation, np.intp]):
 
     `reset` options: `fen` (starting position) and `moves` (a list of UCCI moves to
     replay from it, e.g. to restore a game; the observation history and repetition counts
-    are rebuilt exactly as if the moves had been stepped).
+    are rebuilt exactly as if the moves had been stepped). A position that is already
+    over is returned as it is, with no legal moves: check `env.done` (or
+    `info["termination"]`) before stepping.
     """
 
     metadata: ClassVar[dict[str, Any]] = {"render_fps": 2}
@@ -210,8 +212,10 @@ class XiangqiEnv(Env[Observation, np.intp]):
         self._set_rng(seed)
         options = options or {}
         fen = options.get("fen")
-        moves = options.get("moves") or ()
-        if isinstance(moves, str):
+        moves = options.get("moves")
+        if moves is None:  # (not `or ()`: an array of actions has no truth value)
+            moves = ()
+        elif isinstance(moves, str):
             moves = moves.split()
         saved = dict(self.__dict__)
         try:

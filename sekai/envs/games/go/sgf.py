@@ -80,6 +80,8 @@ def to_sgf(
     size = check_size(size)
     if date is None:
         date = _dt.date.today()
+    if isinstance(date, _dt.datetime):  # (a date and time: SGF's DT holds the date)
+        date = date.date()
     if isinstance(date, _dt.date):
         date = date.isoformat()
     props = [

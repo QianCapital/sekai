@@ -187,6 +187,7 @@ def test_handicap_names_dates_and_integer_moves() -> None:
     assert ";W[pq];B[qd])" in sgf  # White moves first after the handicap
     assert "PB[Visitor [guest\\]]" in sgf and "PW[Tree\\\\Search]" in sgf
     assert "DT[2026-01-02]" in sgf and "KM[0.5]" in sgf and "RE[" not in sgf
+    assert "DT[2026-01-02]" in to_sgf(9, 7, [], date=datetime.datetime(2026, 1, 2, 13, 5))
     assert to_sgf(9, 7, [40, 81], date="x").count(";B[ee];W[]") == 1
     assert "KM[7]" in to_sgf(9, 7, [], date="x")
     assert "DT[" in to_sgf(9, 7.5, [])

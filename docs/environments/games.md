@@ -31,10 +31,18 @@ play both sides and let tree search work on the environment directly:
   the board is turned (chess, xiangqi) or the planes are split into "mine" and "theirs"
   (go), and in poker it holds only what that seat may know.
 - **Only legal moves.** `info["legal_action_mask"]` is an `int8` mask of the legal
-  actions (also `env.action_mask()`, sekai's [action-mask convention](../guide/training.md#action-masks-maskableppo),
-  which `check_env`, `action_space.sample(mask=...)` and MaskablePPO understand), and
+  actions (also the env's `action_mask()`, sekai's
+  [action-mask convention](../guide/training.md#action-masks-maskableppo), which
+  `sekai.check_env`, `action_space.sample(mask=...)` and MaskablePPO understand; through
+  wrappers such as `TimeLimit`, `sekai.get_action_mask(env)` finds it), and
   `info["legal_actions"]` lists them. An illegal action raises `IllegalMove` (chess and
-  xiangqi can instead forfeit the game with `illegal_action="lose"`).
+  xiangqi can instead forfeit the game with `illegal_action="lose"`), so checkers that
+  step with unmasked random actions, such as gymnasium's and Stable-Baselines3's
+  `check_env`, stop at the first illegal one: check the games with `sekai.check_env` (or
+  `sekai check`), which samples within the mask.
+- **A reset can start where the game is over.** A `fen`, or `moves` replayed, may reach
+  the end of a game (mate, stalemate, two passes): the reset returns that position with
+  no legal moves, so check `env.done` (or `info["termination"]`) before stepping.
 - **Rewards at the end, for the player who just moved:** `+1` for a win, `-1` for a loss,
   `0` for a draw (in poker, the net chips won, in big blinds), and `0` on every other
   step. From the other player's side the reward is the negative: the games are zero-sum.
@@ -214,7 +222,7 @@ and `winner`; once over also `score` (each side's points) and `termination`
 ```python
 GoEnv(size=9, komi=7.5, history_length=8, max_moves=None, superko=True)
 env.reset(options={"komi": 6.5, "handicap": 4})        # 2-9 stones on the star points
-env.reset(options={"moves": ["D4", "Q16", "pass"]})     # replay moves (vertices or actions)
+env.reset(options={"moves": ["D4", "F6", "pass"]})      # replay moves (vertices or actions)
 env.reset(options={"board": board_string, "to_play": "white"})  # set up a position
 ```
 
@@ -357,9 +365,10 @@ env.reset(options={"keep_bankroll": True})  # or {"bankroll": 500}, {"new_shoe":
 `reset()` deals the next round from the same shoe, with the bankroll back at its starting
 value unless the options say otherwise: `keep_bankroll` carries it over (rebuying, and
 setting `info["rebuy"]`, when it falls below the smallest bet), `bankroll` sets it, and
-`new_shoe` (as does a seed) starts a fresh shoe. A round in progress is never abandoned:
-resetting in the middle of one without a seed carries on with it, and raises
-`IllegalAction` if that would change the bankroll. `Rules` sets the decks, the dealer's
+`new_shoe` (as does a seed) starts a fresh shoe. A round still in play when `reset()` is
+called (when a `TimeLimit` stops an episode, say) is finished first, standing on its
+remaining hands, so the shoe and the count go on as at a table; with `keep_bankroll`, the
+bankroll carries that round's result. `Rules` sets the decks, the dealer's
 soft 17, the payout of a natural, doubling, splitting, surrender, the peek, the
 penetration and the table limits; `sekai.envs.games.blackjack` also has the multi-seat
 `BlackjackTable` that the environment deals from.

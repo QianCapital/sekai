@@ -12,10 +12,13 @@ import pytest
 import sekai
 from sekai.envs.games import OpponentWrapper, RandomPolicy
 from sekai.envs.games.chess import (
+    BISHOP,
     BLACK,
     NUM_ACTIONS,
     NUM_VALID_ACTIONS,
+    PAWN,
     QUEEN,
+    ROOK,
     WHITE,
     AmbiguousMoveError,
     Board,
@@ -36,6 +39,7 @@ from sekai.envs.games.chess import (
     to_pgn,
 )
 from sekai.envs.games.chess.board import STARTING_FEN
+from sekai.envs.games.chess.rendering import material
 
 # ---------------------------------------------------------------------------
 # The rules engine
@@ -338,8 +342,22 @@ def test_illegal_actions() -> None:
     result = lose.step(0)
     assert result.reward == -1.0 and result.terminated
     assert result.info["termination"] == "ILLEGAL_MOVE" and result.info["illegal_action"] == 0
+    assert result.info["last_move"] is None  # no move on the board yet
+    lose.reset()
+    lose.step(lose.encode_move("e2e4"))
+    result = lose.step(0)  # the last move on the board, as xiangqi's info has it
+    assert result.info["last_move"] == "e2e4" and result.info["ply"] == 1
     with pytest.raises(ValueError):
         ChessEnv(illegal_action="ignore")  # type: ignore[arg-type]
+
+
+def test_a_promoted_pawn_is_not_counted_as_captured() -> None:
+    board = Board()
+    for san in ["a4", "b5", "axb5", "a6", "bxa6", "Bb7", "axb7", "Nc6", "bxa8=Q"]:
+        board.push(board.parse_san(san))
+    captured, lead = material(board)
+    assert captured[WHITE] == [ROOK, BISHOP, PAWN, PAWN] and captured[BLACK] == []
+    assert lead == 5 + 3 + 2 + 9 - 1
 
 
 def test_repetitions_end_the_game() -> None:

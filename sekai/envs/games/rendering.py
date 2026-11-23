@@ -7,7 +7,8 @@ material, a dot on the side to move), and for the card games the felt table with
 seats. They draw with NumPy alone and read only the public state of the environment.
 
 There are two themes: `"dark"` (the default, forest ink) and `"light"` (paper). Board
-colours (wood, squares, felt) are the same in both.
+colours (wood, squares, felt) are the same in both, except chess's dark squares, a shade
+lighter on paper.
 
 Every renderer also has a text counterpart (`ChessTextRenderer`, ...) that returns the
 position as a string, for terminals and logs.

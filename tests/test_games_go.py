@@ -559,8 +559,10 @@ def test_moves_option_replays_a_game() -> None:
     assert result.info["ply"] == len(moves) and result.info["last_move"] == "E6"
     np.testing.assert_array_equal(result.observation, stepped.observe())
     np.testing.assert_array_equal(result.info["legal_action_mask"], stepped.legal_action_mask())
-    # Integers work too, and an illegal replay raises.
+    # Integers work too (in an array as well), and an illegal replay raises.
     assert GoEnv(9).reset(options={"moves": [40, 81]}).info["passes"] == 1
+    assert GoEnv(9).reset(options={"moves": np.array([40, 81])}).info["passes"] == 1
+    assert GoEnv(9).reset(options={"moves": np.array([], dtype=np.int64)}).info["ply"] == 0
     with pytest.raises(IllegalMove):
         GoEnv(9).reset(options={"moves": ["E5", "E5"]})
     with pytest.raises(GameOver):

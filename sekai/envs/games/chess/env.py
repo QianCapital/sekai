@@ -110,6 +110,8 @@ class ChessEnv(Env[Observation, np.intp]):
             seventy-five-move rule).
         starting_fen: position to start every episode from. `None` is the standard
             initial position. `reset(options={"fen": ...})` overrides it per episode.
+            A position that is already over (mate, stalemate) is returned as it is, with
+            no legal moves: check `env.done` (or `info["termination"]`) before stepping.
 
     `info` holds `legal_action_mask` (`int8`), `legal_actions` (`int64`), `to_play`
     (`True` for White), `fen`, `last_move` (UCI or `None`), `ply`, `is_check`, `result`
@@ -188,7 +190,7 @@ class ChessEnv(Env[Observation, np.intp]):
             if self.illegal_action == "raise":
                 raise IllegalMove(action, move, board.fen())
             self._outcome = GameResult(termination="ILLEGAL_MOVE", winner=not mover)
-            info = self._info(last_move=None)
+            info = self._info(last_move=board.peek() if board.move_stack else None)
             info["illegal_action"] = action
             return StepResult(self._observe(), -1.0, True, False, info)
 

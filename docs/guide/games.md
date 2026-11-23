@@ -74,13 +74,21 @@ cards consistently with what a seat has seen (`HoldemHand.from_view` does).
 
 ## Many games at once
 
-The game envs vectorise like any other, with autoreset:
+The game envs vectorise like any other, with autoreset. A game that ends is reset in the
+same step: its `info` describes the game that ended (with an all-zero mask), and the new
+game's is in `info["reset_info"]`, so take the next masks from there:
 
 ```python
 vec = sekai.make_vec("Go9x9-v0", num_envs=64, vectorization_mode="proc")
 batch = vec.reset(seed=0)
 masks = np.stack([info["legal_action_mask"] for info in batch.infos])
+for _ in range(1000):
+    actions = [np.random.choice(np.flatnonzero(mask)) for mask in masks]  # (or a network's)
+    batch = vec.step(np.array(actions))
+    masks = np.stack([info.get("reset_info", info)["legal_action_mask"] for info in batch.infos])
 ```
+
+(`vec.call("action_mask")` returns the same masks, from the envs themselves.)
 
 Batching the network's evaluations across many games in flight (for search: across the
 roots of many searches) is where most of the speed of self-play comes from on a GPU.

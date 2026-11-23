@@ -2,7 +2,7 @@
 
 `ChessRenderer` draws the board as an RGB frame: cream and green squares,
 Colin M.L. Burnett's pieces, the last move tinted gold, a red glow under a king in check,
-coordinates in the corner squares, and a strip for each player with the material they
+coordinates in the edge squares, and a strip for each player with the material they
 have captured. `ChessTextRenderer` returns the board as text with chess symbols.
 
     renderer = ChessRenderer(orientation="mover")
@@ -65,16 +65,25 @@ def _piece_code(kind: int, color: Color) -> str:
 
 def material(board: Board) -> tuple[dict[Color, list[int]], int]:
     """The pieces each side has captured (by type, most valuable first) and White's lead
-    in pawns (queen 9, rook 5, bishop and knight 3, pawn 1)."""
+    in pawns (queen 9, rook 5, bishop and knight 3, pawn 1).
+
+    A side's pieces beyond the starting set are promoted pawns, which no one captured."""
     counts = {WHITE: dict.fromkeys(_START, 0), BLACK: dict.fromkeys(_START, 0)}
     for kind, color in board.piece_map().values():
         if kind in _START:
             counts[color][kind] += 1
+    promoted = {
+        color: sum(max(0, counts[color][kind] - _START[kind]) for kind in _START if kind != PAWN)
+        for color in (WHITE, BLACK)
+    }
     captured: dict[Color, list[int]] = {WHITE: [], BLACK: []}
     score = 0
     for kind in (QUEEN, ROOK, BISHOP, KNIGHT, PAWN):
-        captured[WHITE] += [kind] * max(0, _START[kind] - counts[BLACK][kind])
-        captured[BLACK] += [kind] * max(0, _START[kind] - counts[WHITE][kind])
+        for color, other in ((WHITE, BLACK), (BLACK, WHITE)):
+            missing = _START[kind] - counts[other][kind]
+            if kind == PAWN:
+                missing -= promoted[other]
+            captured[color] += [kind] * max(0, missing)
         score += (counts[WHITE][kind] - counts[BLACK][kind]) * _VALUES[kind]
     return captured, score
 

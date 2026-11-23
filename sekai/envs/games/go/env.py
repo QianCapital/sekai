@@ -261,7 +261,8 @@ class GoEnv(Env[Observation, np.intp]):
         self._record_position()
         self._has_reset = True
 
-        for move in opts.get("moves") or ():
+        moves = opts.get("moves")
+        for move in () if moves is None else moves:  # (a list, or an array of actions)
             if self._outcome is not None:
                 raise GameOver(self._outcome.result)
             self._apply(self._to_action(move))

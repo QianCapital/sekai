@@ -548,8 +548,9 @@ def test_moves_replay_matches_stepping() -> None:
     assert reset.info["fen"] == last.info["fen"] and reset.info["ply"] == len(moves)
     assert reset.info["last_move"] == "b7b3" and replayed.moves == moves
     np.testing.assert_array_equal(reset.info["legal_action_mask"], last.info["legal_action_mask"])
-    # A space-separated string works too, and so does replaying from a FEN.
+    # A space-separated string works too (and an array), and so does replaying from a FEN.
     assert replayed.reset(options={"moves": " ".join(moves)}).info["fen"] == last.info["fen"]
+    assert replayed.reset(options={"moves": np.array(moves)}).info["fen"] == last.info["fen"]
     mid = XiangqiEnv().reset(options={"fen": stepped.fen, "moves": ["a0a1"]})
     assert mid.info["last_move"] == "a0a1"
 
