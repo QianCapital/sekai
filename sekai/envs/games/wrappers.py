@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import numpy as np
+
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
 from sekai.core.wrapper import Wrapper
 from sekai.envs.games.policies import Policy, RandomPolicy
+from sekai.utils.seeding import make_seed_sequence
 
 MAX_REDEALS = 100
 """How many games in a row the opponent may end before the agent's first move."""
@@ -28,18 +31,25 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
     subtracted (the games are zero-sum). At the end of a game the agent gets `+1` for a
     win and `-1` for a loss in the board games, and its net in big blinds in poker.
 
+    The last observation of a game is the env's: in the board games it is from the side to
+    move, which is the opponent's when the agent's own move ended the game (or a
+    `TimeLimit` inside stopped it); in poker, where the observation is a seat's private
+    view, it is always the agent's own.
+
     Args:
         env: A two-player game env (chess, go, xiangqi or heads-up hold'em), possibly
             wrapped (e.g. in `TimeLimit`).
         opponent: Any policy with `act(observation, info) -> action`; by default
-            `RandomPolicy`. If it has a `seed()` method it is re-seeded with the seed
-            passed to `reset()`.
+            `RandomPolicy`. If it has a `seed()` method, `reset(seed=...)` re-seeds it
+            with a seed derived from that one, so its choices are independent of the
+            env's own draws.
         agent_color: The side the agent plays: a side's name (`"white"`, `"black"`,
             `"red"`, `"p1"`, `"p2"`), a value of the env's `info["to_play"]`, `"first"`,
             `"second"`, or `"random"` (drawn from the env's generator at every reset).
 
     `info` gains `"agent_color"` (the agent's side, as `info["to_play"]` names it) and,
-    after the opponent has moved, `"opponent_action"` and `"opponent_move"`.
+    after the opponent has moved, `"opponent_action"` and `"opponent_move"` (`None` if
+    the opponent's action was illegal and forfeited the game).
 
     A game the opponent ends before the agent has moved (in poker, a fold from the small
     blind) gives the agent nothing to do, so `reset()` deals again; the agent's rewards in
@@ -99,7 +109,12 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
         while True:
             result = self.env.reset(seed=seed, options=options)
             if seed is not None and hasattr(self.opponent, "seed"):
-                self.opponent.seed(seed)
+                # Not the env's seed itself: the same seed gives the same stream, and the
+                # opponent's first choice would follow the env's first draw (the colours).
+                if isinstance(seed, np.random.Generator):
+                    self.opponent.seed(seed)
+                else:
+                    self.opponent.seed(make_seed_sequence(int(seed), 1)[0])
             seed = None  # a game dealt again continues the generators' streams
             self.agent_color = self._resolve()
             observation, info = result.observation, dict(result.info)
@@ -141,20 +156,28 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
         while not reply.done and reply.info["to_play"] != self.agent_color:
             reply = self._opponent_reply(reply.observation, reply.info)
             reward -= float(reply.reward)
+        observation, info = reply.observation, {**reply.info, "agent_color": self.agent_color}
+        seat_view = getattr(self.env.unwrapped, "_seat_view", None)
+        if reply.done and seat_view is not None:
+            # The opponent ended the game, and the env's last observation is the private
+            # view of the seat that moved last: give the agent its own.
+            observation, mine = seat_view(self.agent_color)
+            info.update(mine)
         return StepResult(
-            observation=reply.observation,
+            observation=observation,
             reward=reward,
             terminated=reply.terminated,
             truncated=reply.truncated,
-            info={**reply.info, "agent_color": self.agent_color},
+            info=info,
         )
 
     def _opponent_reply(self, observation: ObsType, info: dict[str, Any]) -> StepResult[ObsType]:
         opponent_action = int(self.opponent.act(observation, info))
         reply = self.env.step(cast(ActType, opponent_action))  # the games' actions are ints
-        move = (
-            reply.info["last_move"] if "last_move" in reply.info else reply.info.get("last_action")
-        )
+        if "illegal_action" in reply.info:  # a forfeit: no move was made
+            move = None
+        else:
+            move = reply.info.get("last_move", reply.info.get("last_action"))
         return StepResult(
             observation=reply.observation,
             reward=reply.reward,

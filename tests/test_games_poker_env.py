@@ -445,6 +445,25 @@ def test_opponent_rewards_are_the_agents_in_big_blinds() -> None:
     assert r.terminated and r.reward == pytest.approx(-0.5)
 
 
+def test_a_hand_the_opponent_ends_ends_in_the_agents_own_view() -> None:
+    # The env's last observation is the last actor's private view; when that is the
+    # opponent (it folds, or calls to a showdown), the agent gets its own seat's.
+    for opponent, deck in ((Folder(), DECK), (CheckCall(), DECK)):
+        env = OpponentWrapper(HoldemEnv(), opponent, agent_color="p2")
+        env.reset(options={"button": 1, "deck": deck})  # the agent's button: it acts first
+        r = env.step(ALL_IN)
+        base = env.unwrapped
+        assert r.terminated and r.info["observer"] == 1 and r.info["view"].seat == 1
+        np.testing.assert_array_equal(r.observation, base.observe(1))
+        assert r.info["view"].holes[1] == tuple(base.hand.hole(1))
+        if isinstance(opponent, Folder):  # the folded cards stay hidden
+            assert r.info["view"].holes[0] is None
+    env = OpponentWrapper(HoldemEnv(), CheckCall(), agent_color="p2")
+    env.reset(options={"button": 1, "deck": DECK})
+    r = env.step(FOLD)  # the agent's own fold: its own view, as before
+    assert r.info["observer"] == 1
+
+
 def test_opponent_wrapper_deals_again_when_the_opponent_ends_the_hand() -> None:
     # The folding opponent ends every hand in which it has the button and acts first.
     env = OpponentWrapper(HoldemEnv(), Folder(), agent_color="p2")

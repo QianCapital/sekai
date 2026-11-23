@@ -202,6 +202,13 @@ class HoldemEnv(Env[Observation, np.intp]):
         to_act = self.hand.to_act
         return self._last_actor if to_act is None else to_act
 
+    def _seat_view(self, seat: int) -> tuple[Observation, dict[str, Any]]:
+        """The observation for `seat` and the `info` entries that depend on the viewer:
+        what `OpponentWrapper` gives the agent when the opponent's action ends the hand
+        (the env's own last observation is the last actor's)."""
+        view = self.hand.view(seat)
+        return self._encode(view), {"observer": view.seat, "view": view, "result": view.result}
+
     def _abstract_actions(self) -> list[Action | None]:
         """`abstract_actions(self.hand)`, computed once per state of the hand."""
         hand = self.hand

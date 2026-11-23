@@ -172,6 +172,37 @@ def test_random_policy() -> None:
         policy.act(None, {"legal_action_mask": np.zeros(10, dtype=np.int8)})
 
 
+@pytest.mark.parametrize(
+    ("env_id", "agent_color"),
+    [("Chess-v0", "random"), ("Xiangqi-v0", "random"), ("HeadsUpHoldem-v0", "p1")],
+)
+def test_the_opponents_choices_do_not_follow_the_envs_draws(env_id: str, agent_color: str) -> None:
+    # Seeded with the env's own seed, the opponent's generator repeated the env's, whose
+    # first draw picks the colours (in poker, the button): the opponent's first move, when
+    # it moves first, then always came from the same half of the legal moves.
+    opening = np.flatnonzero(sekai.make(env_id).reset(seed=0).info["legal_action_mask"])
+    env = OpponentWrapper(sekai.make(env_id), RandomPolicy(), agent_color=agent_color)
+    halves = []
+    for seed in range(60):
+        info = env.reset(seed=seed).info
+        if "opponent_action" in info and "skipped_rewards" not in info:  # it moved first
+            halves.append(list(opening).index(info["opponent_action"]) < len(opening) / 2)
+    assert len(halves) > 15 and 0.2 < np.mean(halves) < 0.8
+
+
+@pytest.mark.parametrize("env_id", ["Chess-v0", "Xiangqi-v0"])
+def test_an_opponents_forfeit_names_no_move(env_id: str) -> None:
+    class Illegal:
+        def act(self, observation: Any, info: dict[str, Any]) -> int:
+            return int(np.flatnonzero(info["legal_action_mask"] == 0)[0])
+
+    env = OpponentWrapper(sekai.make(env_id, illegal_action="lose"), Illegal(), agent_color="first")
+    result: Any = env.reset(seed=0)
+    result = env.step(int(np.flatnonzero(result.info["legal_action_mask"])[0]))
+    assert result.terminated and result.reward == 1.0
+    assert result.info["termination"] == "ILLEGAL_MOVE" and result.info["opponent_move"] is None
+
+
 def test_opponent_wrapper_needs_a_two_player_game() -> None:
     with pytest.raises(TypeError):
         OpponentWrapper(sekai.make("CartPole-v1"))  # type: ignore[arg-type]
