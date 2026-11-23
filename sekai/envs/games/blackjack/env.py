@@ -7,7 +7,8 @@ the agent bets, plays its hands, and the episode terminates when the round is se
   the count carries from one episode to the next and counting can be learned.
   `reset(seed=...)` (or `options={"new_shoe": True}`) starts a fresh shoe. A round still
   in play when `reset()` is called (a `TimeLimit` stopped the episode) is first finished,
-  standing on its remaining hands.
+  standing on its remaining hands (its result, in no episode's rewards, is in
+  `env.table.last_round`).
 - The **bankroll resets** to `bankroll` every episode unless
   `options={"keep_bankroll": True}` (then it carries over; if it no longer covers the
   smallest bet level it is restored and `info["rebuy"]` is `True`), or

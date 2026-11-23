@@ -24,6 +24,7 @@ from sekai.envs.games.poker import (
     parse_cards,
 )
 from sekai.envs.games.poker import observations as O
+from sekai.wrappers import FrameStackObservation, NormalizeObservation, TimeLimit
 
 DECK = "AsKdQhQc2c7d9hJs3s"
 
@@ -462,6 +463,28 @@ def test_a_hand_the_opponent_ends_ends_in_the_agents_own_view() -> None:
     env.reset(options={"button": 1, "deck": DECK})
     r = env.step(FOLD)  # the agent's own fold: its own view, as before
     assert r.info["observer"] == 1
+
+
+def test_a_hand_a_time_limit_stops_ends_in_the_agents_own_view() -> None:
+    # Stopped after the agent's own action, the env's observation is the next seat's.
+    env = OpponentWrapper(TimeLimit(HoldemEnv(), max_episode_steps=1), CheckCall(), "p2")
+    env.reset(options={"button": 1, "deck": DECK})  # the agent's button: it acts first
+    r = env.step(CHECK_CALL)
+    base = env.unwrapped
+    assert r.truncated and not r.terminated and base.hand.to_act == 0
+    assert r.info["observer"] == 1 and r.info["view"].seat == 1
+    assert r.info["view"].holes[0] is None
+    np.testing.assert_array_equal(r.observation, base.observe(1))
+
+
+def test_observation_wrappers_go_outside_the_opponent_wrapper() -> None:
+    # Inside, they would see both seats' private views, one after the other.
+    for inner in (FrameStackObservation(HoldemEnv(), 2), NormalizeObservation(HoldemEnv())):
+        with pytest.raises(TypeError, match="both seats' private views"):
+            OpponentWrapper(inner)
+    outside = FrameStackObservation(OpponentWrapper(HoldemEnv(), agent_color="p1"), 2)
+    assert outside.reset(seed=0).observation.shape == (2, 125)
+    OpponentWrapper(TimeLimit(HoldemEnv(), max_episode_steps=50))  # not an observation's
 
 
 def test_opponent_wrapper_deals_again_when_the_opponent_ends_the_hand() -> None:

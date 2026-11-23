@@ -14,7 +14,7 @@ import numpy as np
 from sekai._types import ActType, ObsType, SeedType
 from sekai.core.env import Env
 from sekai.core.result import ResetResult, StepResult
-from sekai.core.wrapper import Wrapper
+from sekai.core.wrapper import ObservationWrapper, Wrapper
 from sekai.envs.games.policies import Policy, RandomPolicy
 from sekai.utils.seeding import make_seed_sequence
 
@@ -38,7 +38,9 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
 
     Args:
         env: A two-player game env (chess, go, xiangqi or heads-up hold'em), possibly
-            wrapped (e.g. in `TimeLimit`).
+            wrapped (e.g. in `TimeLimit`). Wrappers that change the observations go
+            outside (`FrameStackObservation(OpponentWrapper(env))`): poker refuses them
+            inside, where they would see both seats' private views.
         opponent: Any policy with `act(observation, info) -> action`; by default
             `RandomPolicy`. If it has a `seed()` method, `reset(seed=...)` re-seeds it
             with a seed derived from that one, so its choices are independent of the
@@ -73,6 +75,21 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
             raise TypeError(
                 f"OpponentWrapper needs a two-player game env, got {type(base).__name__}."
             )
+        if getattr(base, "_seat_view", None) is not None:
+            # A game of hidden information: each observation is one seat's private view, and
+            # the wrapper hands the agent its own from the env itself.
+            layer: Any = env
+            while isinstance(layer, Wrapper):
+                inner = layer.env
+                if isinstance(layer, ObservationWrapper) or (
+                    layer.observation_space != inner.observation_space
+                ):
+                    raise TypeError(
+                        f"{type(layer).__name__} inside OpponentWrapper would see both seats' "
+                        f"private views of {type(base).__name__}: wrap the OpponentWrapper in "
+                        "it instead (an opponent that needs its own can apply it in act())."
+                    )
+                layer = inner
         self.opponent: Policy = opponent if opponent is not None else RandomPolicy()
         self._players: tuple[Any, Any] = (players[0], players[1])
         self._spec = self._parse(agent_color, tuple(sides))
@@ -143,14 +160,6 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
 
     def step(self, action: ActType) -> StepResult[ObsType]:
         result = self.env.step(action)
-        if result.done:
-            return StepResult(
-                observation=result.observation,
-                reward=result.reward,
-                terminated=result.terminated,
-                truncated=result.truncated,
-                info={**result.info, "agent_color": self.agent_color},
-            )
         reward = float(result.reward)
         reply = result
         while not reply.done and reply.info["to_play"] != self.agent_color:
@@ -159,8 +168,8 @@ class OpponentWrapper(Wrapper[ObsType, ActType, ObsType, ActType]):
         observation, info = reply.observation, {**reply.info, "agent_color": self.agent_color}
         seat_view = getattr(self.env.unwrapped, "_seat_view", None)
         if reply.done and seat_view is not None:
-            # The opponent ended the game, and the env's last observation is the private
-            # view of the seat that moved last: give the agent its own.
+            # The game ended or a TimeLimit stopped it, and the env's last observation is a
+            # seat's private view (the last actor's, or the next one's): give the agent its own.
             observation, mine = seat_view(self.agent_color)
             info.update(mine)
         return StepResult(

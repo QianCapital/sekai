@@ -368,7 +368,8 @@ setting `info["rebuy"]`, when it falls below the smallest bet), `bankroll` sets 
 `new_shoe` (as does a seed) starts a fresh shoe. A round still in play when `reset()` is
 called (when a `TimeLimit` stops an episode, say) is finished first, standing on its
 remaining hands, so the shoe and the count go on as at a table; with `keep_bankroll`, the
-bankroll carries that round's result. `Rules` sets the decks, the dealer's
+bankroll carries that round's result (which no episode's rewards include; it is in
+`env.table.last_round`). `Rules` sets the decks, the dealer's
 soft 17, the payout of a natural, doubling, splitting, surrender, the peek, the
 penetration and the table limits; `sekai.envs.games.blackjack` also has the multi-seat
 `BlackjackTable` that the environment deals from.
