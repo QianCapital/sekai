@@ -18,7 +18,9 @@ Details that are fixed rather than configurable:
 - `dealer_peeks=False` is European no-hole-card play: the dealer still gets a second card
   face down but does not check it until the players are done, and a dealer blackjack then
   takes **everything** wagered, doubles and splits included. A player blackjack against an
-  ace or ten-valued up card is settled only at the end (push against a dealer blackjack).
+  ace or ten-valued up card is settled only at the end (push against a dealer blackjack),
+  and so is a surrender, which a dealer blackjack makes a loss of the whole bet (late
+  surrender: half the bet back only once the dealer has no blackjack).
 - Doubling and splitting need the extra chips in the seat's bankroll.
 """
 

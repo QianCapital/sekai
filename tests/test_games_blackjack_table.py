@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from sekai.envs.games.blackjack import BlackjackTable, Rules, Shoe
-from sekai.envs.games.blackjack.errors import IllegalAction, NotYourTurn
+from sekai.envs.games.blackjack.errors import BlackjackError, IllegalAction, NotYourTurn
 
 DEFAULT_RULES = Rules()
 
@@ -166,6 +166,51 @@ def test_no_peek_rules_natural_waits_for_the_reveal() -> None:
     assert ev.index("dealer_reveal") < ev.index("settle")
     assert t.bankrolls == [1015]
     assert "dealer_draw" not in ev
+
+
+@pytest.mark.parametrize(
+    ("hole", "outcome", "payout"),
+    [("Kc", "lose", -10), ("6c", "surrender", -5)],
+)
+def test_no_peek_rules_surrender_waits_for_the_reveal(hole: str, outcome: str, payout: int) -> None:
+    # Late surrender: half the bet back once the dealer turns out to have no blackjack;
+    # without the peek, a dealer blackjack takes the whole bet.
+    # Seat 0: 9 and 7; seat 1: 5 and 6; the dealer: an ace up, and the hole card.
+    t = stacked(["9h", "5c", "As", "7d", "6h", hole], seats=2, rules=Rules(dealer_peeks=False))
+    t.act("bet:10")
+    t.act("bet:10")
+    t.act("surrender")
+    view = t.view()
+    assert view["seats"][0]["hands"][0]["status"] == "surrendered"
+    assert view["seats"][0]["hands"][0]["outcome"] is None  # (seat 1 still to act)
+    t.act("stand")
+    hand = t.last_round["seats"][0]["hands"][0]
+    assert hand["outcome"] == outcome and hand["payout"] == payout
+    assert "dealer_draw" not in types(t) or hole == "6c"
+    assert_conserved(t)
+    # Against a low up card, or with the peek, it settles at once, as before.
+    settled_at_once = [
+        (["9h", "6s", "7d", "Kc"], Rules(dealer_peeks=False)),
+        (["9h", "As", "7d", "6c"], Rules()),
+    ]
+    for cards, rules in settled_at_once:
+        t = stacked(cards, rules=rules)
+        t.act("bet:10")
+        t.act("surrender")
+        assert t.last_round["seats"][0]["hands"][0]["payout"] == -5
+
+
+def test_a_round_that_needs_more_cards_than_the_shoe_raises_a_blackjack_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Possible only with a small shoe and many hands (one deck, seven seats splitting to
+    # eight hands each); here the shoe is emptied by hand, as if every card were dealt.
+    t = stacked(["9h", "6s", "7d", "Kc"])
+    t.act("bet:10")
+    monkeypatch.setattr(t._shoe, "_cards", [])
+    monkeypatch.setattr(t._shoe, "shuffle", lambda **kwargs: None)
+    with pytest.raises(BlackjackError, match="Every card of the 6-deck shoe is on the table"):
+        t.act("hit")
 
 
 # ----------------------------------------------------------------------------------------

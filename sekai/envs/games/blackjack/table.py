@@ -21,7 +21,9 @@ Round flow:
 4. **Play.** Seats act in order, hand by hand. A split hand gets its second card when
    play reaches it; split aces get one card each and are finished (`done`); a hand
    reaching 21 stands automatically; a double receives one card and is `done`. Busts and
-   surrenders settle immediately.
+   surrenders settle immediately, except a surrender against an ace or ten-valued up card
+   without the peek, which waits for the dealer's hole card: a dealer blackjack takes the
+   whole bet.
 5. **Dealer.** If any hand still needs the dealer, the hole card is revealed and the
    dealer draws to 17 (hitting soft 17 under H17); otherwise the dealer only reveals.
 6. **Settle.** Remaining hands are settled and paid, a round summary is appended to
@@ -73,7 +75,7 @@ import numpy as np
 from sekai._types import SeedType
 from sekai.envs.games.blackjack.actions import ACTIONS
 from sekai.envs.games.blackjack.cards import RANK_VALUE, _natural, _total
-from sekai.envs.games.blackjack.errors import IllegalAction, NotYourTurn
+from sekai.envs.games.blackjack.errors import BlackjackError, IllegalAction, NotYourTurn
 from sekai.envs.games.blackjack.rules import Rules
 from sekai.envs.games.blackjack.shoe import Shoe
 from sekai.utils.seeding import np_random
@@ -511,6 +513,11 @@ class BlackjackTable:
             self._shoe.shuffle(in_play=in_play, visible=visible)
             self._shuffled_this_round = True
             self._log("shuffle", reason="empty")
+            if self._shoe.remaining == 0:
+                raise BlackjackError(
+                    f"Every card of the {self.rules.decks}-deck shoe is on the table, so none "
+                    "is left to deal: play with more decks, or fewer seats or hands."
+                )
         return self._shoe.draw(face_up=face_up)
 
     def _deal_to(self, seat: int, hand: int) -> str:
@@ -659,7 +666,10 @@ class BlackjackTable:
             )
         else:  # surrender
             hand.status = "surrendered"
-            self._settle(seat, h, "surrender")
+            if self.rules.dealer_peeks or RANK_VALUE[self._dealer[0][0]] not in (1, 10):
+                self._settle(seat, h, "surrender")
+            # (else no peek has ruled out a dealer blackjack, which takes the whole bet: the
+            # dealer's turn settles the hand)
         self._advance()
 
     def _next_playing_hand(self) -> tuple[int, int] | None:
@@ -729,7 +739,9 @@ class BlackjackTable:
             if hand.outcome is None
         ]
         dealer_bj = _natural(self._dealer)
-        needs_dealer = not dealer_bj and any(not hand.natural for _, _, hand in hands)
+        needs_dealer = not dealer_bj and any(
+            not hand.natural and hand.status != "surrendered" for _, _, hand in hands
+        )
         if needs_dealer:
             while self._dealer_should_hit():
                 card = self._draw()
@@ -737,7 +749,9 @@ class BlackjackTable:
                 self._log("dealer_draw", card=card, total=_total(self._dealer)[0])
         dealer_total, _ = _total(self._dealer)
         for i, h, hand in hands:
-            if hand.natural:
+            if hand.status == "surrendered":  # (without the peek, against an ace or ten)
+                outcome = "lose" if dealer_bj else "surrender"
+            elif hand.natural:
                 outcome = "push" if dealer_bj else "blackjack"
             elif dealer_bj:
                 outcome = "lose"

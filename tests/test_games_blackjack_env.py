@@ -205,21 +205,36 @@ def test_bankroll_resets_unless_kept() -> None:
     assert r.info["rebuy"] and r.info["bankroll"] == 1000
 
 
-def test_reset_mid_round_keeps_the_round_or_refuses() -> None:
-    env = BlackjackEnv()
-    env.reset(seed=0)
-    env.table._shoe.stack_top(["Th", "9c", "6d", "5s"])  # type: ignore[union-attr]
-    env.step(5)
-    # The bankroll can only change between rounds: a plain reset needs the 1000 back.
-    with pytest.raises(IllegalAction):
-        env.reset()
-    assert env.table is not None and env.table.phase == "playing"
-    # Keeping the bankroll changes nothing, so the round goes on.
-    r = env.reset(options={"keep_bankroll": True})
-    assert r.info["phase"] == "playing" and not env.done
-    # A new shoe abandons it.
-    r = env.reset(options={"new_shoe": True})
-    assert r.info["phase"] == "betting" and r.info["bankroll"] == 1000
+def test_reset_mid_round_finishes_the_round_first() -> None:
+    # 16 against the dealer's 9 and hole card 5, who then draws a ten: 24, bust.
+    for options, bankroll in (({}, 1000), ({"keep_bankroll": True}, 1010)):
+        env = BlackjackEnv()
+        env.reset(seed=0)
+        env.table._shoe.stack_top(["Th", "9c", "6d", "5s", "Tc"])  # type: ignore[union-attr]
+        env.step(5)
+        played = env.table.rounds_played  # type: ignore[union-attr]
+        r = env.reset(options=options)  # stands on the 16
+        assert r.info["phase"] == "betting" and r.info["bankroll"] == bankroll
+        assert env.table.rounds_played == played + 1  # type: ignore[union-attr]
+        assert env.table.last_round["seats"][0]["net"] == 10  # type: ignore[union-attr]
+    # So a time limit and the vector envs' autoreset work as with any env.
+    env = sekai.make("Blackjack-v0", max_episode_steps=1)
+    result = env.reset(seed=3)
+    for _ in range(20):
+        result = env.step(5)
+        assert result.done
+        result = env.reset()
+    vec = sekai.make_vec("Blackjack-v0", num_envs=2, vectorization_mode="sync", max_episode_steps=1)
+    vec.reset(seed=0)
+    for _ in range(10):
+        vec.step(np.array([5, 5]))
+
+
+def test_bet_levels_the_table_cannot_take_are_refused() -> None:
+    with pytest.raises(ValueError, match="above the table maximum"):
+        BlackjackEnv(rules=Rules(max_bet=50), bet_levels=(8, 16))
+    env = BlackjackEnv(rules=Rules(max_bet=50), bet_levels=(1, 8))  # 80 is simply never legal
+    assert env.reset(seed=0).info["legal_action_mask"].tolist() == [0, 0, 0, 0, 0, 1, 0]
 
 
 def test_seeded_episodes_are_reproducible() -> None:
@@ -372,31 +387,31 @@ GOLDEN_CONFIGS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
 }
 
 GOLDEN_DIGESTS: dict[tuple[str, int], tuple[str, int]] = {
-    ("default", 0): ("c4090329c30f55e3773924221842f9b1b4516b1aa0e0d3f791a24a9e1d20974c", 532),
-    ("default", 7): ("11ff88e0d172939cdd83e9035902f6467e182980c28c131155785c03d8dbc1ec", 531),
+    ("default", 0): ("002277ebd88e27ae08ced93f07afb43a095c4da17931f23ef25fecd9d5b8136b", 533),
+    ("default", 7): ("abf8f482484fcd79ed21c7f45205249a55de62b186272cc819e1597e5d036cd9", 533),
     ("single_deck_deep", 0): (
-        "7e054939c0881c6135540ec52494e0c2f4b040215c4a2f79eb4a174025dd039e",
-        520,
+        "08adafd0e05cc373e7539af104e2ec32df54545a9f8c97dd5215555f48755b97",
+        539,
     ),
     ("single_deck_deep", 7): (
-        "293ca3b47255c440c555f501c3edc4b465d4402df3a7cc5c5de0f203ab52720c",
-        534,
+        "477d211647e244b58ea19ed0c068071b67dd319f6fdb7efede528243e00bdff0",
+        537,
     ),
     ("h17_no_peek_six_five", 0): (
-        "4e8da03c0b23bbfe06a31f09133dee9b1ad5fd4c4570604aae7351686fcec7fe",
-        584,
+        "c07c574e550822f50dbe8653842731fca27b2024138a7ff4c327801d4815db34",
+        588,
     ),
     ("h17_no_peek_six_five", 7): (
-        "f66a9ca10631f4f1929acb28be457fe6b7311b9e94ca637fd75a978d5c8f7535",
-        564,
+        "f84b556b2224853a7102907503fbabe8800b3ed9d9e282b3088844446f76673b",
+        579,
     ),
     ("small_bankroll", 0): (
-        "ce9ae6428bc1a233c4a0897ea7045702045607f1f4563282ec73f3c3dfd6df12",
-        528,
+        "12bd00b518d69ff76ace0bc825368e8f0ff803959704d7dc853dae01658801ff",
+        545,
     ),
     ("small_bankroll", 7): (
-        "cf9e689401902c197a1531573acc85bca8a6e51c7eb6a95c6a0ebba59260530c",
-        531,
+        "4f8d1b906468b874b4de68a1ab39d9d71d8555834ca08d94ccde7ce39388201f",
+        537,
     ),
 }
 """Digest and step count of `golden_rollout(env, seed, 250)` by `(config, seed)`."""

@@ -5,7 +5,9 @@ the agent bets, plays its hands, and the episode terminates when the round is se
 
 - **The shoe persists across resets**, reshuffling by penetration as at a real table, so
   the count carries from one episode to the next and counting can be learned.
-  `reset(seed=...)` (or `options={"new_shoe": True}`) starts a fresh shoe.
+  `reset(seed=...)` (or `options={"new_shoe": True}`) starts a fresh shoe. A round still
+  in play when `reset()` is called (a `TimeLimit` stopped the episode) is first finished,
+  standing on its remaining hands.
 - The **bankroll resets** to `bankroll` every episode unless
   `options={"keep_bankroll": True}` (then it carries over; if it no longer covers the
   smallest bet level it is restored and `info["rebuy"]` is `True`), or
@@ -97,6 +99,11 @@ class BlackjackEnv(Env[Observation, np.intp]):
     ) -> None:
         self.rules = rules
         self.bet_levels = validate_bet_levels(bet_levels)
+        if self.bet_levels[0] * rules.min_bet > rules.max_bet:
+            raise ValueError(
+                f"The smallest bet level ({self.bet_levels[0]} x {rules.min_bet}) is above the "
+                f"table maximum ({rules.max_bet}), so no bet could be placed."
+            )
         if bankroll < self.bet_levels[0] * rules.min_bet:
             raise ValueError(
                 f"bankroll {bankroll} does not cover the smallest bet level "
@@ -122,6 +129,11 @@ class BlackjackEnv(Env[Observation, np.intp]):
         """Start the next round (a new shoe with a seed or `new_shoe`); see the module docs."""
         self._set_rng(seed)
         opts = options or {}
+        if self.table is not None:
+            # A round still in play (a TimeLimit stopped the episode, say) is finished first,
+            # standing on its remaining hands, so the shoe and the count go on as at a table.
+            while self.table.phase == "playing":
+                self.table.act("stand")
         carried = self.table.bankrolls[0] if self.table is not None else self.bankroll
         if self.table is None or seed is not None or opts.get("new_shoe"):
             self.table = BlackjackTable(
