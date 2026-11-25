@@ -27,54 +27,63 @@ recording is a wrapper you add or remove without touching the environment.
 The financial markets environments are drawn as dashboards: the market, the agent's
 positions and trades, and its results, as the episode unfolds. Their header is drawn in the
 Qian Capital house style unless you pass `branding=False` (see [Branding](#branding)); the
-tabs show both.
+tabs show both. They are drawn in a light theme by default, or a dark one with
+`theme="dark"`.
 
 === "Qian Capital (default)"
 
-    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif){ loading=lazy title="TradingRenderer" }
-    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif){ loading=lazy title="PortfolioRenderer" }
-    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif){ loading=lazy title="MarketRenderer" }
-    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif){ loading=lazy title="MarketMakingRenderer" }
-    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ loading=lazy title="OptimalExecutionRenderer" }
-    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif#only-light){ loading=lazy title="TradingRenderer" }
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading_dark.gif#only-dark){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif#only-light){ loading=lazy title="PortfolioRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio_dark.gif#only-dark){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif#only-light){ loading=lazy title="MarketRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market_dark.gif#only-dark){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif#only-light){ loading=lazy title="MarketMakingRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making_dark.gif#only-dark){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif#only-light){ loading=lazy title="OptimalExecutionRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution_dark.gif#only-dark){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif#only-light){ loading=lazy title="LimitOrderBookRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book_dark.gif#only-dark){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
 === "Plain (branding=False)"
 
-    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif){ loading=lazy title="TradingRenderer" }
-    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif){ loading=lazy title="PortfolioRenderer" }
-    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif){ loading=lazy title="MarketRenderer" }
-    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif){ loading=lazy title="MarketMakingRenderer" }
-    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif){ loading=lazy title="OptimalExecutionRenderer" }
-    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif#only-light){ loading=lazy title="TradingRenderer" }
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain_dark.gif#only-dark){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif#only-light){ loading=lazy title="PortfolioRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain_dark.gif#only-dark){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif#only-light){ loading=lazy title="MarketRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain_dark.gif#only-dark){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif#only-light){ loading=lazy title="MarketMakingRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain_dark.gif#only-dark){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif#only-light){ loading=lazy title="OptimalExecutionRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain_dark.gif#only-dark){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif#only-light){ loading=lazy title="LimitOrderBookRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain_dark.gif#only-dark){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
 The strategy games are drawn as their boards and card tables, in a dark theme by default or
 a light one (`theme="light"`):
 
-=== "Dark (default)"
-
-    ![Chess-v0, drawn by ChessRenderer](../assets/games_chess.gif){ loading=lazy title="ChessRenderer" }
-    ![Go9x9-v0, drawn by GoRenderer](../assets/games_go.gif){ loading=lazy title="GoRenderer" }
-    ![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi.gif){ loading=lazy title="XiangqiRenderer" }
-    ![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker.gif){ loading=lazy title="HoldemRenderer" }
-    ![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack.gif){ loading=lazy title="BlackjackRenderer" }
-    { .sk-boards }
-
-=== "Light"
-
-    ![Chess-v0, drawn by ChessRenderer in the light theme](../assets/games_chess_light.gif){ loading=lazy title="ChessRenderer" }
-    ![Go9x9-v0, drawn by GoRenderer in the light theme](../assets/games_go_light.gif){ loading=lazy title="GoRenderer" }
-    ![Xiangqi-v0, drawn by XiangqiRenderer in the light theme](../assets/games_xiangqi_light.gif){ loading=lazy title="XiangqiRenderer" }
-    ![HeadsUpHoldem-v0, drawn by HoldemRenderer in the light theme](../assets/games_poker_light.gif){ loading=lazy title="HoldemRenderer" }
-    ![Blackjack-v0, drawn by BlackjackRenderer in the light theme](../assets/games_blackjack_light.gif){ loading=lazy title="BlackjackRenderer" }
-    { .sk-boards }
+![Chess-v0, drawn by ChessRenderer](../assets/games_chess_light.gif#only-light){ loading=lazy title="ChessRenderer" }
+![Chess-v0, drawn by ChessRenderer](../assets/games_chess.gif#only-dark){ loading=lazy title="ChessRenderer" }
+![Go9x9-v0, drawn by GoRenderer](../assets/games_go_light.gif#only-light){ loading=lazy title="GoRenderer" }
+![Go9x9-v0, drawn by GoRenderer](../assets/games_go.gif#only-dark){ loading=lazy title="GoRenderer" }
+![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi_light.gif#only-light){ loading=lazy title="XiangqiRenderer" }
+![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi.gif#only-dark){ loading=lazy title="XiangqiRenderer" }
+![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker_light.gif#only-light){ loading=lazy title="HoldemRenderer" }
+![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker.gif#only-dark){ loading=lazy title="HoldemRenderer" }
+![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack_light.gif#only-light){ loading=lazy title="BlackjackRenderer" }
+![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack.gif#only-dark){ loading=lazy title="BlackjackRenderer" }
+{ .sk-boards }
 
 *These GIFs were produced by the renderers on this page, with `RecordFrames` and
 `save_gif()`; the financial markets ones, in both styles, by
 [`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py),
-and the strategy games, in both themes, by
-[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py).*
+and the strategy games by
+[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py).
+Both scripts record every episode in the light and the dark theme, and the animations follow
+this site's light or dark mode.*
 
 ## The Renderer protocol
 
@@ -468,19 +477,13 @@ of gold metal that fills as the episode goes on.
 
 === "Branded (default)"
 
-    ![Trading-v0 drawn branded, light theme](../assets/branding_branded_light.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+    ![Trading-v0 drawn branded, light theme](../assets/branding_branded_light.png#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+    ![Trading-v0 drawn branded, dark theme](../assets/branding_branded_dark.png#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 === "branding=False"
 
-    ![Trading-v0 drawn plain, light theme](../assets/branding_plain_light.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
-
-=== "Branded, dark"
-
-    ![Trading-v0 drawn branded, dark theme](../assets/branding_branded_dark.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
-
-=== "branding=False, dark"
-
-    ![Trading-v0 drawn plain, dark theme](../assets/branding_plain_dark.png){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+    ![Trading-v0 drawn plain, light theme](../assets/branding_plain_light.png#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+    ![Trading-v0 drawn plain, dark theme](../assets/branding_plain_dark.png#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 `branding=False` draws the plain header that sekai 0.2 drew, a BDO Grotesk title with the
 progress bar in the theme's accent, and the frames are the same as 0.2's, pixel for pixel.

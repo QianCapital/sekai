@@ -27,7 +27,8 @@ Each has an RGB renderer in `sekai.envs.finance` that draws its episodes as a da
 (`TradingRenderer`, `PortfolioRenderer`, `MarketRenderer`, `MarketMakingRenderer`,
 `OptimalExecutionRenderer`, `LimitOrderBookRenderer` and `LimitOrderBookMarketRenderer`):
 the animations on this page, made by
-[`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py).
+[`examples/render_finance.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_finance.py),
+which follow this site's light or dark mode (`theme="light"`, the default, or `"dark"`).
 See [Rendering](../guide/rendering.md#financial-markets) for what each shows, and for
 building the same kind of renderer for your own environment.
 
@@ -99,7 +100,8 @@ they run offline; load real data the same way.
 
 ## Trading-v0
 
-![Trading-v0, drawn by TradingRenderer](../assets/finance_trading.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Trading-v0, drawn by TradingRenderer](../assets/finance_trading.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Trading-v0, drawn by TradingRenderer](../assets/finance_trading_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Trade a single asset by choosing a target position, as a fraction of equity, every step.
 
@@ -185,7 +187,8 @@ a year here.
 
 ## Portfolio-v0
 
-![Portfolio-v0, drawn by PortfolioRenderer](../assets/finance_portfolio.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Portfolio-v0, drawn by PortfolioRenderer](../assets/finance_portfolio.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Portfolio-v0, drawn by PortfolioRenderer](../assets/finance_portfolio_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Allocate wealth across `n_assets` risky assets and cash, rebalancing every step.
 
@@ -342,7 +345,8 @@ print(regimes.n_assets, regimes.observation_space["returns"])  # 4 Box(-inf, inf
 
 ## Market-v0
 
-![Market-v0, drawn by MarketRenderer](../assets/finance_market.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Market-v0, drawn by MarketRenderer](../assets/finance_market.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![Market-v0, drawn by MarketRenderer](../assets/finance_market_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Trade a universe whose members list and delist, with per-asset features, market-wide data,
 any cost model, shorting, leverage and financing: the general-purpose environment,
@@ -580,7 +584,8 @@ print(f"{result.info['equity']:.4f}")  # 1.0188
 
 ## MarketMaking-v0
 
-![MarketMaking-v0, drawn by MarketMakingRenderer](../assets/finance_market_making.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![MarketMaking-v0, drawn by MarketMakingRenderer](../assets/finance_market_making.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![MarketMaking-v0, drawn by MarketMakingRenderer](../assets/finance_market_making_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Quote a bid and an ask around a moving mid price, earning the spread while managing inventory
 risk: the market-making model of Avellaneda & Stoikov (2008), with the parameters of the
@@ -675,7 +680,8 @@ call them on `env.unwrapped`.
 
 ## OptimalExecution-v0
 
-![OptimalExecution-v0, drawn by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![OptimalExecution-v0, drawn by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![OptimalExecution-v0, drawn by OptimalExecutionRenderer](../assets/finance_optimal_execution_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Liquidate a large position over a fixed horizon, trading off market impact (sell fast and
 you move the price) against risk (sell slowly and the price may move against you): the
@@ -790,7 +796,8 @@ print(f"simulated:   E[IS] = ${np.mean(shortfalls):,.0f}, sd = ${np.std(shortfal
 
 ## LimitOrderBook-v0
 
-![LimitOrderBook-v0, drawn by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![LimitOrderBook-v0, drawn by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![LimitOrderBook-v0, drawn by LimitOrderBookRenderer](../assets/finance_limit_order_book_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Make markets, or trade, in a simulated limit order book: the microstructure counterpart of
 `MarketMaking-v0`. Where that environment draws fills from a formula, here the agent's
@@ -916,7 +923,8 @@ positions and recent trades it observes.
 
 ## LimitOrderBookMarket
 
-![LimitOrderBookMarket, drawn by LimitOrderBookMarketRenderer](../assets/finance_order_book_market.gif){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![LimitOrderBookMarket, drawn by LimitOrderBookMarketRenderer](../assets/finance_order_book_market.gif#only-light){ .sk-env-preview .sk-env-preview--wide loading=lazy }
+![LimitOrderBookMarket, drawn by LimitOrderBookMarketRenderer](../assets/finance_order_book_market_dark.gif#only-dark){ .sk-env-preview .sk-env-preview--wide loading=lazy }
 
 Several RL traders in one order book, each deciding on its own clock: an
 [event-driven](../guide/multi-agent.md#event-driven-environments) multi-agent environment

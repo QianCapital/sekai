@@ -94,26 +94,39 @@ NumPy-only RGB renderers.
 
 === "Qian Capital (default)"
 
-    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif){ loading=lazy title="TradingRenderer" }
-    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif){ loading=lazy title="PortfolioRenderer" }
-    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif){ loading=lazy title="MarketRenderer" }
-    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif){ loading=lazy title="MarketMakingRenderer" }
-    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif){ loading=lazy title="OptimalExecutionRenderer" }
-    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading.gif#only-light){ loading=lazy title="TradingRenderer" }
+    ![Trading-v0, drawn branded by TradingRenderer](../assets/finance_trading_dark.gif#only-dark){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio.gif#only-light){ loading=lazy title="PortfolioRenderer" }
+    ![Portfolio-v0, drawn branded by PortfolioRenderer](../assets/finance_portfolio_dark.gif#only-dark){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market.gif#only-light){ loading=lazy title="MarketRenderer" }
+    ![Market-v0, drawn branded by MarketRenderer](../assets/finance_market_dark.gif#only-dark){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making.gif#only-light){ loading=lazy title="MarketMakingRenderer" }
+    ![MarketMaking-v0, drawn branded by MarketMakingRenderer](../assets/finance_market_making_dark.gif#only-dark){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution.gif#only-light){ loading=lazy title="OptimalExecutionRenderer" }
+    ![OptimalExecution-v0, drawn branded by OptimalExecutionRenderer](../assets/finance_optimal_execution_dark.gif#only-dark){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book.gif#only-light){ loading=lazy title="LimitOrderBookRenderer" }
+    ![LimitOrderBook-v0, drawn branded by LimitOrderBookRenderer](../assets/finance_limit_order_book_dark.gif#only-dark){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
 === "Plain (branding=False)"
 
-    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif){ loading=lazy title="TradingRenderer" }
-    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif){ loading=lazy title="PortfolioRenderer" }
-    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif){ loading=lazy title="MarketRenderer" }
-    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif){ loading=lazy title="MarketMakingRenderer" }
-    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif){ loading=lazy title="OptimalExecutionRenderer" }
-    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif){ loading=lazy title="LimitOrderBookRenderer" }
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain.gif#only-light){ loading=lazy title="TradingRenderer" }
+    ![Trading-v0, drawn plain by TradingRenderer](../assets/finance_trading_plain_dark.gif#only-dark){ loading=lazy title="TradingRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain.gif#only-light){ loading=lazy title="PortfolioRenderer" }
+    ![Portfolio-v0, drawn plain by PortfolioRenderer](../assets/finance_portfolio_plain_dark.gif#only-dark){ loading=lazy title="PortfolioRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain.gif#only-light){ loading=lazy title="MarketRenderer" }
+    ![Market-v0, drawn plain by MarketRenderer](../assets/finance_market_plain_dark.gif#only-dark){ loading=lazy title="MarketRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain.gif#only-light){ loading=lazy title="MarketMakingRenderer" }
+    ![MarketMaking-v0, drawn plain by MarketMakingRenderer](../assets/finance_market_making_plain_dark.gif#only-dark){ loading=lazy title="MarketMakingRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain.gif#only-light){ loading=lazy title="OptimalExecutionRenderer" }
+    ![OptimalExecution-v0, drawn plain by OptimalExecutionRenderer](../assets/finance_optimal_execution_plain_dark.gif#only-dark){ loading=lazy title="OptimalExecutionRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain.gif#only-light){ loading=lazy title="LimitOrderBookRenderer" }
+    ![LimitOrderBook-v0, drawn plain by LimitOrderBookRenderer](../assets/finance_limit_order_book_plain_dark.gif#only-dark){ loading=lazy title="LimitOrderBookRenderer" }
     { .sk-dashboards }
 
 Each is drawn by its renderer in `sekai.envs.finance`, with the Qian Capital header or, with
-`branding=False`, the plain one of sekai 0.2 ([Rendering](../guide/rendering.md#branding)).
+`branding=False`, the plain one of sekai 0.2 ([Rendering](../guide/rendering.md#branding)),
+in the light theme (the default) or the dark one, to match this page.
 
 | Environment | You control | The baseline to beat |
 |---|---|---|
@@ -136,23 +149,28 @@ are documented in the [financial markets toolkit](../finance/index.md). Each has
 
 <div class="sk-gallery" markdown>
 <figure markdown>
-![Chess-v0](../assets/games_chess.gif){ loading=lazy }
+![Chess-v0](../assets/games_chess_light.gif#only-light){ loading=lazy }
+![Chess-v0](../assets/games_chess.gif#only-dark){ loading=lazy }
 <figcaption>Chess-v0</figcaption>
 </figure>
 <figure markdown>
-![Go9x9-v0](../assets/games_go.gif){ loading=lazy }
+![Go9x9-v0](../assets/games_go_light.gif#only-light){ loading=lazy }
+![Go9x9-v0](../assets/games_go.gif#only-dark){ loading=lazy }
 <figcaption>Go9x9-v0</figcaption>
 </figure>
 <figure markdown>
-![Xiangqi-v0](../assets/games_xiangqi.gif){ loading=lazy }
+![Xiangqi-v0](../assets/games_xiangqi_light.gif#only-light){ loading=lazy }
+![Xiangqi-v0](../assets/games_xiangqi.gif#only-dark){ loading=lazy }
 <figcaption>Xiangqi-v0</figcaption>
 </figure>
 <figure markdown>
-![HeadsUpHoldem-v0](../assets/games_poker.gif){ loading=lazy }
+![HeadsUpHoldem-v0](../assets/games_poker_light.gif#only-light){ loading=lazy }
+![HeadsUpHoldem-v0](../assets/games_poker.gif#only-dark){ loading=lazy }
 <figcaption>HeadsUpHoldem-v0</figcaption>
 </figure>
 <figure markdown>
-![Blackjack-v0](../assets/games_blackjack.gif){ loading=lazy }
+![Blackjack-v0](../assets/games_blackjack_light.gif#only-light){ loading=lazy }
+![Blackjack-v0](../assets/games_blackjack.gif#only-dark){ loading=lazy }
 <figcaption>Blackjack-v0</figcaption>
 </figure>
 </div>

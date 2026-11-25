@@ -149,7 +149,8 @@ For chess that is `clone(full_stack=False)`; a full clone copies the whole move 
 
 ## Chess
 
-![Chess-v0, drawn by ChessRenderer: the Opera Game, Paul Morphy against the Duke of Brunswick (Paris, 1858)](../assets/games_chess.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Chess-v0, drawn by ChessRenderer: the Opera Game, Paul Morphy against the Duke of Brunswick (Paris, 1858)](../assets/games_chess_light.gif#only-light){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Chess-v0, drawn by ChessRenderer: the Opera Game, Paul Morphy against the Duke of Brunswick (Paris, 1858)](../assets/games_chess.gif#only-dark){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.chess.ChessEnv`: standard chess, with the encodings of AlphaZero.
 
@@ -225,7 +226,8 @@ PGN.
 
 ## Go
 
-![Go9x9-v0, drawn by GoRenderer: random moves that fill no eyes, played until both sides pass, then scored](../assets/games_go.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Go9x9-v0, drawn by GoRenderer: random moves that fill no eyes, played until both sides pass, then scored](../assets/games_go_light.gif#only-light){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Go9x9-v0, drawn by GoRenderer: random moves that fill no eyes, played until both sides pass, then scored](../assets/games_go.gif#only-dark){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.go.GoEnv(size)`: go on a square board of size 2 to 19, with area
 (Tromp-Taylor) scoring, komi, handicaps and positional superko. `Go9x9-v0`, `Go13x13-v0`
@@ -280,7 +282,8 @@ records.
 
 ## Xiangqi
 
-![Xiangqi-v0, drawn by XiangqiRenderer: each side captures when it can and otherwise moves at random](../assets/games_xiangqi.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Xiangqi-v0, drawn by XiangqiRenderer: each side captures when it can and otherwise moves at random](../assets/games_xiangqi_light.gif#only-light){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Xiangqi-v0, drawn by XiangqiRenderer: each side captures when it can and otherwise moves at random](../assets/games_xiangqi.gif#only-dark){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.xiangqi.XiangqiEnv`: Chinese chess with the full rules (the palace, the
 river, blocked horses and elephants, cannon screens, the flying generals).
@@ -327,7 +330,8 @@ env.reset(options={"fen": fen, "moves": ["h2e2", "h9g7"]})  # a position, then m
 
 ## Heads-up no-limit hold'em
 
-![HeadsUpHoldem-v0, drawn by HoldemRenderer: four hands between two random players](../assets/games_poker.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![HeadsUpHoldem-v0, drawn by HoldemRenderer: four hands between two random players](../assets/games_poker_light.gif#only-light){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![HeadsUpHoldem-v0, drawn by HoldemRenderer: four hands between two random players](../assets/games_poker.gif#only-dark){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.poker.HoldemEnv`: one hand of heads-up no-limit Texas hold'em per
 episode, with blinds of 50/100 and stacks of 10,000 by default. The button posts the small
@@ -379,7 +383,8 @@ hand histories (`format_hand_history`).
 
 ## Blackjack
 
-![Blackjack-v0, drawn by BlackjackRenderer: six rounds at the minimum bet, hitting below 17](../assets/games_blackjack.gif){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Blackjack-v0, drawn by BlackjackRenderer: six rounds at the minimum bet, hitting below 17](../assets/games_blackjack_light.gif#only-light){ .sk-env-preview .sk-env-preview--native loading=lazy }
+![Blackjack-v0, drawn by BlackjackRenderer: six rounds at the minimum bet, hitting below 17](../assets/games_blackjack.gif#only-dark){ .sk-env-preview .sk-env-preview--native loading=lazy }
 
 `sekai.envs.games.blackjack.BlackjackEnv`: blackjack as a casino deals it, one round per
 episode, with six decks, dealer stands on all 17s, 3:2 naturals, double after split,
@@ -454,23 +459,6 @@ env = RecordFrames(sekai.make("Chess-v0"), ChessRenderer(orientation="mover"))
 They take a `theme` (`"dark"`, the default, or `"light"`), `header=False` to leave out the
 game's name and status, and `names` to name the players. See
 [Rendering](../guide/rendering.md#strategy-games) for each one's options. The animations on
-this page, in both themes, come from
-[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py):
-
-=== "Dark (default)"
-
-    ![Chess-v0, drawn by ChessRenderer](../assets/games_chess.gif){ loading=lazy title="ChessRenderer" }
-    ![Go9x9-v0, drawn by GoRenderer](../assets/games_go.gif){ loading=lazy title="GoRenderer" }
-    ![Xiangqi-v0, drawn by XiangqiRenderer](../assets/games_xiangqi.gif){ loading=lazy title="XiangqiRenderer" }
-    ![HeadsUpHoldem-v0, drawn by HoldemRenderer](../assets/games_poker.gif){ loading=lazy title="HoldemRenderer" }
-    ![Blackjack-v0, drawn by BlackjackRenderer](../assets/games_blackjack.gif){ loading=lazy title="BlackjackRenderer" }
-    { .sk-boards }
-
-=== "Light"
-
-    ![Chess-v0, drawn by ChessRenderer in the light theme](../assets/games_chess_light.gif){ loading=lazy title="ChessRenderer" }
-    ![Go9x9-v0, drawn by GoRenderer in the light theme](../assets/games_go_light.gif){ loading=lazy title="GoRenderer" }
-    ![Xiangqi-v0, drawn by XiangqiRenderer in the light theme](../assets/games_xiangqi_light.gif){ loading=lazy title="XiangqiRenderer" }
-    ![HeadsUpHoldem-v0, drawn by HoldemRenderer in the light theme](../assets/games_poker_light.gif){ loading=lazy title="HoldemRenderer" }
-    ![Blackjack-v0, drawn by BlackjackRenderer in the light theme](../assets/games_blackjack_light.gif){ loading=lazy title="BlackjackRenderer" }
-    { .sk-boards }
+this page come from
+[`examples/render_games.py`](https://github.com/QianCapital/sekai/blob/master/examples/render_games.py),
+which records each game in both themes, and follow this site's light or dark mode.

@@ -4,9 +4,10 @@ Each finance environment has a renderer in `sekai.envs.finance` (TradingRenderer
 PortfolioRenderer, ...). Here each one runs with a simple baseline policy, recorded
 with RecordFrames. The renderers draw their header in the Qian Capital house style;
 `branding=False` draws the plain header of sekai 0.2 instead, and each episode is saved
-both ways (`finance_trading.gif`, `finance_trading_plain.gif`, ...), followed by stills
-of the last Trading-v0 frame in each style and theme. Needs Pillow:
-pip install "sekai[render]".
+both ways, in the light theme (the default) and the dark one (`finance_trading.gif`,
+`finance_trading_dark.gif`, `finance_trading_plain.gif`, `finance_trading_plain_dark.gif`,
+...), followed by stills of the last Trading-v0 frame in each style and theme. Needs
+Pillow: pip install "sekai[render]".
 
 Pass a directory to keep the images (this is how the documentation's animations are
 made):
@@ -39,22 +40,31 @@ out.mkdir(parents=True, exist_ok=True)
 size = {"width": 600, "height": 375}
 
 
-def run(make_env, renderer, policy, seed):
-    """Run one episode with `policy(base_env)`, recording a frame per step."""
-    env = RecordFrames(make_env(), renderer)
+def run(make_env, renderers, policy, seed):
+    """Run one episode with `policy(base_env)`, each renderer recording a frame per step.
+
+    Returns one RecordFrames per renderer, in the same order."""
+    env = make_env()
+    recordings = []
+    for renderer in renderers:
+        env = RecordFrames(env, renderer)
+        recordings.append(env)
     result = env.reset(seed=seed)
     while not result.done:
         result = env.step(policy(env.unwrapped))
-    return env
+    return recordings
 
 
 def record(name, make_env, renderer_cls, policy, seed):
-    """Save one episode drawn branded (the default) and plain (`branding=False`)."""
-    for branding, suffix in ((True, ""), (False, "_plain")):
-        env = run(make_env, renderer_cls(branding=branding, **size), policy, seed)
-        path = env.save(out / f"finance_{name}{suffix}.gif")
-        print(f"{name}{suffix}: {len(env.frames)} frames -> {path}")
-        env.close()
+    """Save one episode drawn branded (the default) and plain (`branding=False`), each in
+    the light theme (the default) and the dark one."""
+    for branding, style in ((True, ""), (False, "_plain")):
+        renderers = [renderer_cls(theme=t, branding=branding, **size) for t in ("light", "dark")]
+        recordings = run(make_env, renderers, policy, seed)
+        for recording, suffix in zip(recordings, (style, f"{style}_dark")):
+            path = recording.save(out / f"finance_{name}{suffix}.gif")
+            print(f"{name}{suffix}: {len(recording.frames)} frames -> {path}")
+        recordings[-1].close()
 
 
 def momentum(env):
@@ -126,25 +136,30 @@ record(
 
 # RecordFrames wraps single-agent environments, so a multi-agent one is drawn directly.
 market = LimitOrderBookMarket(n_agents=3, decision_intervals=[1.0, 1.5, 2.5], session_length=90)
-renderer = LimitOrderBookMarketRenderer(**size)
+renderers = {
+    "": LimitOrderBookMarketRenderer(**size),
+    "_dark": LimitOrderBookMarketRenderer(theme="dark", **size),
+}
 rng = np.random.default_rng(0)
 market.reset(seed=0)
-frames = [renderer.render(market)]
+frames = {suffix: [renderer.render(market)] for suffix, renderer in renderers.items()}
 while market.agents:
     actions = {
         a: np.array([1 + rng.integers(2), 1 + rng.integers(2), rng.choice([0, 1, 1, 1, 2])])
         for a in market.acting
     }
     market.step(actions)
-    frames.append(renderer.render(market))
-path = save_gif(frames, out / "finance_order_book_market.gif", fps=10)
-print(f"order_book_market: {len(frames)} frames -> {path}")
+    for suffix, renderer in renderers.items():
+        frames[suffix].append(renderer.render(market))
+for suffix, theme_frames in frames.items():
+    path = save_gif(theme_frames, out / f"finance_order_book_market{suffix}.gif", fps=10)
+    print(f"order_book_market{suffix}: {len(theme_frames)} frames -> {path}")
 
 # The last frame of the Trading-v0 episode in each style and theme, as stills.
 for theme in ("light", "dark"):
     for branding, style in ((True, "branded"), (False, "plain")):
-        env = run(
-            make_trading, TradingRenderer(theme=theme, branding=branding, **size), momentum, 3
+        (env,) = run(
+            make_trading, [TradingRenderer(theme=theme, branding=branding, **size)], momentum, 3
         )
         path = out / f"branding_{style}_{theme}.png"
         Image.fromarray(env.frames[-1]).save(path, optimize=True)
