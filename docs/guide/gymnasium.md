@@ -255,6 +255,11 @@ for seed in range(10):
 print(f"PPO mean return over 10 episodes: {sum(returns) / len(returns):.1f}")  # ~ PPO mean return over 10 episodes: 493.5
 ```
 
+`make_vec_env` steps single envs one after another. To give SB3 a sekai vector env instead,
+such as a [native one](vector.md#native-vector-environments) that steps every sub-env at once,
+use [`to_sb3_vec_env`](training.md#vector-environments-to_sb3_vec_env):
+`PPO("MultiInputPolicy", to_sb3_vec_env(sekai.make_vec("Portfolio-v0", num_envs=64)))`.
+
 `Dict` observations, like `Portfolio-v0`'s, need SB3's `MultiInputPolicy`. SB3's own
 `check_env` accepts every financial markets environment. For most of them it only adds
 advice, such as using a symmetric `[-1, 1]` action space, which `RescaleAction` provides.

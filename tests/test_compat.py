@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -177,3 +179,123 @@ def test_ppo_on_flattened_market() -> None:
 
     env = to_gymnasium(sekai.FlattenObservation(sekai.make("Market-v0")))
     PPO("MlpPolicy", env, n_steps=64, batch_size=32, seed=0).learn(total_timesteps=128)
+
+
+# ---------------------------------------------------------------------------
+# to_sb3_vec_env
+# ---------------------------------------------------------------------------
+
+
+def _sb3_vec(venv: Any) -> Any:
+    pytest.importorskip("stable_baselines3")
+    from sekai.compat import to_sb3_vec_env
+
+    return to_sb3_vec_env(venv)
+
+
+def _same(a: Any, b: Any) -> bool:
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    return bool(np.array_equal(a, b))
+
+
+@pytest.mark.parametrize("env_id", ["CartPole-v1", "Pendulum-v1"])  # terminates / truncates
+def test_sb3_vec_env_matches_sb3_dummy_vec_env(env_id: str) -> None:
+    """A SyncVecEnv through the bridge steps exactly as SB3's DummyVecEnv over to_gymnasium envs."""
+    pytest.importorskip("stable_baselines3")
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    n = 4
+    ours = _sb3_vec(sekai.make_vec(env_id, n, vectorization_mode="sync"))
+    theirs = DummyVecEnv([lambda: to_gymnasium(sekai.make(env_id))] * n)
+    ours.seed(3)
+    theirs.seed(3)
+    assert _same(ours.reset(), theirs.reset())
+    actions = theirs.action_space
+    actions.seed(0)
+    finished = truncated = 0
+    for _ in range(210):
+        batch = np.stack([actions.sample() for _ in range(n)])
+        obs_a, rew_a, done_a, infos_a = ours.step(batch)
+        obs_b, rew_b, done_b, infos_b = theirs.step(batch)
+        assert _same(obs_a, obs_b) and _same(rew_a, rew_b) and _same(done_a, done_b)
+        assert rew_a.dtype == rew_b.dtype and done_a.dtype == done_b.dtype
+        for a, b in zip(infos_a, infos_b):
+            assert a["TimeLimit.truncated"] == b["TimeLimit.truncated"]
+            assert ("terminal_observation" in a) == ("terminal_observation" in b)
+            if "terminal_observation" in b:
+                assert _same(a["terminal_observation"], b["terminal_observation"])
+                finished += 1
+                truncated += b["TimeLimit.truncated"]
+    assert finished and (truncated > 0) == (env_id == "Pendulum-v1")
+    ours.close()
+
+
+def test_sb3_vec_env_on_a_native_vec_env() -> None:
+    venv = sekai.make_vec("Portfolio-v0", 4, episode_length=5)
+    assert isinstance(venv, sekai.NativeVecEnv)
+    env = _sb3_vec(venv)
+    assert env.observation_space == space_to_gymnasium(venv.observation_space)
+    assert env.action_space == space_to_gymnasium(venv.action_space)
+    assert env.render_mode is None
+    env.seed(1)
+    first = env.reset()
+    env.seed(1)
+    assert _same(env.reset(), first) and first["returns"].shape == (4, 30, 5)
+    assert "equity" in env.reset_infos[0]
+    for _ in range(5):
+        obs, rewards, dones, infos = env.step(np.full((4, 6), 0.5, np.float32))
+    assert dones.all() and rewards.dtype == np.float32 and rewards.shape == (4,)
+    for i, info in enumerate(infos):  # same-step autoreset: obs already start the next episode
+        assert info["TimeLimit.truncated"]
+        assert info["terminal_observation"] is info["final_observation"]
+        assert not _same(info["terminal_observation"]["returns"], obs["returns"][i])
+        assert env.reset_infos[i] is info["reset_info"]
+
+
+def test_sb3_ppo_on_a_native_vec_env_logs_episodes() -> None:
+    pytest.importorskip("stable_baselines3")
+    from stable_baselines3 import PPO
+
+    stats = sekai.VecRecordEpisodeStatistics(sekai.make_vec("Portfolio-v0", 8, episode_length=16))
+    model = PPO("MultiInputPolicy", _sb3_vec(stats), n_steps=32, batch_size=64, seed=0)
+    model.learn(total_timesteps=512)
+    assert model.num_timesteps == 512
+    episodes = list(model.ep_info_buffer)  # SB3's logger reads {"r", "l", "t"} dicts
+    assert len(episodes) == 32 and all(e["l"] == 16 and e["t"] >= 0 for e in episodes)
+    tracked = stats.tracker.summary()
+    assert tracked["num_episodes"] == 32
+    assert np.isclose(np.mean([e["r"] for e in episodes]), tracked["mean_return"], atol=1e-5)
+
+
+def test_sb3_vec_env_attributes_and_methods() -> None:
+    pytest.importorskip("stable_baselines3")
+    from stable_baselines3.common.monitor import Monitor
+    from stable_baselines3.common.vec_env import VecMonitor
+
+    sync = _sb3_vec(sekai.make_vec("CartPole-v1", 3, vectorization_mode="sync"))
+    assert sync.get_attr("x_threshold") == [2.4] * 3
+    sync.set_attr("x_threshold", 3.0, indices=[1])
+    assert sync.get_attr("x_threshold") == [2.4, 3.0, 2.4]
+    assert sync.get_attr("x_threshold", indices=1) == [3.0]
+    sync.set_attr("tags", ["a", "b"])  # one list, for every sub-env
+    assert sync.get_attr("tags") == [["a", "b"]] * 3
+    sync.reset()
+    assert sync.env_method("reset", seed=0, indices=[2])[0].observation.shape == (4,)
+    assert sync.env_is_wrapped(sekai.TimeLimit) == [True] * 3
+    assert sync.env_is_wrapped(Monitor) == [False] * 3
+    VecMonitor(sync)  # asks env_is_wrapped(Monitor); no warning
+
+    native = _sb3_vec(sekai.make_vec("Portfolio-v0", 2))
+    native.reset()
+    assert native.env_method("elapsed_steps") == [0, 0]
+    assert native.env_is_wrapped(sekai.TimeLimit) == [False, False]
+    with pytest.raises(NotImplementedError, match="sub-env objects"):
+        native.env_method("elapsed_steps", indices=[0])
+
+
+def test_sb3_vec_env_validates_its_input() -> None:
+    with pytest.raises(TypeError, match="to_gymnasium"):
+        _sb3_vec(sekai.make("CartPole-v1"))
+    with pytest.raises(ValueError, match="autoreset"):
+        _sb3_vec(sekai.make_vec("CartPole-v1", 2, vector_kwargs={"autoreset": False}))

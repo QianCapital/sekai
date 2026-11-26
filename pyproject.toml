@@ -151,9 +151,9 @@ ignore_missing_imports = true
 files = ["sekai"]
 
 [[tool.mypy.overrides]]
-# sekai.nn subclasses PyTorch and Stable-Baselines3 classes, which are Any where those
-# optional dependencies are not installed (as in CI's lint job).
-module = ["sekai.nn", "sekai.nn.*"]
+# sekai.nn and sekai.compat._stable_baselines3 subclass PyTorch and Stable-Baselines3 classes,
+# which are Any where those optional dependencies are not installed (as in CI's lint job).
+module = ["sekai.nn", "sekai.nn.*", "sekai.compat._stable_baselines3"]
 disallow_subclassing_any = false
 
 [tool.ruff]

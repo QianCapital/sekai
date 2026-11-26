@@ -6,6 +6,18 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sekai.compat.to_sb3_vec_env(vec)` exposes any sekai `VecEnv`, a native one included, as a
+  Stable-Baselines3 `VecEnv` (`SekaiToSB3VecEnv`), so SB3 trains on a native vector env
+  instead of a `make_vec_env` of single envs stepped one by one. Both reset finished sub-envs
+  within the same step: the infos gain SB3's `terminal_observation` and
+  `TimeLimit.truncated`, an `EpisodeStats` from `VecRecordEpisodeStatistics` becomes the
+  `{"r", "l", "t"}` record SB3's logger reads, and `seed()` / `set_options()` apply at the
+  next reset with seed `s + i` for sub-env `i`, as in SB3. Over a `SyncVecEnv` it steps
+  exactly as SB3's `DummyVecEnv` over the same envs. It needs Stable-Baselines3 and a VecEnv
+  that autoresets.
+
 ## [0.3.1] - 2026-11-23
 
 Strategy Games (chess, go, xiangqi, heads-up hold'em and blackjack), market models

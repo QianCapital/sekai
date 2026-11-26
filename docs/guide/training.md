@@ -213,6 +213,56 @@ batch = {key: torch.as_tensor(value, dtype=torch.float32)[None] for key, value i
 print(slot_scores(batch).shape)  # torch.Size([1, 10])
 ```
 
+## Vector environments: to_sb3_vec_env
+
+`make_vec_env` builds Stable-Baselines3's own vector env from single envs and steps them one
+after another. `sekai.compat.to_sb3_vec_env(vec)` hands SB3 a sekai `VecEnv` instead, a
+[native one](vector.md#native-vector-environments) included, which advances every sub-env
+with one array operation per step:
+
+```python
+from sekai.compat import to_sb3_vec_env
+
+vec = sekai.VecRecordEpisodeStatistics(sekai.make_vec("Portfolio-v0", num_envs=64))
+model = PPO("MultiInputPolicy", to_sb3_vec_env(vec), n_steps=64, batch_size=512, seed=0)
+model.learn(total_timesteps=40_960)
+print(type(vec.unwrapped).__name__, model.ep_info_buffer[-1]["l"])  # PortfolioVecEnv 252
+```
+
+With 64 sub-envs of `Portfolio-v0` on an 8-core CPU, the native env through the bridge steps
+about 9 times as fast as `make_vec_env`'s `DummyVecEnv` (340,000 against 37,000 env steps per
+second, with random actions). In training the gain is the env's share of the time: with the
+settings above, 20,480 steps of PPO took 2.6 s against 3.4 s, as its network updates outweigh
+a step this cheap. The costlier an env's step, the more the bridge saves.
+
+Both libraries reset a finished sub-env inside the same `step()` (sekai's
+[autoreset](vector.md#autoreset)), so the results map one to one:
+
+| Stable-Baselines3 reads | from the sekai `VecEnv` |
+|---|---|
+| observations, `observation_space`, `action_space` | the batched observations (an array, or a dict of arrays); the single-env spaces, converted with `space_to_gymnasium()` |
+| rewards, dones | `rewards` as float32; `terminated \| truncated` |
+| `infos[i]["terminal_observation"]` | `infos[i]["final_observation"]`; the sekai keys stay in the infos too |
+| `infos[i]["TimeLimit.truncated"]` | `truncated and not terminated`, on every step, so SB3 bootstraps a truncated episode's value from its last observation (on- and off-policy algorithms alike) |
+| `infos[i]["episode"]`, as `{"r", "l", "t"}` | the `EpisodeStats` of `VecRecordEpisodeStatistics`, so `rollout/ep_rew_mean` is logged without SB3's `VecMonitor` |
+| `seed(s)`, `set_options(...)` | applied at the next `reset()`: sub-env `i` gets the seed `s + i`, as in SB3's own vector envs (a native env combines the list into one seed for its generator) |
+
+Over a `SyncVecEnv` the bridge steps exactly as SB3's `DummyVecEnv` over the same envs
+converted with `to_gymnasium()`: the same observations, rewards, dones and terminal
+observations, step for step. A few rules follow from what a vector env is:
+
+- The `VecEnv` must autoreset, as it does by default: SB3 never resets a sub-env itself, so
+  `to_sb3_vec_env` raises `ValueError` for `autoreset=False`.
+- Normalise once: sekai's `VecNormalizeObservation` / `VecNormalizeReward` inside the bridge,
+  or SB3's `VecNormalize` outside it, not both.
+- `env_method(..., indices=[...])` calls the chosen sub-envs one by one, which needs a
+  `SyncVecEnv` or `AsyncVecEnv`. A native env has no sub-env objects (and a `ProcVecEnv`'s
+  live in its workers), so there it raises `NotImplementedError` rather than call every
+  sub-env; without `indices` it works everywhere. `set_attr` with `indices` writes the other
+  sub-envs' current values back, which a native env's shared parameters may refuse.
+- sekai envs render with separate [renderers](rendering.md), so the bridge's `render_mode` is
+  None.
+
 ## Action masks: MaskablePPO
 
 `LimitOrderBook-v0` masks the orders that would breach its inventory limit, and the mask

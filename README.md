@@ -209,6 +209,15 @@ model = PPO("MultiInputPolicy", to_gymnasium(sekai.make("Portfolio-v0")))
 model.learn(total_timesteps=10_000)
 ```
 
+`to_sb3_vec_env` gives SB3 a sekai vector env, a native one included, in place of
+`make_vec_env`'s single envs:
+
+```python
+from sekai.compat import to_sb3_vec_env
+
+model = PPO("MultiInputPolicy", to_sb3_vec_env(sekai.make_vec("Portfolio-v0", num_envs=64)))
+```
+
 ## Environments
 
 | ID | Observation | Action | Description |
