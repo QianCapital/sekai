@@ -6,6 +6,10 @@ All notable changes to sekai are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-26
+
+Stable-Baselines3 trains on native vector environments. Nothing from 0.3.1 changes.
+
 ### Added
 
 - `sekai.compat.to_sb3_vec_env(vec)` exposes any sekai `VecEnv`, a native one included, as a
@@ -796,7 +800,8 @@ These change behaviour for code written against 0.1.x:
   core wrappers, typed `EpisodeStats` with pluggable trackers, `Renderer` protocol,
   and `check_env`.
 
-[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/QianCapital/sekai/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/QianCapital/sekai/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QianCapital/sekai/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QianCapital/sekai/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QianCapital/sekai/compare/v0.1.2...v0.2.0
